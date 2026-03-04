@@ -351,7 +351,6 @@ def call_gemini(prompt: str, api_key: str, logger: logging.Logger) -> dict | Non
             resp.raise_for_status()
             data = resp.json()
             text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            text = response.text.strip()
 
             # Strip markdown fences if present (fallback for non-JSON mode)
             if text.startswith("```"):
