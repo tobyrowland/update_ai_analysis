@@ -355,12 +355,16 @@ def call_gemini(prompt: str, api_key: str, logger: logging.Logger) -> dict | Non
             result = json.loads(text)
 
             required_keys = {"signal", "short_outlook", "full_outlook", "key_risks"}
-            if not required_keys.issubset(result.keys()):
-                logger.warning("Gemini response missing keys: %s", result.keys())
+            missing = required_keys - set(result.keys())
+            if missing:
+                logger.warning("Gemini response missing keys: %s (got: %s)", missing, list(result.keys()))
                 return None
-            if any(not result[k] for k in required_keys):
-                logger.warning("Gemini response has empty values")
-                return None
+            empty = [k for k in required_keys if not result.get(k)]
+            if empty:
+                logger.warning("Gemini response has empty values for: %s — accepting partial result", empty)
+                # Fill empty fields with placeholder so we don't discard the whole response
+                for k in empty:
+                    result[k] = "N/A"
 
             return result
 
