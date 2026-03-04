@@ -36,40 +36,39 @@ GEMINI_MODEL = "gemini-2.5-pro"
 DELAY_BETWEEN_CALLS = 2  # seconds
 RETRY_DELAY = 5  # seconds
 
-# Column indices (0-based) matching the brief's 1-indexed column map
+# Column indices (0-based) matching the actual sheet layout (27 columns, A-AA)
 COL_TICKER = 0       # A
 COL_COMPANY = 1      # B
 COL_DESCRIPTION = 2  # C
-# COL_D = 3           # D — spacer, do not touch
-COL_SIGNAL = 4       # E
-COL_SHORT_OUTLOOK = 5  # F
-COL_FULL_OUTLOOK = 6   # G
-COL_KEY_RISKS = 7      # H
-COL_ANALYZED = 8       # I
-COL_DATA_AS_OF = 9     # J
-COL_FIN_START = 10     # K  (financial data starts here)
-COL_FIN_END = 27       # AB (financial data ends here, inclusive)
+COL_SIGNAL = 3       # D
+COL_SHORT_OUTLOOK = 4  # E
+COL_FULL_OUTLOOK = 5   # F
+COL_KEY_RISKS = 6      # G
+COL_ANALYZED = 7       # H
+COL_DATA_AS_OF = 8     # I
+COL_FIN_START = 9      # J  (financial data starts here)
+COL_FIN_END = 26       # AA (financial data ends here, inclusive)
 
-# Financial column labels (K–AB) for prompt context
+# Financial column labels (J–AA) for prompt context
 FINANCIAL_LABELS = [
-    "Annual Revenue (5Y)",       # K
-    "Quarterly Revenue",          # L
-    "Rev Growth TTM %",           # M
-    "Rev Growth QoQ %",           # N
-    "Rev CAGR 3Y %",              # O
-    "Rev Consistency Score",      # P
-    "Gross Margin %",             # Q
-    "GM Trend (Qtly)",            # R
-    "Operating Margin %",         # S
-    "Net Margin %",               # T — wait, brief says col T = Net Margin YoY Δ
-    "Net Margin YoY Δ",           # U
-    "FCF Margin %",               # V
-    "Opex % of Revenue",          # W
-    "S&M+R&D % of Revenue",       # X
-    "Rule of 40",                 # Y
-    "Qtrs to Profitability",      # Z
-    "EPS Qtrly",                  # AA
-    "EPS YoY %",                  # AB
+    "Annual Revenue (5Y)",       # J
+    "Quarterly Revenue",          # K
+    "Rev Growth TTM %",           # L
+    "Rev Growth QoQ %",           # M
+    "Rev CAGR 3Y %",              # N
+    "Rev Consistency Score",      # O
+    "Gross Margin %",             # P
+    "GM Trend (Qtly)",            # Q
+    "Operating Margin %",         # R
+    "Net Margin %",               # S
+    "Net Margin YoY Δ",           # T
+    "FCF Margin %",               # U
+    "Opex % of Revenue",          # V
+    "S&M+R&D % of Revenue",       # W
+    "Rule of 40",                 # X
+    "Qtrs to Profitability",      # Y
+    "EPS Qtrly",                  # Z
+    "EPS YoY %",                  # AA
 ]
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
