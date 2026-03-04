@@ -32,7 +32,7 @@ SPREADSHEET_ID = "1js3dUTJtKhY1dUcwzYUGBOdKDZXBurLtRGgcIV8msYk"
 SHEET_NAME = "AI Analysis"
 STALENESS_DAYS = 90
 SERPAPI_ENDPOINT = "https://serpapi.com/search"
-GEMINI_MODEL = "gemini-2.5-pro-preview-05-06"
+GEMINI_MODEL = "gemini-2.5-pro"
 DELAY_BETWEEN_CALLS = 2  # seconds
 RETRY_DELAY = 5  # seconds
 
