@@ -334,31 +334,23 @@ def build_financial_summary(row: list[str]) -> str:
     return "\n".join(lines) if lines else "  (no financial data available)"
 
 
-class _GeminiTimeout(Exception):
-    pass
-
-
-def _alarm_handler(signum, frame):
-    raise _GeminiTimeout("Gemini call timed out")
-
-
 def call_gemini(prompt: str, api_key: str, logger: logging.Logger) -> dict | None:
-    """Call Gemini and return parsed JSON, with retries on failure."""
-    import signal as _signal
-    from google.genai.types import GenerateContentConfig
-    client = genai.Client(api_key=api_key)
-    config = GenerateContentConfig(response_mime_type="application/json")
+    """Call Gemini via REST API with hard timeout, retries on failure."""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json"},
+    }
     for attempt in range(MAX_RETRIES):
         try:
-            old_handler = _signal.signal(_signal.SIGALRM, _alarm_handler)
-            _signal.alarm(120)  # 120 second hard timeout
-            try:
-                response = client.models.generate_content(
-                    model=GEMINI_MODEL, contents=prompt, config=config,
-                )
-            finally:
-                _signal.alarm(0)  # cancel alarm
-                _signal.signal(_signal.SIGALRM, old_handler)
+            resp = requests.post(
+                url, headers=headers, json=payload,
+                params={"key": api_key}, timeout=120,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
             text = response.text.strip()
 
             # Strip markdown fences if present (fallback for non-JSON mode)
