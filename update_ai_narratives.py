@@ -22,8 +22,6 @@ from dotenv import load_dotenv
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-from google import genai
-
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -334,22 +332,38 @@ def build_financial_summary(row: list[str]) -> str:
     return "\n".join(lines) if lines else "  (no financial data available)"
 
 
-def call_gemini(prompt: str, api_key: str, logger: logging.Logger) -> dict | None:
-    """Call Gemini via REST API with hard timeout, retries on failure."""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
-    headers = {"Content-Type": "application/json"}
-    payload = {
+def _call_gemini_subprocess(prompt: str, api_key: str, model: str, timeout: int = 90) -> str:
+    """Call Gemini via curl subprocess with a hard OS timeout."""
+    import subprocess, tempfile
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    payload = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"responseMimeType": "application/json"},
-    }
+    })
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        f.write(payload)
+        payload_path = f.name
+    try:
+        result = subprocess.run(
+            ["curl", "-s", "-X", "POST", url,
+             "-H", "Content-Type: application/json",
+             "-d", f"@{payload_path}",
+             "--max-time", str(timeout)],
+            capture_output=True, text=True, timeout=timeout + 10,
+        )
+        return result.stdout
+    finally:
+        os.unlink(payload_path)
+
+
+def call_gemini(prompt: str, api_key: str, logger: logging.Logger) -> dict | None:
+    """Call Gemini via curl subprocess with hard timeout, retries on failure."""
     for attempt in range(MAX_RETRIES):
         try:
-            resp = requests.post(
-                url, headers=headers, json=payload,
-                params={"key": api_key}, timeout=(10, 60),
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            raw = _call_gemini_subprocess(prompt, api_key, GEMINI_MODEL)
+            data = json.loads(raw)
+            if "error" in data:
+                raise Exception(f"{data['error'].get('code')} {data['error'].get('message','')}")
             text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
 
             # Strip markdown fences if present (fallback for non-JSON mode)
@@ -457,11 +471,11 @@ def process_company(
     return {
         "row": row_number,
         "values": {
-            "E": result["signal"],
-            "F": result["short_outlook"],
-            "G": result["full_outlook"],
-            "H": result["key_risks"],
-            "I": today_str,
+            "D": result["signal"],
+            "E": result["short_outlook"],
+            "F": result["full_outlook"],
+            "G": result["key_risks"],
+            "H": today_str,
         },
     }
 
