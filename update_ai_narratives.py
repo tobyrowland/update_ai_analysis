@@ -33,8 +33,9 @@ SHEET_NAME = "AI Analysis"
 STALENESS_DAYS = 90
 SERPAPI_ENDPOINT = "https://serpapi.com/search"
 GEMINI_MODEL = "gemini-2.5-pro"
-DELAY_BETWEEN_CALLS = 2  # seconds
-RETRY_DELAY = 5  # seconds
+DELAY_BETWEEN_CALLS = 4  # seconds between tickers
+RETRY_DELAY = 30  # seconds — Gemini rate limit asks for ~28s
+MAX_RETRIES = 4  # total attempts per ticker
 
 # Column indices (0-based) matching the actual sheet layout (27 columns, A-AA)
 COL_TICKER = 0       # A
@@ -336,7 +337,7 @@ def build_financial_summary(row: list[str]) -> str:
 def call_gemini(prompt: str, api_key: str, logger: logging.Logger) -> dict | None:
     """Call Gemini and return parsed JSON, with one retry on failure."""
     client = genai.Client(api_key=api_key)
-    for attempt in range(2):
+    for attempt in range(MAX_RETRIES):
         try:
             response = client.models.generate_content(
                 model=GEMINI_MODEL, contents=prompt
@@ -361,21 +362,24 @@ def call_gemini(prompt: str, api_key: str, logger: logging.Logger) -> dict | Non
             empty = [k for k in required_keys if not result.get(k)]
             if empty:
                 logger.warning("Gemini response has empty values for: %s — accepting partial result", empty)
-                # Fill empty fields with placeholder so we don't discard the whole response
                 for k in empty:
                     result[k] = "N/A"
 
             return result
 
         except Exception as exc:
-            if attempt == 0:
+            exc_str = str(exc)
+            if attempt < MAX_RETRIES - 1:
+                # Use longer delay for rate limits (429)
+                delay = RETRY_DELAY if "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str else 5
                 logger.warning(
-                    "Gemini call failed (attempt 1), retrying in %ds: %s",
-                    RETRY_DELAY, exc,
+                    "Gemini call failed (attempt %d/%d), retrying in %ds: %s",
+                    attempt + 1, MAX_RETRIES, delay, exc,
                 )
-                time.sleep(RETRY_DELAY)
+                time.sleep(delay)
             else:
-                logger.error("Gemini call failed (attempt 2), skipping: %s", exc)
+                logger.error("Gemini call failed (attempt %d/%d), skipping: %s",
+                             attempt + 1, MAX_RETRIES, exc)
                 return None
 
     return None
