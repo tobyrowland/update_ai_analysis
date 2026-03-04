@@ -33,9 +33,9 @@ SHEET_NAME = "AI Analysis"
 STALENESS_DAYS = 90
 SERPAPI_ENDPOINT = "https://serpapi.com/search"
 GEMINI_MODEL = "gemini-2.5-flash"
-DELAY_BETWEEN_CALLS = 4  # seconds between tickers
-RETRY_DELAY = 30  # seconds — Gemini rate limit asks for ~28s
-MAX_RETRIES = 4  # total attempts per ticker
+DELAY_BETWEEN_CALLS = 2  # seconds between tickers
+RETRY_DELAY = 10  # seconds between retries
+MAX_RETRIES = 2  # total attempts per ticker
 
 # Column indices (0-based) matching the actual sheet layout (27 columns, A-AA)
 COL_TICKER = 0       # A
@@ -346,7 +346,7 @@ def call_gemini(prompt: str, api_key: str, logger: logging.Logger) -> dict | Non
         try:
             resp = requests.post(
                 url, headers=headers, json=payload,
-                params={"key": api_key}, timeout=120,
+                params={"key": api_key}, timeout=(10, 60),
             )
             resp.raise_for_status()
             data = resp.json()
@@ -509,9 +509,11 @@ def main():
         logger.info("Nothing to do — all companies are up to date.")
         return
 
-    # Process each company
+    # Process each company — write in batches of 5 to avoid losing progress
     updates = []
+    total_written = 0
     errors = 0
+    BATCH_SIZE = 5
     for idx, (row_number, row) in enumerate(rows_to_update):
         try:
             result = process_company(
@@ -527,15 +529,16 @@ def main():
                          exc_info=True)
             errors += 1
 
+        # Write batch every BATCH_SIZE tickers (or at the end)
+        if updates and not args.dry_run and (len(updates) >= BATCH_SIZE or idx == len(rows_to_update) - 1):
+            logger.info("Writing batch of %d updates to sheet...", len(updates))
+            write_row_updates(service, updates)
+            total_written += len(updates)
+            updates = []
+
         # Delay between API calls (skip after last)
         if idx < len(rows_to_update) - 1:
             time.sleep(DELAY_BETWEEN_CALLS)
-
-    # Write results
-    if updates and not args.dry_run:
-        logger.info("Writing %d updates to sheet...", len(updates))
-        write_row_updates(service, updates)
-        logger.info("Sheet updated successfully.")
 
     elapsed = time.time() - start_time
     if args.dry_run:
@@ -544,7 +547,7 @@ def main():
     else:
         logger.info(
             "=== Updated %d companies. Skipped %d due to errors. (%.1fs) ===",
-            len(updates), errors, elapsed,
+            total_written, errors, elapsed,
         )
 
 
