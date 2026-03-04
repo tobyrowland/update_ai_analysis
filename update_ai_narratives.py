@@ -334,6 +334,17 @@ def build_financial_summary(row: list[str]) -> str:
     return "\n".join(lines) if lines else "  (no financial data available)"
 
 
+def _gemini_call_with_timeout(client, model, prompt, config, timeout=120):
+    """Run Gemini call in a thread with a hard timeout."""
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            client.models.generate_content,
+            model=model, contents=prompt, config=config,
+        )
+        return future.result(timeout=timeout)
+
+
 def call_gemini(prompt: str, api_key: str, logger: logging.Logger) -> dict | None:
     """Call Gemini and return parsed JSON, with retries on failure."""
     from google.genai.types import GenerateContentConfig
@@ -341,9 +352,7 @@ def call_gemini(prompt: str, api_key: str, logger: logging.Logger) -> dict | Non
     config = GenerateContentConfig(response_mime_type="application/json")
     for attempt in range(MAX_RETRIES):
         try:
-            response = client.models.generate_content(
-                model=GEMINI_MODEL, contents=prompt, config=config,
-            )
+            response = _gemini_call_with_timeout(client, GEMINI_MODEL, prompt, config)
             text = response.text.strip()
 
             # Strip markdown fences if present (fallback for non-JSON mode)
