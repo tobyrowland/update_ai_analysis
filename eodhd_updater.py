@@ -232,6 +232,33 @@ def read_all_rows(service) -> list[list[str]]:
     return result.get("values", [])
 
 
+def ensure_sheet_columns(service, needed: int, logger):
+    """Expand sheet column count if it currently has fewer than `needed` columns."""
+    meta = service.spreadsheets().get(
+        spreadsheetId=SPREADSHEET_ID, fields="sheets.properties"
+    ).execute()
+    for sheet in meta.get("sheets", []):
+        props = sheet["properties"]
+        if props["title"] == SHEET_NAME:
+            current = props["gridProperties"]["columnCount"]
+            if current >= needed:
+                return
+            logger.info("Expanding sheet from %d to %d columns", current, needed)
+            service.spreadsheets().batchUpdate(
+                spreadsheetId=SPREADSHEET_ID,
+                body={"requests": [{
+                    "updateSheetProperties": {
+                        "properties": {
+                            "sheetId": props["sheetId"],
+                            "gridProperties": {"columnCount": needed},
+                        },
+                        "fields": "gridProperties.columnCount",
+                    }
+                }]},
+            ).execute()
+            return
+
+
 def write_row_updates(service, updates: list[dict]):
     """Batch-write updates. Each entry: {"row": 1-indexed, "values": {col_letter: value}}."""
     if not updates:
@@ -798,6 +825,7 @@ def main():
 
     # Read current sheet data
     service = get_sheets_service()
+    ensure_sheet_columns(service, len(ALL_COLUMNS), logger)
     all_rows = read_all_rows(service)
     logger.info("Read %d rows from sheet (including headers)", len(all_rows))
 
