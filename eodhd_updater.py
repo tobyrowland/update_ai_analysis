@@ -259,19 +259,29 @@ def ensure_sheet_columns(service, needed: int, logger):
             return
 
 
-def write_row_updates(service, updates: list[dict]):
+def write_row_updates(service, updates: list[dict], logger=None):
     """Batch-write updates. Each entry: {"row": 1-indexed, "values": {col_letter: value}}."""
     if not updates:
         return
 
     data = []
+    max_col_idx = 0
     for upd in updates:
         row = upd["row"]
         for col_letter, value in upd["values"].items():
+            # Track the highest column index referenced
+            idx = 0
+            for ch in col_letter:
+                idx = idx * 26 + (ord(ch) - ord('A') + 1)
+            if idx > max_col_idx:
+                max_col_idx = idx
             data.append({
                 "range": f"'{SHEET_NAME}'!{col_letter}{row}",
                 "values": [[value]],
             })
+
+    # Ensure the sheet has enough columns before writing
+    ensure_sheet_columns(service, max_col_idx, logger or logging.getLogger(__name__))
 
     body = {"valueInputOption": "USER_ENTERED", "data": data}
     service.spreadsheets().values().batchUpdate(
@@ -940,7 +950,7 @@ def main():
         # Write batch
         if updates and not args.dry_run and (len(updates) >= BATCH_SIZE or idx == len(tickers_to_process) - 1):
             logger.info("Writing batch of %d updates to sheet...", len(updates))
-            write_row_updates(service, updates)
+            write_row_updates(service, updates, logger)
             total_written += len(updates)
             updates = []
 
