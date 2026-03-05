@@ -1,0 +1,39 @@
+name: Nightly EODHD Update
+
+on:
+  schedule:
+    # Runs at 5:00 AM UTC daily (before the AI narratives job at 6:00 AM)
+    - cron: "0 5 * * *"
+  workflow_dispatch: # Allow manual trigger from GitHub UI
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run EODHD Updater
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
+        run: python eodhd_updater.py
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eodhd-logs-${{ github.run_id }}
+          path: logs/
+          retention-days: 30
