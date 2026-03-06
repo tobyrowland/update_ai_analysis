@@ -232,19 +232,56 @@ def read_all_rows(service) -> list[list[str]]:
     return result.get("values", [])
 
 
-def write_row_updates(service, updates: list[dict]):
+def ensure_sheet_columns(service, needed: int, logger):
+    """Expand sheet column count if it currently has fewer than `needed` columns."""
+    meta = service.spreadsheets().get(
+        spreadsheetId=SPREADSHEET_ID, fields="sheets.properties"
+    ).execute()
+    for sheet in meta.get("sheets", []):
+        props = sheet["properties"]
+        if props["title"] == SHEET_NAME:
+            current = props["gridProperties"]["columnCount"]
+            if current >= needed:
+                return
+            logger.info("Expanding sheet from %d to %d columns", current, needed)
+            service.spreadsheets().batchUpdate(
+                spreadsheetId=SPREADSHEET_ID,
+                body={"requests": [{
+                    "updateSheetProperties": {
+                        "properties": {
+                            "sheetId": props["sheetId"],
+                            "gridProperties": {"columnCount": needed},
+                        },
+                        "fields": "gridProperties.columnCount",
+                    }
+                }]},
+            ).execute()
+            return
+
+
+def write_row_updates(service, updates: list[dict], logger=None):
     """Batch-write updates. Each entry: {"row": 1-indexed, "values": {col_letter: value}}."""
     if not updates:
         return
 
     data = []
+    max_col_idx = 0
     for upd in updates:
         row = upd["row"]
         for col_letter, value in upd["values"].items():
+            # Track the highest column index referenced
+            idx = 0
+            for ch in col_letter:
+                idx = idx * 26 + (ord(ch) - ord('A') + 1)
+            if idx > max_col_idx:
+                max_col_idx = idx
             data.append({
                 "range": f"'{SHEET_NAME}'!{col_letter}{row}",
                 "values": [[value]],
             })
+
+    # Ensure the sheet has enough columns before writing
+    ensure_sheet_columns(service, max_col_idx, logger or logging.getLogger(__name__))
 
     body = {"valueInputOption": "USER_ENTERED", "data": data}
     service.spreadsheets().values().batchUpdate(
@@ -798,6 +835,7 @@ def main():
 
     # Read current sheet data
     service = get_sheets_service()
+    ensure_sheet_columns(service, len(ALL_COLUMNS), logger)
     all_rows = read_all_rows(service)
     logger.info("Read %d rows from sheet (including headers)", len(all_rows))
 
@@ -884,13 +922,18 @@ def main():
                                 logger.info("  %-25s %s", display, val)
                 continue
 
-            # Build update values with column letters
+            # Build update values using actual sheet column positions
             values = {}
             for key in EODHD_COLUMNS:
                 val = eodhd_data.get(key)
                 if val is None:
                     continue
-                col_letter = _col_letter_for_key(key)
+                display_name = DISPLAY_NAMES.get(key, key)
+                col_idx = ai_col.get(display_name)
+                if col_idx is None:
+                    logger.warning("Column '%s' (%s) not found in sheet headers, skipping", display_name, key)
+                    continue
+                col_letter = _col_letter(col_idx)
                 # Format value for sheet
                 if key in PCT_COLS and isinstance(val, (int, float)):
                     values[col_letter] = f"{val:.1f}%"
@@ -912,7 +955,7 @@ def main():
         # Write batch
         if updates and not args.dry_run and (len(updates) >= BATCH_SIZE or idx == len(tickers_to_process) - 1):
             logger.info("Writing batch of %d updates to sheet...", len(updates))
-            write_row_updates(service, updates)
+            write_row_updates(service, updates, logger)
             total_written += len(updates)
             updates = []
 
