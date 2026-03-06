@@ -35,39 +35,45 @@ DELAY_BETWEEN_CALLS = 2  # seconds between tickers
 RETRY_DELAY = 10  # seconds between retries
 MAX_RETRIES = 2  # total attempts per ticker
 
-# Column indices (0-based) matching the actual sheet layout (27 columns, A-AA)
-COL_TICKER = 0       # A
-COL_COMPANY = 1      # B
-COL_DESCRIPTION = 2  # C
-COL_SIGNAL = 3       # D
-COL_SHORT_OUTLOOK = 4  # E
-COL_FULL_OUTLOOK = 5   # F
-COL_KEY_RISKS = 6      # G
-COL_ANALYZED = 7       # H
-COL_DATA_AS_OF = 8     # I
-COL_FIN_START = 9      # J  (financial data starts here)
-COL_FIN_END = 26       # AA (financial data ends here, inclusive)
+# Header names used to locate columns dynamically from row 2.
+# The script reads actual sheet headers rather than relying on hardcoded positions.
+HEADER_TICKER = "Ticker"
+HEADER_COMPANY = "Company"
+HEADER_R40_SCORE = "R40 Score"
+HEADER_FUNDAMENTALS_SNAPSHOT = "Fundamentals Snapshot"
+HEADER_SHORT_OUTLOOK = "Short Outlook"
+HEADER_OUTLOOK = "Outlook"
+HEADER_RISKS = "Key Risks"
+HEADER_ANALYZED = "AI Analyzed"
+HEADER_FUND_DATE = "Fundamentals Date"
 
-# Financial column labels (J–AA) for prompt context
-FINANCIAL_LABELS = [
-    "Annual Revenue (5Y)",       # J
-    "Quarterly Revenue",          # K
-    "Rev Growth TTM %",           # L
-    "Rev Growth QoQ %",           # M
-    "Rev CAGR 3Y %",              # N
-    "Rev Consistency Score",      # O
-    "Gross Margin %",             # P
-    "GM Trend (Qtly)",            # Q
-    "Operating Margin %",         # R
-    "Net Margin %",               # S
-    "Net Margin YoY Δ",           # T
-    "FCF Margin %",               # U
-    "Opex % of Revenue",          # V
-    "S&M+R&D % of Revenue",       # W
-    "Rule of 40",                 # X
-    "Qtrs to Profitability",      # Y
-    "EPS Qtrly",                  # Z
-    "EPS YoY %",                  # AA
+# Known aliases for headers (in case the sheet uses slightly different names)
+HEADER_ALIASES = {
+    "Company Name": "Company",
+    "Data As Of": "Fundamentals Date",
+    "Analyzed": "AI Analyzed",
+}
+
+# Financial column labels for prompt context (order doesn't matter for lookup)
+FINANCIAL_HEADERS = [
+    "Annual Revenue (5Y)",
+    "Quarterly Revenue",
+    "Rev Growth TTM %",
+    "Rev Growth QoQ %",
+    "Rev CAGR 3Y %",
+    "Rev Consistency Score",
+    "Gross Margin %",
+    "GM Trend (Qtly)",
+    "Operating Margin %",
+    "Net Margin %",
+    "Net Margin YoY Δ",
+    "FCF Margin %",
+    "Opex % of Revenue",
+    "S&M+R&D % of Revenue",
+    "Rule of 40",
+    "Qtrs to Profitability",
+    "EPS Qtrly",
+    "EPS YoY %",
 ]
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -169,16 +175,22 @@ def write_row_updates(service, updates: list[dict]):
 # ---------------------------------------------------------------------------
 
 
-def needs_update(row: list[str]) -> bool:
+def needs_update(row: list[str], col_map: dict) -> bool:
     """Return True if this row should be re-analysed."""
-    # Pad row so index access is safe
-    padded = row + [""] * (COL_ANALYZED + 1 - len(row))
+    ticker_idx = col_map.get(HEADER_TICKER, 0)
+    analyzed_idx = col_map.get(HEADER_ANALYZED)
 
-    ticker = padded[COL_TICKER].strip()
+    max_idx = max(ticker_idx, analyzed_idx or 0)
+    padded = row + [""] * (max_idx + 1 - len(row))
+
+    ticker = padded[ticker_idx].strip()
     if not ticker:
         return False
 
-    analyzed_str = padded[COL_ANALYZED].strip()
+    if analyzed_idx is None:
+        return True  # column doesn't exist yet → treat as stale
+
+    analyzed_str = padded[analyzed_idx].strip()
     if not analyzed_str:
         return True
 
@@ -320,15 +332,17 @@ Respond ONLY with a JSON object in this exact format, no markdown, no preamble:
 """
 
 
-def build_financial_summary(row: list[str]) -> str:
-    """Format financial columns K–AB into readable text for the prompt."""
-    padded = row + [""] * (COL_FIN_END + 1 - len(row))
+def build_financial_summary(row: list[str], col_map: dict) -> str:
+    """Format financial columns into readable text for the prompt."""
+    max_idx = max(col_map.values()) if col_map else 0
+    padded = row + [""] * (max_idx + 1 - len(row))
     lines = []
-    for i, label in enumerate(FINANCIAL_LABELS):
-        col_idx = COL_FIN_START + i
-        val = padded[col_idx].strip() if col_idx < len(padded) else ""
-        if val:
-            lines.append(f"  {label}: {val}")
+    for label in FINANCIAL_HEADERS:
+        col_idx = col_map.get(label)
+        if col_idx is not None and col_idx < len(padded):
+            val = padded[col_idx].strip()
+            if val:
+                lines.append(f"  {label}: {val}")
     return "\n".join(lines) if lines else "  (no financial data available)"
 
 
@@ -416,20 +430,36 @@ def call_gemini(prompt: str, api_key: str, logger: logging.Logger) -> dict | Non
 # ---------------------------------------------------------------------------
 
 
+def _col_letter(idx: int) -> str:
+    """Convert 0-based column index to Excel-style letter(s). 0→A, 25→Z, 26→AA."""
+    result = ""
+    while True:
+        result = chr(65 + idx % 26) + result
+        idx = idx // 26 - 1
+        if idx < 0:
+            break
+    return result
+
+
 def process_company(
     row: list[str],
     row_number: int,
     serpapi_key: str,
     dry_run: bool,
     logger: logging.Logger,
+    col_map: dict | None = None,
 ) -> dict | None:
     """
     Process a single company row. Returns an update dict for writing,
     or None on failure.
     """
-    padded = row + [""] * (COL_FIN_END + 1 - len(row))
-    ticker = padded[COL_TICKER].strip()
-    company = padded[COL_COMPANY].strip()
+    col_map = col_map or {}
+    ticker_idx = col_map.get(HEADER_TICKER, 0)
+    company_idx = col_map.get(HEADER_COMPANY, 1)
+    max_idx = max(col_map.values()) if col_map else 1
+    padded = row + [""] * (max_idx + 1 - len(row))
+    ticker = padded[ticker_idx].strip()
+    company = padded[company_idx].strip()
 
     logger.info("Processing %s (%s) — row %d", ticker, company, row_number)
 
@@ -445,7 +475,7 @@ def process_company(
         web_section = "(No recent web search results available — rely on financial data.)"
 
     # Build prompt
-    fin_summary = build_financial_summary(row)
+    fin_summary = build_financial_summary(row, col_map)
     prompt = PROMPT_TEMPLATE.format(
         company_name=company,
         ticker=ticker,
@@ -468,15 +498,34 @@ def process_company(
         return None  # don't write in dry-run mode
 
     today_str = date.today().isoformat()
+
+    # Map output fields to sheet columns dynamically
+    field_to_header = {
+        "signal": HEADER_R40_SCORE,
+        "short_outlook": HEADER_SHORT_OUTLOOK,
+        "full_outlook": HEADER_OUTLOOK,
+        "key_risks": HEADER_RISKS,
+    }
+    values = {}
+    for field, header in field_to_header.items():
+        idx = col_map.get(header)
+        if idx is not None:
+            values[_col_letter(idx)] = result[field]
+        else:
+            logger.warning("Column '%s' not found in sheet, skipping field '%s'", header, field)
+
+    # Write the analysis date
+    analyzed_idx = col_map.get(HEADER_ANALYZED)
+    if analyzed_idx is not None:
+        values[_col_letter(analyzed_idx)] = today_str
+
+    if not values:
+        logger.warning("No writable columns found for %s", ticker)
+        return None
+
     return {
         "row": row_number,
-        "values": {
-            "D": result["signal"],
-            "E": result["short_outlook"],
-            "F": result["full_outlook"],
-            "G": result["key_risks"],
-            "H": today_str,
-        },
+        "values": values,
     }
 
 
@@ -507,6 +556,15 @@ def main():
     all_rows = read_all_rows(service)
     logger.info("Read %d rows from sheet (including headers)", len(all_rows))
 
+    # Build column map from row 2 headers
+    col_map = {}  # header_name → 0-based column index
+    if len(all_rows) >= 2:
+        for idx, header in enumerate(all_rows[1]):
+            name = header.strip()
+            name = HEADER_ALIASES.get(name, name)
+            col_map[name] = idx
+    logger.info("Column map: %s", {k: v for k, v in col_map.items()})
+
     # Data starts at row 3 (index 2) — row 1 is group headers, row 2 is column headers
     data_rows = all_rows[2:] if len(all_rows) > 2 else []
 
@@ -514,7 +572,7 @@ def main():
     rows_to_update = []
     for i, row in enumerate(data_rows):
         row_number = i + 3  # 1-indexed sheet row
-        if needs_update(row):
+        if needs_update(row, col_map):
             rows_to_update.append((row_number, row))
 
     logger.info("Found %d companies needing update", len(rows_to_update))
@@ -531,15 +589,16 @@ def main():
     for idx, (row_number, row) in enumerate(rows_to_update):
         try:
             result = process_company(
-                row, row_number, serpapi_key, args.dry_run, logger
+                row, row_number, serpapi_key, args.dry_run, logger, col_map
             )
             if result:
                 updates.append(result)
             elif not args.dry_run:
                 errors += 1
         except Exception as exc:
-            padded = row + [""] * 2
-            logger.error("Error processing %s: %s", padded[COL_TICKER], exc,
+            ticker_idx = col_map.get(HEADER_TICKER, 0)
+            padded = row + [""] * (ticker_idx + 1 - len(row))
+            logger.error("Error processing %s: %s", padded[ticker_idx], exc,
                          exc_info=True)
             errors += 1
 

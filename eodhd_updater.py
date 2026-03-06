@@ -865,6 +865,37 @@ def main():
         if display in ai_col:
             key_col[key] = ai_col[display]
 
+    # Detect missing EODHD column headers and append them to the sheet
+    missing_keys = [k for k in EODHD_COLUMNS if k not in key_col]
+    if missing_keys:
+        # Find the next available column index (after all existing headers)
+        next_col = len(all_rows[1]) if len(all_rows) >= 2 else len(ALL_COLUMNS)
+        # Also update group header row (row 1) — put missing cols under "AI NARRATIVE" if they
+        # belong there, otherwise leave the group cell blank.
+        ai_narrative_keys = set(GROUPS[-1][2])  # keys in the AI NARRATIVE group
+        row1_updates = {}
+        row2_updates = {}
+        for key in missing_keys:
+            col_letter = _col_letter(next_col)
+            display = DISPLAY_NAMES.get(key, key)
+            row2_updates[col_letter] = display
+            if key in ai_narrative_keys:
+                row1_updates[col_letter] = "AI NARRATIVE"
+            key_col[key] = next_col
+            ai_col[display] = next_col
+            logger.info("Adding missing header '%s' at column %s (index %d)", display, col_letter, next_col)
+            next_col += 1
+
+        # Write the new headers
+        header_updates = []
+        if row1_updates:
+            header_updates.append({"row": 1, "values": row1_updates})
+        if row2_updates:
+            header_updates.append({"row": 2, "values": row2_updates})
+        if header_updates:
+            write_row_updates(service, header_updates, logger)
+            logger.info("Wrote %d missing column headers to the sheet", len(missing_keys))
+
     # Data starts at row 3 (index 2)
     data_rows = all_rows[2:] if len(all_rows) > 2 else []
 
