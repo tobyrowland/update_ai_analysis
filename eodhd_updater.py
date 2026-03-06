@@ -678,32 +678,51 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger) -> dict 
     result["rule_of_40"] = round(r40, 1) if r40 is not None else None
 
     # ── Qtrs to Profitability ─────────────────────────────────────────
+    # Uses TTM (4-quarter) net income to judge profitability, then
+    # projects quarters to breakeven from the net-margin improvement
+    # trend over the last 8 quarters.
     qtrs_to_prof = None
-    if quarterly:
-        latest_ni = safe_float(quarterly[0][1].get("netIncome"))
-        if latest_ni is not None and latest_ni > 0:
+    if len(quarterly) >= 4:
+        # Check TTM profitability (sum of last 4 quarters)
+        ttm_ni = sum(safe_float(e[1].get("netIncome")) or 0 for e in quarterly[:4])
+        ttm_rev = sum(safe_float(e[1].get("totalRevenue")) or 0 for e in quarterly[:4])
+
+        if ttm_rev > 0 and ttm_ni >= 0:
             result["qtrs_to_profitability"] = "Profitable"
             qtrs_to_prof = 0
-        elif latest_ni is not None:
+        elif ttm_rev > 0:
+            # Unprofitable — estimate quarters to breakeven
+            ttm_margin = (ttm_ni / ttm_rev) * 100
+            # Build per-quarter net margin series (newest first)
             margins = []
             for entry in quarterly[:8]:
                 ni = safe_float(entry[1].get("netIncome"))
                 rev = safe_float(entry[1].get("totalRevenue"))
                 if ni is not None and rev and rev > 0:
                     margins.append((ni / rev) * 100)
-            if len(margins) >= 2:
+            if len(margins) >= 4:
+                # Average per-quarter improvement (positive = getting better)
                 improvements = [margins[i] - margins[i + 1] for i in range(len(margins) - 1)]
                 avg_improvement = sum(improvements) / len(improvements)
-                if avg_improvement > 0:
-                    qtrs_to_prof = int(-margins[0] / avg_improvement) + 1
+                if avg_improvement > 0.5:
+                    # Project from current TTM margin to zero
+                    qtrs_to_prof = max(1, int(-ttm_margin / avg_improvement) + 1)
                     if qtrs_to_prof > 20:
                         result["qtrs_to_profitability"] = ">20"
                     else:
                         result["qtrs_to_profitability"] = str(qtrs_to_prof)
                 else:
-                    result["qtrs_to_profitability"] = "N/A"
+                    result["qtrs_to_profitability"] = "Not converging"
             else:
-                result["qtrs_to_profitability"] = "N/A"
+                result["qtrs_to_profitability"] = None
+        else:
+            result["qtrs_to_profitability"] = None
+    elif quarterly:
+        # Fewer than 4 quarters — check latest only
+        latest_ni = safe_float(quarterly[0][1].get("netIncome"))
+        if latest_ni is not None and latest_ni >= 0:
+            result["qtrs_to_profitability"] = "Profitable"
+            qtrs_to_prof = 0
         else:
             result["qtrs_to_profitability"] = None
     else:
