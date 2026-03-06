@@ -42,14 +42,15 @@ HEADER_COMPANY = "Company"
 HEADER_SHORT_OUTLOOK = "Short Outlook"
 HEADER_OUTLOOK = "Outlook"
 HEADER_RISKS = "Key Risks"
-HEADER_ANALYZED = "AI Analyzed"
-HEADER_FUND_DATE = "Fundamentals Date"
+HEADER_ANALYZED = "AI"
 
 # Known aliases for headers (in case the sheet uses slightly different names)
 HEADER_ALIASES = {
-    "Company Name": "Company",
-    "Data As Of": "Fundamentals Date",
-    "Analyzed": "AI Analyzed",
+    "Company Name":       "Company",
+    "Data As Of":         "Data",
+    "Fundamentals Date":  "Data",
+    "Analyzed":           "AI",
+    "AI Analyzed":        "AI",
 }
 
 # Financial column labels for prompt context (order doesn't matter for lookup)

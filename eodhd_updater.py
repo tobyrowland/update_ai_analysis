@@ -33,6 +33,8 @@ DELAY_BETWEEN_CALLS = 1  # seconds between EODHD API calls
 BATCH_SIZE = 5
 STALENESS_DAYS = 7  # re-fetch if data older than this
 
+NULL_VALUE = "—"  # consistent placeholder for missing/unavailable data
+
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 # ---------------------------------------------------------------------------
@@ -45,7 +47,7 @@ GROUPS = [
         "ticker", "company", "description",
     ]),
     ("OVERVIEW", "2E4057", [
-        "r40_score", "fundamentals_snapshot",
+        "r40_score", "fundamentals_snapshot", "short_outlook",
     ]),
     ("REVENUE", "1B3A4B", [
         "annual_revenue_5y", "quarterly_revenue",
@@ -64,7 +66,9 @@ GROUPS = [
         "eps_quarterly", "eps_yoy_pct",
     ]),
     ("AI NARRATIVE", "2E4057", [
-        "short_outlook", "outlook", "risks",
+        "outlook", "risks",
+    ]),
+    ("LAST ANALYSIS", "1B3A4B", [
         "ai_analysis_date", "fundamentals_date",
     ]),
 ]
@@ -96,17 +100,19 @@ DISPLAY_NAMES = {
     "short_outlook":        "Short Outlook",
     "outlook":              "Outlook",
     "risks":                "Key Risks",
-    "ai_analysis_date":     "AI Analyzed",
-    "fundamentals_date":    "Fundamentals Date",
+    "ai_analysis_date":     "AI",
+    "fundamentals_date":    "Data",
 }
 
 # The actual sheet may use different header names than DISPLAY_NAMES
 # (e.g. created by update_ai_narratives.py or edited manually).
 # Map known alternative sheet headers → canonical DISPLAY_NAMES value.
 HEADER_ALIASES = {
-    "Company Name":     "Company",
-    "Data As Of":       "Fundamentals Date",
-    "Analyzed":         "AI Analyzed",
+    "Company Name":       "Company",
+    "Data As Of":         "Data",
+    "Fundamentals Date":  "Data",
+    "Analyzed":           "AI",
+    "AI Analyzed":        "AI",
 }
 
 COL_WIDTHS = {
@@ -868,12 +874,12 @@ def main():
 
     # ── Sync sheet layout to match GROUPS ─────────────────────────────
     # Build old header → column index mapping from current row 2
-    old_header_idx = {}  # display_name → old column index
+    old_header_idx = {}  # display_name → old column index (first occurrence wins)
     if len(all_rows) >= 2:
         for idx, header in enumerate(all_rows[1]):
             name = header.strip()
             name = HEADER_ALIASES.get(name, name)
-            if name:
+            if name and name not in old_header_idx:
                 old_header_idx[name] = idx
 
     # Expected headers from GROUPS (canonical order)
@@ -1013,16 +1019,16 @@ def main():
             # Build update values using actual sheet column positions
             values = {}
             for key in EODHD_COLUMNS:
-                val = eodhd_data.get(key)
-                if val is None:
-                    continue
                 col_idx = key_col.get(key)
                 if col_idx is None:
                     logger.warning("Column '%s' not found in sheet headers, skipping", key)
                     continue
                 col_letter = _col_letter(col_idx)
-                # Format value for sheet
-                if key in PCT_COLS and isinstance(val, (int, float)):
+                val = eodhd_data.get(key)
+                # Use consistent null for missing data
+                if val is None:
+                    values[col_letter] = NULL_VALUE
+                elif key in PCT_COLS and isinstance(val, (int, float)):
                     values[col_letter] = f"{val:.1f}%"
                 elif key in DECIMAL_COLS and isinstance(val, (int, float)):
                     values[col_letter] = f"{val:.1f}"
