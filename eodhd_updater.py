@@ -98,6 +98,15 @@ DISPLAY_NAMES = {
     "fundamentals_date":    "Fundamentals Date",
 }
 
+# The actual sheet may use different header names than DISPLAY_NAMES
+# (e.g. created by update_ai_narratives.py or edited manually).
+# Map known alternative sheet headers → canonical DISPLAY_NAMES value.
+HEADER_ALIASES = {
+    "Company Name":     "Company",
+    "Data As Of":       "Fundamentals Date",
+    "Analyzed":         "AI Analyzed",
+}
+
 COL_WIDTHS = {
     "ticker": 10,
     "company": 25,
@@ -844,7 +853,17 @@ def main():
     ai_col = {}  # display_name → column index
     if len(all_rows) >= 2:
         for idx, header in enumerate(all_rows[1]):
-            ai_col[header.strip()] = idx
+            name = header.strip()
+            # Normalize known aliases to canonical DISPLAY_NAMES values
+            name = HEADER_ALIASES.get(name, name)
+            ai_col[name] = idx
+
+    # Also build key → column index for direct lookups
+    # (reverse of DISPLAY_NAMES into ai_col)
+    key_col = {}  # column_key → column index
+    for key, display in DISPLAY_NAMES.items():
+        if display in ai_col:
+            key_col[key] = ai_col[display]
 
     # Data starts at row 3 (index 2)
     data_rows = all_rows[2:] if len(all_rows) > 2 else []
@@ -928,10 +947,9 @@ def main():
                 val = eodhd_data.get(key)
                 if val is None:
                     continue
-                display_name = DISPLAY_NAMES.get(key, key)
-                col_idx = ai_col.get(display_name)
+                col_idx = key_col.get(key)
                 if col_idx is None:
-                    logger.warning("Column '%s' (%s) not found in sheet headers, skipping", display_name, key)
+                    logger.warning("Column '%s' not found in sheet headers, skipping", key)
                     continue
                 col_letter = _col_letter(col_idx)
                 # Format value for sheet
