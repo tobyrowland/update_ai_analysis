@@ -120,13 +120,13 @@ COL_WIDTHS = {
     "company": 25,
     "description": 40,
     "annual_revenue_5y": 45,
-    "quarterly_revenue": 22,
+    "quarterly_revenue": 70,
     "rev_growth_ttm": 18,
     "rev_growth_qoq": 18,
     "rev_cagr_3y": 18,
     "rev_consistency": 18,
     "gross_margin_ttm": 18,
-    "gross_margin_trend": 14,
+    "gross_margin_trend": 28,
     "operating_margin_ttm": 18,
     "net_margin_ttm": 18,
     "net_margin_yoy_delta": 18,
@@ -485,11 +485,15 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger) -> dict 
             annual_revs.append(f"{year}: {fmt_revenue(rev)}")
     result["annual_revenue_5y"] = " | ".join(annual_revs) if annual_revs else None
 
-    # ── Quarterly Revenue ─────────────────────────────────────────────
+    # ── Quarterly Revenue (last 5 quarters) ────────────────────────────
     if quarterly:
-        rev = safe_float(quarterly[0][1].get("totalRevenue"))
-        q_date = quarterly[0][0]
-        result["quarterly_revenue"] = f"{fmt_revenue(rev)} ({q_date})" if rev is not None else None
+        parts = []
+        for entry in quarterly[:5]:
+            rev = safe_float(entry[1].get("totalRevenue"))
+            q_date = entry[0]
+            if rev is not None:
+                parts.append(f"{fmt_revenue(rev)} ({q_date})")
+        result["quarterly_revenue"] = " | ".join(parts) if parts else None
     else:
         result["quarterly_revenue"] = None
 
@@ -526,15 +530,26 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger) -> dict 
         result["rev_cagr_3y"] = None
 
     # ── Rev Consistency Score (0–10) ──────────────────────────────────
-    if len(quarterly) >= 2:
-        n = min(len(quarterly) - 1, 10)
+    # Always scored out of 10 (need 11 quarters). Show as "X/10".
+    if len(quarterly) >= 11:
+        growth_count = 0
+        for i in range(10):
+            c = safe_float(quarterly[i][1].get("totalRevenue"))
+            p = safe_float(quarterly[i + 1][1].get("totalRevenue"))
+            if c is not None and p is not None and c > p:
+                growth_count += 1
+        result["rev_consistency"] = f"{growth_count}/10"
+    elif len(quarterly) >= 2:
+        # Fewer than 11 quarters — normalize to /10 scale
+        n = len(quarterly) - 1
         growth_count = 0
         for i in range(n):
             c = safe_float(quarterly[i][1].get("totalRevenue"))
             p = safe_float(quarterly[i + 1][1].get("totalRevenue"))
             if c is not None and p is not None and c > p:
                 growth_count += 1
-        result["rev_consistency"] = f"{growth_count}/{n}"
+        scaled = round(growth_count / n * 10)
+        result["rev_consistency"] = f"{scaled}/10"
     else:
         result["rev_consistency"] = None
 
@@ -567,6 +582,8 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger) -> dict 
     result["gross_margin_ttm"] = round(gross_margin_ttm, 1) if gross_margin_ttm is not None else None
 
     # ── GM Trend (Qtly) ──────────────────────────────────────────────
+    # Shows per-quarter gross margins (newest→oldest) plus the overall
+    # pp change with a directional arrow, e.g. "52%→49%→47%→45% ↑7pp"
     gross_margin_trend = None
     if len(quarterly) >= 4:
         margins = []
@@ -581,13 +598,11 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger) -> dict 
             if gp is not None and rev and rev > 0:
                 margins.append((gp / rev) * 100)
         if len(margins) >= 2:
-            gross_margin_trend = margins[0] - margins[-1]  # pp change
-            if gross_margin_trend > 1:
-                result["gross_margin_trend"] = "↑"
-            elif gross_margin_trend < -1:
-                result["gross_margin_trend"] = "↓"
-            else:
-                result["gross_margin_trend"] = "→"
+            gross_margin_trend = margins[0] - margins[-1]  # pp change newest vs oldest
+            arrow = "↑" if gross_margin_trend > 1 else ("↓" if gross_margin_trend < -1 else "→")
+            margin_strs = [f"{m:.0f}%" for m in margins]
+            pp = f"{abs(gross_margin_trend):.0f}pp"
+            result["gross_margin_trend"] = f"{'→'.join(margin_strs)} {arrow}{pp}"
         else:
             result["gross_margin_trend"] = None
     else:
