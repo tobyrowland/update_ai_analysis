@@ -44,7 +44,7 @@ GROUPS = [
     ("COMPANY", "1B3A4B", [
         "ticker", "company", "description",
     ]),
-    ("SUMMARY", "2E4057", [
+    ("OVERVIEW", "2E4057", [
         "r40_score", "fundamentals_snapshot",
     ]),
     ("REVENUE", "1B3A4B", [
@@ -866,78 +866,81 @@ def main():
     all_rows = read_all_rows(service)
     logger.info("Read %d rows from sheet (including headers)", len(all_rows))
 
-    # Build column mapping from current sheet headers
-    # Row 2 (index 1) has column display names
-    ai_col = {}  # display_name → column index
+    # ── Sync sheet layout to match GROUPS ─────────────────────────────
+    # Build old header → column index mapping from current row 2
+    old_header_idx = {}  # display_name → old column index
     if len(all_rows) >= 2:
         for idx, header in enumerate(all_rows[1]):
             name = header.strip()
-            # Normalize known aliases to canonical DISPLAY_NAMES values
             name = HEADER_ALIASES.get(name, name)
-            ai_col[name] = idx
+            if name:
+                old_header_idx[name] = idx
 
-    # Also build key → column index for direct lookups
-    # (reverse of DISPLAY_NAMES into ai_col)
-    key_col = {}  # column_key → column index
-    for key, display in DISPLAY_NAMES.items():
-        if display in ai_col:
-            key_col[key] = ai_col[display]
+    # Expected headers from GROUPS (canonical order)
+    expected_headers = [DISPLAY_NAMES.get(c, c) for c in ALL_COLUMNS]
+    current_headers = [
+        HEADER_ALIASES.get(h.strip(), h.strip())
+        for h in all_rows[1]
+    ] if len(all_rows) >= 2 else []
 
-    # Detect missing EODHD column headers and append them to the sheet
-    missing_keys = [k for k in EODHD_COLUMNS if k not in key_col]
-    if missing_keys:
-        # Find the next available column index (after all existing headers)
-        next_col = len(all_rows[1]) if len(all_rows) >= 2 else len(ALL_COLUMNS)
-        # Also update group header row (row 1) — put missing cols under "AI NARRATIVE" if they
-        # belong there, otherwise leave the group cell blank.
-        ai_narrative_keys = set(GROUPS[-1][2])  # keys in the AI NARRATIVE group
-        row1_updates = {}
-        row2_updates = {}
-        for key in missing_keys:
-            col_letter = _col_letter(next_col)
-            display = DISPLAY_NAMES.get(key, key)
-            row2_updates[col_letter] = display
-            if key in ai_narrative_keys:
-                row1_updates[col_letter] = "AI NARRATIVE"
-            key_col[key] = next_col
-            ai_col[display] = next_col
-            logger.info("Adding missing header '%s' at column %s (index %d)", display, col_letter, next_col)
-            next_col += 1
+    needs_restructure = (current_headers != expected_headers)
+    if needs_restructure:
+        logger.info("Sheet headers don't match GROUPS layout — restructuring")
 
-        # Write the new headers
-        header_updates = []
-        if row1_updates:
-            header_updates.append({"row": 1, "values": row1_updates})
-        if row2_updates:
-            header_updates.append({"row": 2, "values": row2_updates})
-        if header_updates:
-            write_row_updates(service, header_updates, logger)
-            logger.info("Wrote %d missing column headers to the sheet", len(missing_keys))
+        # Build new row 1 (group headers) and row 2 (column headers)
+        group_header = []
+        for group_name, _, cols in GROUPS:
+            group_header.append(group_name)
+            group_header.extend([""] * (len(cols) - 1))
+        col_header = list(expected_headers)
 
-    # Clean up deprecated columns (e.g. "Signal" replaced by R40 Score)
-    DEPRECATED_HEADERS = {"Signal"}
-    if len(all_rows) >= 2:
-        deprecated_updates = []
-        for idx, header in enumerate(all_rows[1]):
-            if header.strip() in DEPRECATED_HEADERS:
-                col_letter = _col_letter(idx)
-                logger.info("Clearing deprecated column '%s' at %s", header.strip(), col_letter)
-                # Clear group header (row 1) and column header (row 2)
-                deprecated_updates.append({"row": 1, "values": {col_letter: ""}})
-                deprecated_updates.append({"row": 2, "values": {col_letter: ""}})
-                # Clear data cells too
-                for data_row_idx in range(len(all_rows) - 2):
-                    deprecated_updates.append({"row": data_row_idx + 3, "values": {col_letter: ""}})
-        if deprecated_updates:
-            write_row_updates(service, deprecated_updates, logger)
+        # Remap data rows: move values from old column positions to new ones
+        data_rows_raw = all_rows[2:] if len(all_rows) > 2 else []
+        new_data_rows = []
+        for row in data_rows_raw:
+            new_row = [""] * len(ALL_COLUMNS)
+            for new_idx, col_key in enumerate(ALL_COLUMNS):
+                display = DISPLAY_NAMES.get(col_key, col_key)
+                old_idx = old_header_idx.get(display)
+                if old_idx is not None and old_idx < len(row):
+                    new_row[new_idx] = row[old_idx]
+            new_data_rows.append(new_row)
+
+        # Write entire sheet: headers + remapped data
+        sheet_data = [group_header, col_header] + new_data_rows
+        end_col = _col_letter(len(ALL_COLUMNS) - 1)
+
+        # Clear the sheet first (old layout may have more columns)
+        old_col_count = len(all_rows[1]) if len(all_rows) >= 2 else 0
+        clear_end = _col_letter(max(old_col_count, len(ALL_COLUMNS)) - 1)
+        service.spreadsheets().values().clear(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"'{SHEET_NAME}'!A1:{clear_end}",
+        ).execute()
+
+        # Write new layout
+        end_row = len(sheet_data)
+        service.spreadsheets().values().update(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"'{SHEET_NAME}'!A1:{end_col}{end_row}",
+            valueInputOption="USER_ENTERED",
+            body={"values": sheet_data},
+        ).execute()
+        logger.info("Restructured sheet: %d cols, %d data rows", len(ALL_COLUMNS), len(new_data_rows))
+
+        # Re-read the sheet after restructuring
+        all_rows = read_all_rows(service)
+
+    # Build canonical column mapping (now guaranteed to match GROUPS)
+    key_col = {key: idx for idx, key in enumerate(ALL_COLUMNS)}
 
     # Data starts at row 3 (index 2)
     data_rows = all_rows[2:] if len(all_rows) > 2 else []
 
     # Build list of tickers to process
-    ticker_col = ai_col.get("Ticker", 0)
-    company_col = ai_col.get("Company", 1)
-    fund_date_col = ai_col.get("Fundamentals Date")
+    ticker_col = key_col["ticker"]
+    company_col = key_col["company"]
+    fund_date_col = key_col.get("fundamentals_date")
 
     tickers_to_process = []
     for i, row in enumerate(data_rows):
