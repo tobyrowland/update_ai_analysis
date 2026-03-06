@@ -33,6 +33,8 @@ DELAY_BETWEEN_CALLS = 1  # seconds between EODHD API calls
 BATCH_SIZE = 5
 STALENESS_DAYS = 7  # re-fetch if data older than this
 
+NULL_VALUE = "—"  # consistent placeholder for missing/unavailable data
+
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 # ---------------------------------------------------------------------------
@@ -43,6 +45,9 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 GROUPS = [
     ("COMPANY", "1B3A4B", [
         "ticker", "company", "description",
+    ]),
+    ("OVERVIEW", "2E4057", [
+        "r40_score", "fundamentals_snapshot", "short_outlook",
     ]),
     ("REVENUE", "1B3A4B", [
         "annual_revenue_5y", "quarterly_revenue",
@@ -61,8 +66,9 @@ GROUPS = [
         "eps_quarterly", "eps_yoy_pct",
     ]),
     ("AI NARRATIVE", "2E4057", [
-        "r40_score", "fundamentals_snapshot",
-        "short_outlook", "outlook", "risks",
+        "outlook", "risks",
+    ]),
+    ("LAST ANALYSIS", "1B3A4B", [
         "ai_analysis_date", "fundamentals_date",
     ]),
 ]
@@ -94,8 +100,19 @@ DISPLAY_NAMES = {
     "short_outlook":        "Short Outlook",
     "outlook":              "Outlook",
     "risks":                "Key Risks",
-    "ai_analysis_date":     "AI Analyzed",
-    "fundamentals_date":    "Fundamentals Date",
+    "ai_analysis_date":     "AI",
+    "fundamentals_date":    "Data",
+}
+
+# The actual sheet may use different header names than DISPLAY_NAMES
+# (e.g. created by update_ai_narratives.py or edited manually).
+# Map known alternative sheet headers → canonical DISPLAY_NAMES value.
+HEADER_ALIASES = {
+    "Company Name":       "Company",
+    "Data As Of":         "Data",
+    "Fundamentals Date":  "Data",
+    "Analyzed":           "AI",
+    "AI Analyzed":        "AI",
 }
 
 COL_WIDTHS = {
@@ -103,13 +120,13 @@ COL_WIDTHS = {
     "company": 25,
     "description": 40,
     "annual_revenue_5y": 45,
-    "quarterly_revenue": 22,
+    "quarterly_revenue": 70,
     "rev_growth_ttm": 18,
     "rev_growth_qoq": 18,
     "rev_cagr_3y": 18,
     "rev_consistency": 18,
     "gross_margin_ttm": 18,
-    "gross_margin_trend": 14,
+    "gross_margin_trend": 28,
     "operating_margin_ttm": 18,
     "net_margin_ttm": 18,
     "net_margin_yoy_delta": 18,
@@ -138,7 +155,10 @@ PCT_COLS = {
 }
 
 # Columns that should be formatted as decimals
-DECIMAL_COLS = {"rule_of_40"}
+DECIMAL_COLS = set()  # no decimal-formatted columns currently
+
+# Columns formatted as plain integers (no decimal, no % sign)
+INTEGER_COLS = {"rule_of_40"}
 
 # Columns that should be formatted as dollars
 DOLLAR_COLS = {"eps_quarterly"}
@@ -343,8 +363,8 @@ def write_ai_analysis_sheet(service, rows: list[dict], logger: logging.Logger):
             # Format percentage columns
             if col_key in PCT_COLS and isinstance(val, (int, float)):
                 val = f"{val:.1f}%"
-            elif col_key in DECIMAL_COLS and isinstance(val, (int, float)):
-                val = f"{val:.1f}"
+            elif col_key in INTEGER_COLS and isinstance(val, (int, float)):
+                val = f"{val:.0f}"
             elif col_key in DOLLAR_COLS and isinstance(val, (int, float)):
                 val = f"${val:.2f}"
             data_row.append(val)
@@ -465,11 +485,15 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger) -> dict 
             annual_revs.append(f"{year}: {fmt_revenue(rev)}")
     result["annual_revenue_5y"] = " | ".join(annual_revs) if annual_revs else None
 
-    # ── Quarterly Revenue ─────────────────────────────────────────────
+    # ── Quarterly Revenue (last 5 quarters) ────────────────────────────
     if quarterly:
-        rev = safe_float(quarterly[0][1].get("totalRevenue"))
-        q_date = quarterly[0][0]
-        result["quarterly_revenue"] = f"{fmt_revenue(rev)} ({q_date})" if rev is not None else None
+        parts = []
+        for entry in quarterly[:5]:
+            rev = safe_float(entry[1].get("totalRevenue"))
+            q_date = entry[0]
+            if rev is not None:
+                parts.append(f"{fmt_revenue(rev)} ({q_date})")
+        result["quarterly_revenue"] = " | ".join(parts) if parts else None
     else:
         result["quarterly_revenue"] = None
 
@@ -506,49 +530,79 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger) -> dict 
         result["rev_cagr_3y"] = None
 
     # ── Rev Consistency Score (0–10) ──────────────────────────────────
-    if len(quarterly) >= 2:
-        n = min(len(quarterly) - 1, 10)
+    # Always scored out of 10 (need 11 quarters). Show as "X/10".
+    if len(quarterly) >= 11:
+        growth_count = 0
+        for i in range(10):
+            c = safe_float(quarterly[i][1].get("totalRevenue"))
+            p = safe_float(quarterly[i + 1][1].get("totalRevenue"))
+            if c is not None and p is not None and c > p:
+                growth_count += 1
+        result["rev_consistency"] = f"{growth_count}/10"
+    elif len(quarterly) >= 2:
+        # Fewer than 11 quarters — normalize to /10 scale
+        n = len(quarterly) - 1
         growth_count = 0
         for i in range(n):
             c = safe_float(quarterly[i][1].get("totalRevenue"))
             p = safe_float(quarterly[i + 1][1].get("totalRevenue"))
             if c is not None and p is not None and c > p:
                 growth_count += 1
-        result["rev_consistency"] = f"{growth_count}/{n}"
+        scaled = round(growth_count / n * 10)
+        result["rev_consistency"] = f"{scaled}/10"
     else:
         result["rev_consistency"] = None
 
     # ── Gross Margin TTM % ────────────────────────────────────────────
     gross_margin_ttm = None
     if len(quarterly) >= 4:
-        gp_sum = sum(safe_float(e[1].get("grossProfit")) or 0 for e in quarterly[:4])
-        rev_sum = sum(safe_float(e[1].get("totalRevenue")) or 0 for e in quarterly[:4])
-        if rev_sum > 0:
+        gp_sum = 0
+        rev_sum = 0
+        for e in quarterly[:4]:
+            gp = safe_float(e[1].get("grossProfit"))
+            rev = safe_float(e[1].get("totalRevenue"))
+            # Fallback: derive grossProfit from totalRevenue - costOfRevenue
+            if gp is None and rev is not None:
+                cor = safe_float(e[1].get("costOfRevenue"))
+                if cor is not None:
+                    gp = rev - cor
+            gp_sum += gp or 0
+            rev_sum += rev or 0
+        if rev_sum > 0 and gp_sum != 0:
             gross_margin_ttm = (gp_sum / rev_sum) * 100
     elif quarterly:
         gp = safe_float(quarterly[0][1].get("grossProfit"))
         rev = safe_float(quarterly[0][1].get("totalRevenue"))
+        if gp is None and rev is not None:
+            cor = safe_float(quarterly[0][1].get("costOfRevenue"))
+            if cor is not None:
+                gp = rev - cor
         if gp is not None and rev and rev > 0:
             gross_margin_ttm = (gp / rev) * 100
     result["gross_margin_ttm"] = round(gross_margin_ttm, 1) if gross_margin_ttm is not None else None
 
     # ── GM Trend (Qtly) ──────────────────────────────────────────────
+    # Shows per-quarter gross margins (newest→oldest) plus the overall
+    # pp change with a directional arrow, e.g. "52%→49%→47%→45% ↑7pp"
     gross_margin_trend = None
     if len(quarterly) >= 4:
         margins = []
         for entry in quarterly[:4]:
             gp = safe_float(entry[1].get("grossProfit"))
             rev = safe_float(entry[1].get("totalRevenue"))
+            # Fallback: derive grossProfit from totalRevenue - costOfRevenue
+            if gp is None and rev is not None:
+                cor = safe_float(entry[1].get("costOfRevenue"))
+                if cor is not None:
+                    gp = rev - cor
             if gp is not None and rev and rev > 0:
                 margins.append((gp / rev) * 100)
         if len(margins) >= 2:
-            gross_margin_trend = margins[0] - margins[-1]  # pp change
-            if gross_margin_trend > 1:
-                result["gross_margin_trend"] = "↑"
-            elif gross_margin_trend < -1:
-                result["gross_margin_trend"] = "↓"
-            else:
-                result["gross_margin_trend"] = "→"
+            gross_margin_trend = margins[0] - margins[-1]  # pp change newest vs oldest
+            arrow = "↑" if gross_margin_trend > 1 else ("↓" if gross_margin_trend < -1 else "→")
+            margin_strs = [f"{m:.0f}%" for m in margins]
+            pp = f"{abs(gross_margin_trend):.0f}pp"
+            result["gross_margin_trend"] = f"{'→'.join(margin_strs)} {arrow}{pp}"
         else:
             result["gross_margin_trend"] = None
     else:
@@ -639,32 +693,51 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger) -> dict 
     result["rule_of_40"] = round(r40, 1) if r40 is not None else None
 
     # ── Qtrs to Profitability ─────────────────────────────────────────
+    # Uses TTM (4-quarter) net income to judge profitability, then
+    # projects quarters to breakeven from the net-margin improvement
+    # trend over the last 8 quarters.
     qtrs_to_prof = None
-    if quarterly:
-        latest_ni = safe_float(quarterly[0][1].get("netIncome"))
-        if latest_ni is not None and latest_ni > 0:
+    if len(quarterly) >= 4:
+        # Check TTM profitability (sum of last 4 quarters)
+        ttm_ni = sum(safe_float(e[1].get("netIncome")) or 0 for e in quarterly[:4])
+        ttm_rev = sum(safe_float(e[1].get("totalRevenue")) or 0 for e in quarterly[:4])
+
+        if ttm_rev > 0 and ttm_ni >= 0:
             result["qtrs_to_profitability"] = "Profitable"
             qtrs_to_prof = 0
-        elif latest_ni is not None:
+        elif ttm_rev > 0:
+            # Unprofitable — estimate quarters to breakeven
+            ttm_margin = (ttm_ni / ttm_rev) * 100
+            # Build per-quarter net margin series (newest first)
             margins = []
             for entry in quarterly[:8]:
                 ni = safe_float(entry[1].get("netIncome"))
                 rev = safe_float(entry[1].get("totalRevenue"))
                 if ni is not None and rev and rev > 0:
                     margins.append((ni / rev) * 100)
-            if len(margins) >= 2:
+            if len(margins) >= 4:
+                # Average per-quarter improvement (positive = getting better)
                 improvements = [margins[i] - margins[i + 1] for i in range(len(margins) - 1)]
                 avg_improvement = sum(improvements) / len(improvements)
-                if avg_improvement > 0:
-                    qtrs_to_prof = int(-margins[0] / avg_improvement) + 1
+                if avg_improvement > 0.5:
+                    # Project from current TTM margin to zero
+                    qtrs_to_prof = max(1, int(-ttm_margin / avg_improvement) + 1)
                     if qtrs_to_prof > 20:
                         result["qtrs_to_profitability"] = ">20"
                     else:
                         result["qtrs_to_profitability"] = str(qtrs_to_prof)
                 else:
-                    result["qtrs_to_profitability"] = "N/A"
+                    result["qtrs_to_profitability"] = "Not converging"
             else:
-                result["qtrs_to_profitability"] = "N/A"
+                result["qtrs_to_profitability"] = None
+        else:
+            result["qtrs_to_profitability"] = None
+    elif quarterly:
+        # Fewer than 4 quarters — check latest only
+        latest_ni = safe_float(quarterly[0][1].get("netIncome"))
+        if latest_ni is not None and latest_ni >= 0:
+            result["qtrs_to_profitability"] = "Profitable"
+            qtrs_to_prof = 0
         else:
             result["qtrs_to_profitability"] = None
     else:
@@ -688,12 +761,9 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger) -> dict 
     else:
         result["eps_yoy_pct"] = None
 
-    # ── Margins improving flag (used by r40_score) ────────────────────
-    margins_improving = False
-    if gross_margin_trend is not None and gross_margin_trend > 1:
-        margins_improving = True
-
     # ── R40 Score ─────────────────────────────────────────────────────
+    # Format: 💎💎 R40: 54 | FCF +27% | ⏳ ~12 qtrs GAAP
+    #
     # Gem scale calibrated to screened universe (GM>45%, RevGr>20%):
     #   no gems  = R40 < 20  (weakest in this universe)
     #   💎       = R40 20–39
@@ -839,20 +909,34 @@ def main():
     all_rows = read_all_rows(service)
     logger.info("Read %d rows from sheet (including headers)", len(all_rows))
 
-    # Build column mapping from current sheet headers
-    # Row 2 (index 1) has column display names
-    ai_col = {}  # display_name → column index
+    # ── Read sheet headers and build column mapping ─────────────────
+    # The sheet layout is managed manually. The script reads row 2
+    # headers and maps them to column keys — it never rewrites headers.
+    display_to_key = {}
+    for key, display in DISPLAY_NAMES.items():
+        display_to_key[display] = key
+
+    key_col = {}  # column_key → 0-based column index
     if len(all_rows) >= 2:
         for idx, header in enumerate(all_rows[1]):
-            ai_col[header.strip()] = idx
+            name = header.strip()
+            name = HEADER_ALIASES.get(name, name)
+            col_key = display_to_key.get(name)
+            if col_key and col_key not in key_col:
+                key_col[col_key] = idx
+
+    missing = [k for k in EODHD_COLUMNS if k not in key_col]
+    if missing:
+        logger.warning("Columns not found in sheet (will skip): %s",
+                        [DISPLAY_NAMES.get(k, k) for k in missing])
 
     # Data starts at row 3 (index 2)
     data_rows = all_rows[2:] if len(all_rows) > 2 else []
 
     # Build list of tickers to process
-    ticker_col = ai_col.get("Ticker", 0)
-    company_col = ai_col.get("Company", 1)
-    fund_date_col = ai_col.get("Fundamentals Date")
+    ticker_col = key_col.get("ticker", 0)
+    company_col = key_col.get("company", 1)
+    fund_date_col = key_col.get("fundamentals_date")
 
     tickers_to_process = []
     for i, row in enumerate(data_rows):
@@ -914,8 +998,8 @@ def main():
                             # Format for display
                             if key in PCT_COLS and isinstance(val, (int, float)):
                                 logger.info("  %-25s %s%%", display, val)
-                            elif key in DECIMAL_COLS and isinstance(val, (int, float)):
-                                logger.info("  %-25s %s", display, val)
+                            elif key in INTEGER_COLS and isinstance(val, (int, float)):
+                                logger.info("  %-25s %s", display, int(val))
                             elif key in DOLLAR_COLS and isinstance(val, (int, float)):
                                 logger.info("  %-25s $%s", display, val)
                             else:
@@ -925,20 +1009,19 @@ def main():
             # Build update values using actual sheet column positions
             values = {}
             for key in EODHD_COLUMNS:
-                val = eodhd_data.get(key)
-                if val is None:
-                    continue
-                display_name = DISPLAY_NAMES.get(key, key)
-                col_idx = ai_col.get(display_name)
+                col_idx = key_col.get(key)
                 if col_idx is None:
-                    logger.warning("Column '%s' (%s) not found in sheet headers, skipping", display_name, key)
+                    logger.warning("Column '%s' not found in sheet headers, skipping", key)
                     continue
                 col_letter = _col_letter(col_idx)
-                # Format value for sheet
-                if key in PCT_COLS and isinstance(val, (int, float)):
+                val = eodhd_data.get(key)
+                # Use consistent null for missing data
+                if val is None:
+                    values[col_letter] = NULL_VALUE
+                elif key in PCT_COLS and isinstance(val, (int, float)):
                     values[col_letter] = f"{val:.1f}%"
-                elif key in DECIMAL_COLS and isinstance(val, (int, float)):
-                    values[col_letter] = f"{val:.1f}"
+                elif key in INTEGER_COLS and isinstance(val, (int, float)):
+                    values[col_letter] = f"{val:.0f}"
                 elif key in DOLLAR_COLS and isinstance(val, (int, float)):
                     values[col_letter] = f"${val:.2f}"
                 else:

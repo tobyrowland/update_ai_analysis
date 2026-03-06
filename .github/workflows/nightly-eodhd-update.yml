@@ -4,7 +4,12 @@ on:
   schedule:
     # Runs at 5:00 AM UTC daily (before the AI narratives job at 6:00 AM)
     - cron: "0 5 * * *"
-  workflow_dispatch: # Allow manual trigger from GitHub UI
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Force update all tickers (ignore staleness check)"
+        type: boolean
+        default: false
 
 jobs:
   update:
@@ -28,7 +33,12 @@ jobs:
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
-        run: python eodhd_updater.py
+        run: |
+          ARGS=""
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            ARGS="--force"
+          fi
+          python eodhd_updater.py $ARGS
 
       - name: Upload logs
         if: always()
