@@ -155,7 +155,10 @@ PCT_COLS = {
 }
 
 # Columns that should be formatted as decimals
-DECIMAL_COLS = {"rule_of_40"}
+DECIMAL_COLS = set()  # no decimal-formatted columns currently
+
+# Columns formatted as plain integers (no decimal, no % sign)
+INTEGER_COLS = {"rule_of_40"}
 
 # Columns that should be formatted as dollars
 DOLLAR_COLS = {"eps_quarterly"}
@@ -360,8 +363,8 @@ def write_ai_analysis_sheet(service, rows: list[dict], logger: logging.Logger):
             # Format percentage columns
             if col_key in PCT_COLS and isinstance(val, (int, float)):
                 val = f"{val:.1f}%"
-            elif col_key in DECIMAL_COLS and isinstance(val, (int, float)):
-                val = f"{val:.1f}"
+            elif col_key in INTEGER_COLS and isinstance(val, (int, float)):
+                val = f"{val:.0f}"
             elif col_key in DOLLAR_COLS and isinstance(val, (int, float)):
                 val = f"${val:.2f}"
             data_row.append(val)
@@ -961,8 +964,8 @@ def main():
                             # Format for display
                             if key in PCT_COLS and isinstance(val, (int, float)):
                                 logger.info("  %-25s %s%%", display, val)
-                            elif key in DECIMAL_COLS and isinstance(val, (int, float)):
-                                logger.info("  %-25s %s", display, val)
+                            elif key in INTEGER_COLS and isinstance(val, (int, float)):
+                                logger.info("  %-25s %s", display, int(val))
                             elif key in DOLLAR_COLS and isinstance(val, (int, float)):
                                 logger.info("  %-25s $%s", display, val)
                             else:
@@ -983,8 +986,8 @@ def main():
                     values[col_letter] = NULL_VALUE
                 elif key in PCT_COLS and isinstance(val, (int, float)):
                     values[col_letter] = f"{val:.1f}%"
-                elif key in DECIMAL_COLS and isinstance(val, (int, float)):
-                    values[col_letter] = f"{val:.1f}"
+                elif key in INTEGER_COLS and isinstance(val, (int, float)):
+                    values[col_letter] = f"{val:.0f}"
                 elif key in DOLLAR_COLS and isinstance(val, (int, float)):
                     values[col_letter] = f"${val:.2f}"
                 else:
