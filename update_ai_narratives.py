@@ -39,8 +39,6 @@ MAX_RETRIES = 2  # total attempts per ticker
 # The script reads actual sheet headers rather than relying on hardcoded positions.
 HEADER_TICKER = "Ticker"
 HEADER_COMPANY = "Company"
-HEADER_R40_SCORE = "R40 Score"
-HEADER_FUNDAMENTALS_SNAPSHOT = "Fundamentals Snapshot"
 HEADER_SHORT_OUTLOOK = "Short Outlook"
 HEADER_OUTLOOK = "Outlook"
 HEADER_RISKS = "Key Risks"
@@ -274,36 +272,23 @@ FINANCIAL DATA FROM SPREADSHEET:
 EXAMPLES OF THE DESIRED FORMAT (use these as style guides):
 
 --- EXAMPLE 1 (STEP - StepStone Group) ---
-Signal: 💎 Rev +55% YoY | 3Y CAGR -5% | GM 40% | Margins →
 Short Outlook: 🟢 Strong fundraising and fee growth driving record assets under management.
 Full Outlook: Reported Q3 FY26 earnings on Feb 5, 2026, showing strong fee-related earnings growth driven by record AUM from robust fundraising. As an established, profitable asset manager, GAAP earnings can be volatile due to performance fees. However, the consistent expansion of management fees from sticky, long-term capital provides a stable and growing earnings base, supporting a positive fundamental outlook.
 Key Risks: 🟡 Performance fee volatility and fundraising slowdown in an economic downturn.
 
 --- EXAMPLE 2 (GTLB - GitLab) ---
-Signal: 💎💎💎 Rev +27% YoY | 3Y CAGR +44% | GM 88% | Margins ↑
 Short Outlook: 🟢 Strong revenue growth and high margins; enterprise adoption is key.
 Full Outlook: Latest earnings (Dec 4, 2025) showed strong 30% YoY revenue growth. Exceptional 91% gross margins are funding growth, with operating leverage improving. While still unprofitable on a GAAP basis due to high R&D and S&M spend (incl. SBC), losses are narrowing. Adoption of AI features and enterprise tiers should drive the company towards GAAP profitability within the next 1-2 years.
 Key Risks: 🟡 Intense competition from Microsoft/GitHub and macroeconomic spending pressures.
 
 --- EXAMPLE 3 (ADI - Analog Devices, cautious) ---
-Signal: 💎💎💎 Rev +26% YoY | 3Y CAGR -3% | GM 63% | Margins ↑
 Short Outlook: 🟡 Cautious guidance as industrial market weakness and inventory correction persists.
 Full Outlook: Analog Devices' Q1 FY26 earnings (Feb 18, 2026) beat lowered expectations but Q2 guidance points to continued decline. Revenue is pressured by a broad-based cyclical downturn, particularly in industrial and communications, with inventory digestion taking longer than expected. While historically strong gross margins (>60%) have compressed due to lower factory utilization, the company remains highly profitable. Recovery hinges on a second-half 2026 market rebound.
 Key Risks: 🟡 Prolonged cyclical downturn and continued inventory digestion in key markets.
 
 ---
 
-Now generate the four fields for {company_name} ({ticker}). Follow these rules exactly:
-
-SIGNAL RULES:
-- Use 💎 (1 gem) for moderate quality, 💎💎 for good, 💎💎💎 for exceptional — base gem count on the overall combination of growth rate, gross margin level, and margin trend
-- Format MUST be: 💎[gems] Rev +/-X% YoY | 3Y CAGR +/-X% | GM X% | Margins ↑/↓/→
-- "Rev YoY %" comes from column M (Rev Growth TTM %)
-- "3Y CAGR" comes from column O (Rev CAGR 3Y %)
-- "GM" comes from column Q (Gross Margin %)
-- "Margins" trend: use ↑ if Net Margin YoY Δ (col T) is positive, ↓ if negative, → if flat (within ±1%)
-- Always include the sign (+ or -) on all percentage figures
-- If a value is missing or blank, omit that segment rather than showing "N/A"
+Now generate the three fields for {company_name} ({ticker}). Follow these rules exactly:
 
 SHORT OUTLOOK RULES:
 - One sentence, max 15 words
@@ -324,7 +309,6 @@ KEY RISKS RULES:
 
 Respond ONLY with a JSON object in this exact format, no markdown, no preamble:
 {{
-  "signal": "...",
   "short_outlook": "...",
   "full_outlook": "...",
   "key_risks": "..."
@@ -394,7 +378,7 @@ def call_gemini(prompt: str, api_key: str, logger: logging.Logger) -> dict | Non
                 logger.warning("Gemini returned non-JSON: %s", text[:200])
                 return None
 
-            required_keys = {"signal", "short_outlook", "full_outlook", "key_risks"}
+            required_keys = {"short_outlook", "full_outlook", "key_risks"}
             missing = required_keys - set(result.keys())
             if missing:
                 logger.warning("Gemini response missing keys: %s (got: %s)", missing, list(result.keys()))
@@ -501,7 +485,6 @@ def process_company(
 
     # Map output fields to sheet columns dynamically
     field_to_header = {
-        "signal": HEADER_R40_SCORE,
         "short_outlook": HEADER_SHORT_OUTLOOK,
         "full_outlook": HEADER_OUTLOOK,
         "key_risks": HEADER_RISKS,

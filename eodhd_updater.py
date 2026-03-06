@@ -44,6 +44,9 @@ GROUPS = [
     ("COMPANY", "1B3A4B", [
         "ticker", "company", "description",
     ]),
+    ("SUMMARY", "2E4057", [
+        "r40_score", "fundamentals_snapshot",
+    ]),
     ("REVENUE", "1B3A4B", [
         "annual_revenue_5y", "quarterly_revenue",
         "rev_growth_ttm", "rev_growth_qoq", "rev_cagr_3y", "rev_consistency",
@@ -61,7 +64,6 @@ GROUPS = [
         "eps_quarterly", "eps_yoy_pct",
     ]),
     ("AI NARRATIVE", "2E4057", [
-        "r40_score", "fundamentals_snapshot",
         "short_outlook", "outlook", "risks",
         "ai_analysis_date", "fundamentals_date",
     ]),
@@ -530,13 +532,27 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger) -> dict 
     # ── Gross Margin TTM % ────────────────────────────────────────────
     gross_margin_ttm = None
     if len(quarterly) >= 4:
-        gp_sum = sum(safe_float(e[1].get("grossProfit")) or 0 for e in quarterly[:4])
-        rev_sum = sum(safe_float(e[1].get("totalRevenue")) or 0 for e in quarterly[:4])
-        if rev_sum > 0:
+        gp_sum = 0
+        rev_sum = 0
+        for e in quarterly[:4]:
+            gp = safe_float(e[1].get("grossProfit"))
+            rev = safe_float(e[1].get("totalRevenue"))
+            # Fallback: derive grossProfit from totalRevenue - costOfRevenue
+            if gp is None and rev is not None:
+                cor = safe_float(e[1].get("costOfRevenue"))
+                if cor is not None:
+                    gp = rev - cor
+            gp_sum += gp or 0
+            rev_sum += rev or 0
+        if rev_sum > 0 and gp_sum != 0:
             gross_margin_ttm = (gp_sum / rev_sum) * 100
     elif quarterly:
         gp = safe_float(quarterly[0][1].get("grossProfit"))
         rev = safe_float(quarterly[0][1].get("totalRevenue"))
+        if gp is None and rev is not None:
+            cor = safe_float(quarterly[0][1].get("costOfRevenue"))
+            if cor is not None:
+                gp = rev - cor
         if gp is not None and rev and rev > 0:
             gross_margin_ttm = (gp / rev) * 100
     result["gross_margin_ttm"] = round(gross_margin_ttm, 1) if gross_margin_ttm is not None else None
@@ -548,6 +564,11 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger) -> dict 
         for entry in quarterly[:4]:
             gp = safe_float(entry[1].get("grossProfit"))
             rev = safe_float(entry[1].get("totalRevenue"))
+            # Fallback: derive grossProfit from totalRevenue - costOfRevenue
+            if gp is None and rev is not None:
+                cor = safe_float(entry[1].get("costOfRevenue"))
+                if cor is not None:
+                    gp = rev - cor
             if gp is not None and rev and rev > 0:
                 margins.append((gp / rev) * 100)
         if len(margins) >= 2:
@@ -697,12 +718,9 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger) -> dict 
     else:
         result["eps_yoy_pct"] = None
 
-    # ── Margins improving flag (used by r40_score) ────────────────────
-    margins_improving = False
-    if gross_margin_trend is not None and gross_margin_trend > 1:
-        margins_improving = True
-
     # ── R40 Score ─────────────────────────────────────────────────────
+    # Format: 💎💎 R40: 54 | FCF +27% | ⏳ ~12 qtrs GAAP
+    #
     # Gem scale calibrated to screened universe (GM>45%, RevGr>20%):
     #   no gems  = R40 < 20  (weakest in this universe)
     #   💎       = R40 20–39
@@ -895,6 +913,23 @@ def main():
         if header_updates:
             write_row_updates(service, header_updates, logger)
             logger.info("Wrote %d missing column headers to the sheet", len(missing_keys))
+
+    # Clean up deprecated columns (e.g. "Signal" replaced by R40 Score)
+    DEPRECATED_HEADERS = {"Signal"}
+    if len(all_rows) >= 2:
+        deprecated_updates = []
+        for idx, header in enumerate(all_rows[1]):
+            if header.strip() in DEPRECATED_HEADERS:
+                col_letter = _col_letter(idx)
+                logger.info("Clearing deprecated column '%s' at %s", header.strip(), col_letter)
+                # Clear group header (row 1) and column header (row 2)
+                deprecated_updates.append({"row": 1, "values": {col_letter: ""}})
+                deprecated_updates.append({"row": 2, "values": {col_letter: ""}})
+                # Clear data cells too
+                for data_row_idx in range(len(all_rows) - 2):
+                    deprecated_updates.append({"row": data_row_idx + 3, "values": {col_letter: ""}})
+        if deprecated_updates:
+            write_row_updates(service, deprecated_updates, logger)
 
     # Data starts at row 3 (index 2)
     data_rows = all_rows[2:] if len(all_rows) > 2 else []
