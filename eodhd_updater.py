@@ -922,13 +922,18 @@ def main():
                                 logger.info("  %-25s %s", display, val)
                 continue
 
-            # Build update values with column letters
+            # Build update values using actual sheet column positions
             values = {}
             for key in EODHD_COLUMNS:
                 val = eodhd_data.get(key)
                 if val is None:
                     continue
-                col_letter = _col_letter_for_key(key)
+                display_name = DISPLAY_NAMES.get(key, key)
+                col_idx = ai_col.get(display_name)
+                if col_idx is None:
+                    logger.warning("Column '%s' (%s) not found in sheet headers, skipping", display_name, key)
+                    continue
+                col_letter = _col_letter(col_idx)
                 # Format value for sheet
                 if key in PCT_COLS and isinstance(val, (int, float)):
                     values[col_letter] = f"{val:.1f}%"
