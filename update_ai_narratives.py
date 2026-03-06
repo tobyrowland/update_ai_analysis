@@ -53,8 +53,12 @@ HEADER_ALIASES = {
     "AI Analyzed":        "AI",
 }
 
+NULL_VALUE = "—"  # must match eodhd_updater.py
+
 # Financial column labels for prompt context (order doesn't matter for lookup)
 FINANCIAL_HEADERS = [
+    "R40 Score",
+    "Fundamentals Snapshot",
     "Annual Revenue (5Y)",
     "Quarterly Revenue",
     "Rev Growth TTM %",
@@ -326,7 +330,7 @@ def build_financial_summary(row: list[str], col_map: dict) -> str:
         col_idx = col_map.get(label)
         if col_idx is not None and col_idx < len(padded):
             val = padded[col_idx].strip()
-            if val:
+            if val and val != NULL_VALUE:
                 lines.append(f"  {label}: {val}")
     return "\n".join(lines) if lines else "  (no financial data available)"
 
