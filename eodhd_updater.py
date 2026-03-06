@@ -872,80 +872,33 @@ def main():
     all_rows = read_all_rows(service)
     logger.info("Read %d rows from sheet (including headers)", len(all_rows))
 
-    # ── Sync sheet layout to match GROUPS ─────────────────────────────
-    # Build old header → column index mapping from current row 2
-    old_header_idx = {}  # display_name → old column index (first occurrence wins)
+    # ── Read sheet headers and build column mapping ─────────────────
+    # The sheet layout is managed manually. The script reads row 2
+    # headers and maps them to column keys — it never rewrites headers.
+    display_to_key = {}
+    for key, display in DISPLAY_NAMES.items():
+        display_to_key[display] = key
+
+    key_col = {}  # column_key → 0-based column index
     if len(all_rows) >= 2:
         for idx, header in enumerate(all_rows[1]):
             name = header.strip()
             name = HEADER_ALIASES.get(name, name)
-            if name and name not in old_header_idx:
-                old_header_idx[name] = idx
+            col_key = display_to_key.get(name)
+            if col_key and col_key not in key_col:
+                key_col[col_key] = idx
 
-    # Expected headers from GROUPS (canonical order)
-    expected_headers = [DISPLAY_NAMES.get(c, c) for c in ALL_COLUMNS]
-    current_headers = [
-        HEADER_ALIASES.get(h.strip(), h.strip())
-        for h in all_rows[1]
-    ] if len(all_rows) >= 2 else []
-
-    needs_restructure = (current_headers != expected_headers)
-    if needs_restructure:
-        logger.info("Sheet headers don't match GROUPS layout — restructuring")
-
-        # Build new row 1 (group headers) and row 2 (column headers)
-        group_header = []
-        for group_name, _, cols in GROUPS:
-            group_header.append(group_name)
-            group_header.extend([""] * (len(cols) - 1))
-        col_header = list(expected_headers)
-
-        # Remap data rows: move values from old column positions to new ones
-        data_rows_raw = all_rows[2:] if len(all_rows) > 2 else []
-        new_data_rows = []
-        for row in data_rows_raw:
-            new_row = [""] * len(ALL_COLUMNS)
-            for new_idx, col_key in enumerate(ALL_COLUMNS):
-                display = DISPLAY_NAMES.get(col_key, col_key)
-                old_idx = old_header_idx.get(display)
-                if old_idx is not None and old_idx < len(row):
-                    new_row[new_idx] = row[old_idx]
-            new_data_rows.append(new_row)
-
-        # Write entire sheet: headers + remapped data
-        sheet_data = [group_header, col_header] + new_data_rows
-        end_col = _col_letter(len(ALL_COLUMNS) - 1)
-
-        # Clear the sheet first (old layout may have more columns)
-        old_col_count = len(all_rows[1]) if len(all_rows) >= 2 else 0
-        clear_end = _col_letter(max(old_col_count, len(ALL_COLUMNS)) - 1)
-        service.spreadsheets().values().clear(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"'{SHEET_NAME}'!A1:{clear_end}",
-        ).execute()
-
-        # Write new layout
-        end_row = len(sheet_data)
-        service.spreadsheets().values().update(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"'{SHEET_NAME}'!A1:{end_col}{end_row}",
-            valueInputOption="USER_ENTERED",
-            body={"values": sheet_data},
-        ).execute()
-        logger.info("Restructured sheet: %d cols, %d data rows", len(ALL_COLUMNS), len(new_data_rows))
-
-        # Re-read the sheet after restructuring
-        all_rows = read_all_rows(service)
-
-    # Build canonical column mapping (now guaranteed to match GROUPS)
-    key_col = {key: idx for idx, key in enumerate(ALL_COLUMNS)}
+    missing = [k for k in EODHD_COLUMNS if k not in key_col]
+    if missing:
+        logger.warning("Columns not found in sheet (will skip): %s",
+                        [DISPLAY_NAMES.get(k, k) for k in missing])
 
     # Data starts at row 3 (index 2)
     data_rows = all_rows[2:] if len(all_rows) > 2 else []
 
     # Build list of tickers to process
-    ticker_col = key_col["ticker"]
-    company_col = key_col["company"]
+    ticker_col = key_col.get("ticker", 0)
+    company_col = key_col.get("company", 1)
     fund_date_col = key_col.get("fundamentals_date")
 
     tickers_to_process = []
