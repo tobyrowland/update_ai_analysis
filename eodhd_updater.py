@@ -392,11 +392,74 @@ def write_ai_analysis_sheet(service, rows: list[dict], logger: logging.Logger):
 # EODHD API
 # ---------------------------------------------------------------------------
 
+# Map common exchange names (as they appear in the spreadsheet) to the
+# suffix codes that EODHD expects.  Keys are compared case-insensitively.
+EXCHANGE_TO_EODHD = {
+    # United States
+    "NASDAQ":   "US",
+    "NYSE":     "US",
+    "NYSEARCA": "US",
+    "NYSEMKT":  "US",
+    "AMEX":     "US",
+    "OTC":      "US",
+    "BATS":     "US",
+    "US":       "US",
+    # United Kingdom
+    "LSE":      "LSE",
+    "LON":      "LSE",
+    "LONDON":   "LSE",
+    # India
+    "NSE":      "NSE",
+    "BSE":      "BSE",
+    "NSEI":     "NSE",
+    # Japan
+    "TSE":      "TSE",
+    "TYO":      "TSE",
+    "JPX":      "TSE",
+    # Germany
+    "XETRA":    "XETRA",
+    "FRA":      "F",
+    "ETR":      "XETRA",
+    # Other Europe
+    "EPA":      "PA",
+    "PAR":      "PA",
+    "AMS":      "AS",
+    "SWX":      "SW",
+    "BIT":      "MI",
+    "BME":      "MC",
+    # Asia-Pacific
+    "HKG":      "HK",
+    "HKEX":     "HK",
+    "KRX":      "KO",
+    "KOSDAQ":   "KO",
+    "TWSE":     "TW",
+    "TPE":      "TW",
+    "SGX":      "SG",
+    "ASX":      "AU",
+    "NZX":      "NZ",
+    # Americas
+    "TSX":      "TO",
+    "TSXV":     "V",
+    "SAO":      "SA",
+    "BVMF":     "SA",
+    # Africa / Middle East
+    "JSE":      "JSE",
+    "TADAWUL":  "SR",
+    "SAU":      "SR",
+}
+
+
+def _resolve_exchange(exchange: str) -> str:
+    """Convert a spreadsheet exchange name to the EODHD suffix code."""
+    key = exchange.strip().upper()
+    return EXCHANGE_TO_EODHD.get(key, key)
+
 
 def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger,
                             exchange: str = "US") -> dict | None:
     """Fetch full fundamental data from EODHD for a ticker on the given exchange."""
-    symbol = f"{ticker}.{exchange}"
+    eodhd_exchange = _resolve_exchange(exchange)
+    symbol = f"{ticker}.{eodhd_exchange}"
     url = f"{EODHD_BASE_URL}/{symbol}"
     params = {"api_token": api_key, "fmt": "json"}
 
