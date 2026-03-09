@@ -44,7 +44,7 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 # Each group: (group_name, header_bg_hex, [column_keys...])
 GROUPS = [
     ("COMPANY", "1B3A4B", [
-        "ticker", "company", "description",
+        "ticker", "exchange", "company", "description",
     ]),
     ("OVERVIEW", "2E4057", [
         "r40_score", "fundamentals_snapshot", "short_outlook",
@@ -75,6 +75,7 @@ GROUPS = [
 
 DISPLAY_NAMES = {
     "ticker":               "Ticker",
+    "exchange":             "Exchange",
     "company":              "Company",
     "description":          "Description",
     "annual_revenue_5y":    "Annual Revenue (5Y)",
@@ -118,6 +119,7 @@ HEADER_ALIASES = {
 
 COL_WIDTHS = {
     "ticker": 10,
+    "exchange": 10,
     "company": 25,
     "description": 40,
     "annual_revenue_5y": 45,
@@ -391,9 +393,10 @@ def write_ai_analysis_sheet(service, rows: list[dict], logger: logging.Logger):
 # ---------------------------------------------------------------------------
 
 
-def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger) -> dict | None:
-    """Fetch full fundamental data from EODHD for a US ticker."""
-    symbol = f"{ticker}.US"
+def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger,
+                            exchange: str = "US") -> dict | None:
+    """Fetch full fundamental data from EODHD for a ticker on the given exchange."""
+    symbol = f"{ticker}.{exchange}"
     url = f"{EODHD_BASE_URL}/{symbol}"
     params = {"api_token": api_key, "fmt": "json"}
 
@@ -455,12 +458,13 @@ def _sorted_entries(section: dict) -> list[tuple[str, dict]]:
 # ---------------------------------------------------------------------------
 
 
-def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger) -> dict | None:
+def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
+                     exchange: str = "US") -> dict | None:
     """Fetch EODHD fundamentals and compute all financial metrics.
 
     Returns a dict keyed by EODHD_COLUMNS column keys, or None on failure.
     """
-    raw = _fetch_fundamentals_raw(ticker, api_key, logger)
+    raw = _fetch_fundamentals_raw(ticker, api_key, logger, exchange=exchange)
     if raw is None:
         return None
 
@@ -936,21 +940,32 @@ def main():
 
     # Build list of tickers to process
     ticker_col = key_col.get("ticker", 0)
+    exchange_col = key_col.get("exchange")
     company_col = key_col.get("company", 1)
     fund_date_col = key_col.get("fundamentals_date")
+
+    # Determine the max column index we need to pad to
+    pad_cols = [ticker_col, company_col, fund_date_col or 0]
+    if exchange_col is not None:
+        pad_cols.append(exchange_col)
 
     tickers_to_process = []
     for i, row in enumerate(data_rows):
         row_number = i + 3  # 1-indexed sheet row
-        padded = row + [""] * (max(ticker_col, company_col, fund_date_col or 0) + 1 - len(row))
+        padded = row + [""] * (max(pad_cols) + 1 - len(row))
         ticker = padded[ticker_col].strip()
         company = padded[company_col].strip()
+        exchange = padded[exchange_col].strip() if exchange_col is not None else ""
 
         if not ticker:
             continue
 
         if args.ticker and ticker.upper() != args.ticker.upper():
             continue
+
+        # Default exchange to US if not specified
+        if not exchange:
+            exchange = "US"
 
         # Skip if data is recent unless --force
         if not args.force and fund_date_col is not None:
@@ -964,7 +979,7 @@ def main():
                 except (ValueError, TypeError):
                     pass
 
-        tickers_to_process.append((row_number, ticker, company, row))
+        tickers_to_process.append((row_number, ticker, company, exchange, row))
 
     if args.limit:
         tickers_to_process = tickers_to_process[:args.limit]
@@ -980,15 +995,15 @@ def main():
     total_written = 0
     errors = 0
 
-    for idx, (row_number, ticker, company, existing_row) in enumerate(tickers_to_process):
+    for idx, (row_number, ticker, company, exchange, existing_row) in enumerate(tickers_to_process):
         try:
-            eodhd_data = fetch_eodhd_data(ticker, eodhd_key, logger)
+            eodhd_data = fetch_eodhd_data(ticker, eodhd_key, logger, exchange=exchange)
             if eodhd_data is None:
                 errors += 1
                 continue
 
             if args.dry_run:
-                logger.info("[DRY RUN] %s (%s):", ticker, company)
+                logger.info("[DRY RUN] %s.%s (%s):", ticker, exchange, company)
                 logger.info("  r40_score:             %s", eodhd_data.get("r40_score", ""))
                 logger.info("  fundamentals_snapshot: %s", eodhd_data.get("fundamentals_snapshot", ""))
                 for key in EODHD_COLUMNS:
