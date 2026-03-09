@@ -47,6 +47,7 @@ HEADER_ANALYZED = "AI"
 # Known aliases for headers (in case the sheet uses slightly different names)
 HEADER_ALIASES = {
     "Company Name":       "Company",
+    "Full Outlook":       "Outlook",
     "Data As Of":         "Data",
     "Fundamentals Date":  "Data",
     "Analyzed":           "AI",

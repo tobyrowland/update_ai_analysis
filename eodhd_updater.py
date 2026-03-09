@@ -109,6 +109,7 @@ DISPLAY_NAMES = {
 # Map known alternative sheet headers → canonical DISPLAY_NAMES value.
 HEADER_ALIASES = {
     "Company Name":       "Company",
+    "Full Outlook":       "Outlook",
     "Data As Of":         "Data",
     "Fundamentals Date":  "Data",
     "Analyzed":           "AI",
