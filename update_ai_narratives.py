@@ -60,6 +60,22 @@ HEADER_ALIASES = {
     "Data As Of":           "data",
     "Fundamentals Date":    "data",
     "fundamentals_date":    "data",
+    # Current sheet headers (lowercase with %, &, special chars)
+    "rev_growth_ttm%":          "rev_growth_ttm",
+    "rev_growth_qoq%":          "rev_growth_qoq",
+    "rev_cagr%":                "rev_cagr_3y",
+    "rev_consistency_score":    "rev_consistency",
+    "gross_margin%":            "gross_margin_ttm",
+    "gm_trend%":                "gross_margin_trend",
+    "operating_margin%":        "operating_margin_ttm",
+    "net_margin%":              "net_margin_ttm",
+    "net_margin_yoy%":          "net_margin_yoy_delta",
+    "fcf_margin%":              "fcf_margin_ttm",
+    "opex_%_of_revenue":        "opex_pct_revenue",
+    "s&m+r&d_%_of_revenue":     "sm_rd_pct_revenue",
+    "qrtrs_to_profitability":   "qtrs_to_profitability",
+    "eps_only":                 "eps_quarterly",
+    "eps_yoy%":                 "eps_yoy_pct",
 }
 
 NULL_VALUE = "—"  # must match eodhd_updater.py
