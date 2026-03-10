@@ -44,35 +44,32 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 # Each group: (group_name, header_bg_hex, [column_keys...])
 GROUPS = [
     ("COMPANY", "1B3A4B", [
-        "ticker", "exchange", "company", "description",
+        "ticker", "exchange", "company_name", "description",
     ]),
     ("OVERVIEW", "2E4057", [
         "r40_score", "fundamentals_snapshot", "short_outlook",
     ]),
     ("REVENUE", "1B3A4B", [
         "annual_revenue_5y", "quarterly_revenue",
-        "rev_growth_ttm", "rev_growth_qoq", "rev_cagr_3y", "rev_consistency",
+        "rev_growth_ttm", "rev_growth_qoq", "rev_cagr", "rev_consistency_score",
     ]),
     ("MARGINS", "1B3A4B", [
-        "gross_margin_ttm", "gross_margin_trend",
-        "operating_margin_ttm", "net_margin_ttm", "net_margin_yoy_delta",
-        "fcf_margin_ttm",
+        "gross_margin", "gm_trend",
+        "operating_margin", "net_margin", "net_margin_yoy",
+        "fcf_margin",
     ]),
     ("EFFICIENCY", "1B3A4B", [
         "opex_pct_revenue", "sm_rd_pct_revenue",
-        "rule_of_40", "qtrs_to_profitability",
+        "rule_of_40", "qrtrs_to_profitability",
     ]),
     ("EARNINGS", "1B3A4B", [
-        "eps_quarterly", "eps_yoy_pct",
+        "eps_only", "eps_yoy",
     ]),
     ("AI NARRATIVE", "2E4057", [
-        "outlook", "risks",
+        "full_outlook", "key_risks",
     ]),
     ("LAST ANALYSIS", "1B3A4B", [
-        "ai_analysis_date",
-    ]),
-    ("DATA DATE", "2E4057", [
-        "data",
+        "ai", "data",
     ]),
 ]
 
@@ -81,130 +78,112 @@ GROUPS = [
 DISPLAY_NAMES = {
     "ticker":               "ticker",
     "exchange":             "exchange",
-    "company":              "company",
+    "company_name":         "company_name",
     "description":          "description",
     "annual_revenue_5y":    "annual_revenue_5y",
     "quarterly_revenue":    "quarterly_revenue",
-    "rev_growth_ttm":       "rev_growth_ttm",
-    "rev_growth_qoq":       "rev_growth_qoq",
-    "rev_cagr_3y":          "rev_cagr_3y",
-    "rev_consistency":      "rev_consistency",
-    "gross_margin_ttm":     "gross_margin_ttm",
-    "gross_margin_trend":   "gross_margin_trend",
-    "operating_margin_ttm": "operating_margin_ttm",
-    "net_margin_ttm":       "net_margin_ttm",
-    "net_margin_yoy_delta": "net_margin_yoy_delta",
-    "fcf_margin_ttm":       "fcf_margin_ttm",
-    "opex_pct_revenue":     "opex_pct_revenue",
-    "sm_rd_pct_revenue":    "sm_rd_pct_revenue",
+    "rev_growth_ttm":       "rev_growth_ttm%",
+    "rev_growth_qoq":       "rev_growth_qoq%",
+    "rev_cagr":             "rev_cagr%",
+    "rev_consistency_score": "rev_consistency_score",
+    "gross_margin":         "gross_margin%",
+    "gm_trend":             "gm_trend%",
+    "operating_margin":     "operating_margin%",
+    "net_margin":           "net_margin%",
+    "net_margin_yoy":       "net_margin_yoy%",
+    "fcf_margin":           "fcf_margin%",
+    "opex_pct_revenue":     "opex_%_of_revenue",
+    "sm_rd_pct_revenue":    "s&m+r&d_%_of_revenue",
     "rule_of_40":           "rule_of_40",
-    "qtrs_to_profitability": "qtrs_to_profitability",
-    "eps_quarterly":        "eps_quarterly",
-    "eps_yoy_pct":          "eps_yoy_pct",
+    "qrtrs_to_profitability": "qrtrs_to_profitability",
+    "eps_only":             "eps_only",
+    "eps_yoy":              "eps_yoy%",
     "r40_score":            "r40_score",
     "fundamentals_snapshot": "fundamentals_snapshot",
     "short_outlook":        "short_outlook",
-    "outlook":              "outlook",
-    "risks":                "risks",
-    "ai_analysis_date":     "ai_analysis_date",
+    "full_outlook":         "full_outlook",
+    "key_risks":            "key_risks",
+    "ai":                   "ai",
     "data":                 "data",
 }
 
 # Map legacy/alternative sheet headers → current header names.
 HEADER_ALIASES = {
-    # Legacy display-name headers → new lowercase keys
+    "Company":              "company_name",
+    "Company Name":         "company_name",
     "Ticker":               "ticker",
     "Exchange":             "exchange",
-    "Company":              "company",
-    "Company Name":         "company",
     "Description":          "description",
     "Annual Revenue (5Y)":  "annual_revenue_5y",
     "Quarterly Revenue":    "quarterly_revenue",
     "Rev Growth TTM %":     "rev_growth_ttm",
     "Rev Growth QoQ %":     "rev_growth_qoq",
-    "Rev CAGR 3Y %":       "rev_cagr_3y",
-    "Rev Consistency Score": "rev_consistency",
-    "Gross Margin %":       "gross_margin_ttm",
-    "GM Trend (Qtly)":      "gross_margin_trend",
-    "Operating Margin %":   "operating_margin_ttm",
-    "Net Margin %":         "net_margin_ttm",
-    "Net Margin YoY Δ":     "net_margin_yoy_delta",
-    "FCF Margin %":         "fcf_margin_ttm",
+    "Rev CAGR 3Y %":       "rev_cagr",
+    "Rev Consistency Score": "rev_consistency_score",
+    "Gross Margin %":       "gross_margin",
+    "GM Trend (Qtly)":      "gm_trend",
+    "Operating Margin %":   "operating_margin",
+    "Net Margin %":         "net_margin",
+    "Net Margin YoY Δ":     "net_margin_yoy",
+    "FCF Margin %":         "fcf_margin",
     "Opex % of Revenue":    "opex_pct_revenue",
     "S&M+R&D % of Revenue": "sm_rd_pct_revenue",
     "Rule of 40":           "rule_of_40",
-    "Qtrs to Profitability": "qtrs_to_profitability",
-    "EPS Qtrly":            "eps_quarterly",
-    "EPS YoY %":            "eps_yoy_pct",
+    "Qtrs to Profitability": "qrtrs_to_profitability",
+    "EPS Qtrly":            "eps_only",
+    "EPS YoY %":            "eps_yoy",
     "R40 Score":            "r40_score",
     "Fundamentals Snapshot": "fundamentals_snapshot",
     "Short Outlook":        "short_outlook",
-    "Outlook":              "outlook",
-    "Full Outlook":         "outlook",
-    "Key Risks":            "risks",
-    "AI":                   "ai_analysis_date",
-    "Analyzed":             "ai_analysis_date",
-    "AI Analyzed":          "ai_analysis_date",
+    "Outlook":              "full_outlook",
+    "Full Outlook":         "full_outlook",
+    "Key Risks":            "key_risks",
+    "AI":                   "ai",
+    "Analyzed":             "ai",
+    "AI Analyzed":          "ai",
     "Data":                 "data",
     "Data As Of":           "data",
     "Fundamentals Date":    "data",
-    "data":                 "data",
-    # Current sheet headers (lowercase with %, &, special chars)
-    "rev_growth_ttm%":          "rev_growth_ttm",
-    "rev_growth_qoq%":          "rev_growth_qoq",
-    "rev_cagr%":                "rev_cagr_3y",
-    "rev_consistency_score":    "rev_consistency",
-    "gross_margin%":            "gross_margin_ttm",
-    "gm_trend%":                "gross_margin_trend",
-    "operating_margin%":        "operating_margin_ttm",
-    "net_margin%":              "net_margin_ttm",
-    "net_margin_yoy%":          "net_margin_yoy_delta",
-    "fcf_margin%":              "fcf_margin_ttm",
-    "opex_%_of_revenue":        "opex_pct_revenue",
-    "s&m+r&d_%_of_revenue":     "sm_rd_pct_revenue",
-    "qrtrs_to_profitability":   "qtrs_to_profitability",
-    "eps_only":                 "eps_quarterly",
-    "eps_yoy%":                 "eps_yoy_pct",
 }
 
 COL_WIDTHS = {
     "ticker": 10,
-    "exchange": 10,
-    "company": 25,
+    "exchange": 12,
+    "company_name": 25,
     "description": 40,
     "annual_revenue_5y": 45,
     "quarterly_revenue": 70,
     "rev_growth_ttm": 18,
     "rev_growth_qoq": 18,
-    "rev_cagr_3y": 18,
-    "rev_consistency": 18,
-    "gross_margin_ttm": 18,
-    "gross_margin_trend": 28,
-    "operating_margin_ttm": 18,
-    "net_margin_ttm": 18,
-    "net_margin_yoy_delta": 18,
-    "fcf_margin_ttm": 18,
+    "rev_cagr": 18,
+    "rev_consistency_score": 18,
+    "gross_margin": 18,
+    "gm_trend": 28,
+    "operating_margin": 18,
+    "net_margin": 18,
+    "net_margin_yoy": 18,
+    "fcf_margin": 18,
     "opex_pct_revenue": 18,
     "sm_rd_pct_revenue": 22,
     "rule_of_40": 14,
-    "qtrs_to_profitability": 18,
-    "eps_quarterly": 14,
-    "eps_yoy_pct": 14,
+    "qrtrs_to_profitability": 18,
+    "eps_only": 14,
+    "eps_yoy": 14,
     "r40_score": 22,
     "fundamentals_snapshot": 55,
     "short_outlook": 50,
-    "outlook": 80,
-    "risks": 50,
-    "ai_analysis_date": 16,
+    "full_outlook": 80,
+    "key_risks": 50,
+    "ai": 16,
     "data": 16,
 }
 
 # Columns that should be formatted as percentages
 PCT_COLS = {
-    "rev_growth_ttm", "rev_growth_qoq", "rev_cagr_3y",
-    "gross_margin_ttm", "operating_margin_ttm", "net_margin_ttm",
-    "net_margin_yoy_delta", "fcf_margin_ttm",
-    "opex_pct_revenue", "sm_rd_pct_revenue", "eps_yoy_pct",
+    "rev_growth_ttm", "rev_growth_qoq", "rev_cagr",
+    "gross_margin", "operating_margin", "net_margin",
+    "net_margin_yoy", "fcf_margin",
+    "opex_pct_revenue", "sm_rd_pct_revenue", "eps_yoy",
 }
 
 # Columns that should be formatted as decimals
@@ -214,18 +193,18 @@ DECIMAL_COLS = set()  # no decimal-formatted columns currently
 INTEGER_COLS = {"rule_of_40"}
 
 # Columns that should be formatted as dollars
-DOLLAR_COLS = {"eps_quarterly"}
+DOLLAR_COLS = {"eps_only"}
 
 # Columns populated by EODHD (as opposed to AI narrative columns)
 EODHD_COLUMNS = [
     "annual_revenue_5y", "quarterly_revenue",
-    "rev_growth_ttm", "rev_growth_qoq", "rev_cagr_3y", "rev_consistency",
-    "gross_margin_ttm", "gross_margin_trend",
-    "operating_margin_ttm", "net_margin_ttm", "net_margin_yoy_delta",
-    "fcf_margin_ttm",
+    "rev_growth_ttm", "rev_growth_qoq", "rev_cagr", "rev_consistency_score",
+    "gross_margin", "gm_trend",
+    "operating_margin", "net_margin", "net_margin_yoy",
+    "fcf_margin",
     "opex_pct_revenue", "sm_rd_pct_revenue",
-    "rule_of_40", "qtrs_to_profitability",
-    "eps_quarterly", "eps_yoy_pct",
+    "rule_of_40", "qrtrs_to_profitability",
+    "eps_only", "eps_yoy",
     "r40_score", "fundamentals_snapshot", "data",
 ]
 
@@ -303,6 +282,47 @@ def read_all_rows(service) -> list[list[str]]:
         .execute()
     )
     return result.get("values", [])
+
+
+def _get_sheet_id(service) -> int:
+    """Return the numeric sheet ID for SHEET_NAME."""
+    meta = service.spreadsheets().get(
+        spreadsheetId=SPREADSHEET_ID, fields="sheets.properties"
+    ).execute()
+    for sheet in meta.get("sheets", []):
+        if sheet["properties"]["title"] == SHEET_NAME:
+            return sheet["properties"]["sheetId"]
+    raise RuntimeError(f"Sheet '{SHEET_NAME}' not found")
+
+
+def clear_data_row_formatting(service, logger: logging.Logger):
+    """Reset background color and text color on all data rows (row 3+)."""
+    sheet_id = _get_sheet_id(service)
+    num_cols = len(ALL_COLUMNS)
+    service.spreadsheets().batchUpdate(
+        spreadsheetId=SPREADSHEET_ID,
+        body={"requests": [{
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": 2,  # row 3 (0-indexed)
+                    "startColumnIndex": 0,
+                    "endColumnIndex": num_cols,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "backgroundColor": {"red": 1, "green": 1, "blue": 1},
+                        "textFormat": {
+                            "foregroundColor": {"red": 0, "green": 0, "blue": 0},
+                            "bold": False,
+                        },
+                    }
+                },
+                "fields": "userEnteredFormat.backgroundColor,userEnteredFormat.textFormat",
+            }
+        }]},
+    ).execute()
+    logger.info("Reset formatting on data rows (row 3+)")
 
 
 def ensure_sheet_columns(service, needed: int, logger):
@@ -436,6 +456,9 @@ def write_ai_analysis_sheet(service, rows: list[dict], logger: logging.Logger):
     ).execute()
 
     logger.info("Wrote %d rows (incl. 2 header rows) to %s", len(sheet_data), range_str)
+
+    # Ensure data rows have no background color (only header rows should be colored)
+    clear_data_row_formatting(service, logger)
 
 
 # ---------------------------------------------------------------------------
@@ -831,17 +854,17 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
     else:
         result["rev_growth_qoq"] = None
 
-    # ── Rev CAGR 3Y % ────────────────────────────────────────────────
+    # ── Rev CAGR % ─────────────────────────────────────────────────
     if len(yearly) >= 4:
         recent_rev = safe_float(yearly[0][1].get("totalRevenue"))
         base_rev = safe_float(yearly[3][1].get("totalRevenue"))
         if recent_rev and base_rev and base_rev > 0 and recent_rev > 0:
             cagr = ((recent_rev / base_rev) ** (1 / 3) - 1) * 100
-            result["rev_cagr_3y"] = round(cagr, 1)
+            result["rev_cagr"] = round(cagr, 1)
         else:
-            result["rev_cagr_3y"] = None
+            result["rev_cagr"] = None
     else:
-        result["rev_cagr_3y"] = None
+        result["rev_cagr"] = None
 
     # ── Rev Consistency Score (0–10) ──────────────────────────────────
     # Always scored out of 10 (need 11 quarters). Show as "X/10".
@@ -852,7 +875,7 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
             p = safe_float(quarterly[i + 1][1].get("totalRevenue"))
             if c is not None and p is not None and c > p:
                 growth_count += 1
-        result["rev_consistency"] = f"{growth_count}/10"
+        result["rev_consistency_score"] = f"{growth_count}/10"
     elif len(quarterly) >= 2:
         # Fewer than 11 quarters — normalize to /10 scale
         n = len(quarterly) - 1
@@ -863,12 +886,12 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
             if c is not None and p is not None and c > p:
                 growth_count += 1
         scaled = round(growth_count / n * 10)
-        result["rev_consistency"] = f"{scaled}/10"
+        result["rev_consistency_score"] = f"{scaled}/10"
     else:
-        result["rev_consistency"] = None
+        result["rev_consistency_score"] = None
 
     # ── Gross Margin TTM % ────────────────────────────────────────────
-    gross_margin_ttm = None
+    gross_margin_val = None
     if len(quarterly) >= 4:
         gp_sum = 0
         rev_sum = 0
@@ -883,7 +906,7 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
             gp_sum += gp or 0
             rev_sum += rev or 0
         if rev_sum > 0 and gp_sum != 0:
-            gross_margin_ttm = (gp_sum / rev_sum) * 100
+            gross_margin_val = (gp_sum / rev_sum) * 100
     elif quarterly:
         gp = safe_float(quarterly[0][1].get("grossProfit"))
         rev = safe_float(quarterly[0][1].get("totalRevenue"))
@@ -892,13 +915,13 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
             if cor is not None:
                 gp = rev - cor
         if gp is not None and rev and rev > 0:
-            gross_margin_ttm = (gp / rev) * 100
-    result["gross_margin_ttm"] = round(gross_margin_ttm, 1) if gross_margin_ttm is not None else None
+            gross_margin_val = (gp / rev) * 100
+    result["gross_margin"] = round(gross_margin_val, 1) if gross_margin_val is not None else None
 
     # ── GM Trend (Qtly) ──────────────────────────────────────────────
     # Shows per-quarter gross margins (newest→oldest) plus the overall
     # pp change with a directional arrow, e.g. "52%→49%→47%→45% ↑7pp"
-    gross_margin_trend = None
+    gm_trend_val = None
     if len(quarterly) >= 4:
         margins = []
         for entry in quarterly[:4]:
@@ -912,35 +935,35 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
             if gp is not None and rev and rev > 0:
                 margins.append((gp / rev) * 100)
         if len(margins) >= 2:
-            gross_margin_trend = margins[0] - margins[-1]  # pp change newest vs oldest
-            arrow = "↑" if gross_margin_trend > 1 else ("↓" if gross_margin_trend < -1 else "→")
+            gm_trend_val = margins[0] - margins[-1]  # pp change newest vs oldest
+            arrow = "↑" if gm_trend_val > 1 else ("↓" if gm_trend_val < -1 else "→")
             margin_strs = [f"{m:.0f}%" for m in margins]
-            pp = f"{abs(gross_margin_trend):.0f}pp"
-            result["gross_margin_trend"] = f"{'→'.join(margin_strs)} {arrow}{pp}"
+            pp = f"{abs(gm_trend_val):.0f}pp"
+            result["gm_trend"] = f"{'→'.join(margin_strs)} {arrow}{pp}"
         else:
-            result["gross_margin_trend"] = None
+            result["gm_trend"] = None
     else:
-        result["gross_margin_trend"] = None
+        result["gm_trend"] = None
 
     # ── Operating Margin TTM % ────────────────────────────────────────
     if len(quarterly) >= 4:
         oi_sum = sum(safe_float(e[1].get("operatingIncome")) or 0 for e in quarterly[:4])
         rev_sum = sum(safe_float(e[1].get("totalRevenue")) or 0 for e in quarterly[:4])
         if rev_sum > 0:
-            result["operating_margin_ttm"] = round((oi_sum / rev_sum) * 100, 1)
+            result["operating_margin"] = round((oi_sum / rev_sum) * 100, 1)
         else:
-            result["operating_margin_ttm"] = None
+            result["operating_margin"] = None
     else:
-        result["operating_margin_ttm"] = None
+        result["operating_margin"] = None
 
     # ── Net Margin TTM % ──────────────────────────────────────────────
-    net_margin_ttm = None
+    net_margin_val = None
     if len(quarterly) >= 4:
         ni_sum = sum(safe_float(e[1].get("netIncome")) or 0 for e in quarterly[:4])
         rev_sum = sum(safe_float(e[1].get("totalRevenue")) or 0 for e in quarterly[:4])
         if rev_sum > 0:
-            net_margin_ttm = (ni_sum / rev_sum) * 100
-    result["net_margin_ttm"] = round(net_margin_ttm, 1) if net_margin_ttm is not None else None
+            net_margin_val = (ni_sum / rev_sum) * 100
+    result["net_margin"] = round(net_margin_val, 1) if net_margin_val is not None else None
 
     # ── Net Margin YoY Δ ──────────────────────────────────────────────
     if len(quarterly) >= 5:
@@ -953,25 +976,25 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
         curr_nm = _nm(quarterly[0][1])
         yoy_nm = _nm(quarterly[4][1])
         if curr_nm is not None and yoy_nm is not None:
-            result["net_margin_yoy_delta"] = round(curr_nm - yoy_nm, 1)
+            result["net_margin_yoy"] = round(curr_nm - yoy_nm, 1)
         else:
-            result["net_margin_yoy_delta"] = None
+            result["net_margin_yoy"] = None
     else:
-        result["net_margin_yoy_delta"] = None
+        result["net_margin_yoy"] = None
 
     # ── FCF Margin TTM % ──────────────────────────────────────────────
-    fcf_margin_ttm = None
+    fcf_margin_val = None
     if len(cf_quarterly) >= 4 and len(quarterly) >= 4:
         fcf_sum = sum(safe_float(e[1].get("freeCashFlow")) or 0 for e in cf_quarterly[:4])
         rev_sum = sum(safe_float(e[1].get("totalRevenue")) or 0 for e in quarterly[:4])
         if rev_sum > 0:
-            fcf_margin_ttm = (fcf_sum / rev_sum) * 100
+            fcf_margin_val = (fcf_sum / rev_sum) * 100
     elif cf_quarterly and quarterly:
         fcf = safe_float(cf_quarterly[0][1].get("freeCashFlow"))
         rev = safe_float(quarterly[0][1].get("totalRevenue"))
         if fcf is not None and rev and rev > 0:
-            fcf_margin_ttm = (fcf / rev) * 100
-    result["fcf_margin_ttm"] = round(fcf_margin_ttm, 1) if fcf_margin_ttm is not None else None
+            fcf_margin_val = (fcf / rev) * 100
+    result["fcf_margin"] = round(fcf_margin_val, 1) if fcf_margin_val is not None else None
 
     # ── Opex % of Revenue ─────────────────────────────────────────────
     if quarterly:
@@ -1002,8 +1025,8 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
 
     # ── Rule of 40 ────────────────────────────────────────────────────
     r40 = None
-    if rev_growth_ttm is not None and net_margin_ttm is not None:
-        r40 = rev_growth_ttm + net_margin_ttm
+    if rev_growth_ttm is not None and net_margin_val is not None:
+        r40 = rev_growth_ttm + net_margin_val
     result["rule_of_40"] = round(r40, 1) if r40 is not None else None
 
     # ── Qtrs to Profitability ─────────────────────────────────────────
@@ -1017,7 +1040,7 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
         ttm_rev = sum(safe_float(e[1].get("totalRevenue")) or 0 for e in quarterly[:4])
 
         if ttm_rev > 0 and ttm_ni >= 0:
-            result["qtrs_to_profitability"] = "Profitable"
+            result["qrtrs_to_profitability"] = "Profitable"
             qtrs_to_prof = 0
         elif ttm_rev > 0:
             # Unprofitable — estimate quarters to breakeven
@@ -1037,43 +1060,43 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
                     # Project from current TTM margin to zero
                     qtrs_to_prof = max(1, int(-ttm_margin / avg_improvement) + 1)
                     if qtrs_to_prof > 20:
-                        result["qtrs_to_profitability"] = ">20"
+                        result["qrtrs_to_profitability"] = ">20"
                     else:
-                        result["qtrs_to_profitability"] = str(qtrs_to_prof)
+                        result["qrtrs_to_profitability"] = str(qtrs_to_prof)
                 else:
-                    result["qtrs_to_profitability"] = "Not converging"
+                    result["qrtrs_to_profitability"] = "Not converging"
             else:
-                result["qtrs_to_profitability"] = None
+                result["qrtrs_to_profitability"] = None
         else:
-            result["qtrs_to_profitability"] = None
+            result["qrtrs_to_profitability"] = None
     elif quarterly:
         # Fewer than 4 quarters — check latest only
         latest_ni = safe_float(quarterly[0][1].get("netIncome"))
         if latest_ni is not None and latest_ni >= 0:
-            result["qtrs_to_profitability"] = "Profitable"
+            result["qrtrs_to_profitability"] = "Profitable"
             qtrs_to_prof = 0
         else:
-            result["qtrs_to_profitability"] = None
+            result["qrtrs_to_profitability"] = None
     else:
-        result["qtrs_to_profitability"] = None
+        result["qrtrs_to_profitability"] = None
 
     # ── EPS Quarterly ─────────────────────────────────────────────────
     if eps_entries:
         eps_val = safe_float(eps_entries[0][1].get("epsActual"))
-        result["eps_quarterly"] = eps_val
+        result["eps_only"] = eps_val
     else:
-        result["eps_quarterly"] = None
+        result["eps_only"] = None
 
     # ── EPS YoY % ─────────────────────────────────────────────────────
     if len(eps_entries) >= 5:
         curr_eps = safe_float(eps_entries[0][1].get("epsActual"))
         yoy_eps = safe_float(eps_entries[4][1].get("epsActual"))
         if curr_eps is not None and yoy_eps is not None and yoy_eps != 0:
-            result["eps_yoy_pct"] = round(((curr_eps - yoy_eps) / abs(yoy_eps)) * 100, 1)
+            result["eps_yoy"] = round(((curr_eps - yoy_eps) / abs(yoy_eps)) * 100, 1)
         else:
-            result["eps_yoy_pct"] = None
+            result["eps_yoy"] = None
     else:
-        result["eps_yoy_pct"] = None
+        result["eps_yoy"] = None
 
     # ── R40 Score ─────────────────────────────────────────────────────
     # Format: 💎💎 R40: 54 | FCF +27% | ⏳ ~12 qtrs GAAP
@@ -1095,11 +1118,11 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
             gem_str = ""                                  # no gems
 
         # FCF segment
-        fcf = result.get("fcf_margin_ttm")
+        fcf = result.get("fcf_margin")
         fcf_str = f"FCF {'+' if fcf >= 0 else ''}{fcf:.0f}%" if fcf is not None else None
 
         # Profitability status segment
-        nm = result.get("net_margin_ttm")
+        nm = result.get("net_margin")
         qtrs = qtrs_to_prof
         if nm is not None and nm >= 0:
             profit_str = "\u2705"                          # ✅
@@ -1119,7 +1142,7 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
     #
     # Rules:
     # - All % values show explicit + or - sign
-    # - GM trend arrow: ↑ if gross_margin_trend > 1pp, ↓ if < -1pp, → otherwise
+    # - GM trend arrow: ↑ if gm_trend_val > 1pp, ↓ if < -1pp, → otherwise
     # - ⚡ appears between Net and FCF only when FCF exceeds Net margin by >15pp
     #   (signals: "accounting loss but cash-generative")
     # - Profitability segment reuses same logic as r40_score above
@@ -1131,14 +1154,14 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
         snapshot_parts.append(f"Rev {sign}{rev_growth_ttm:.0f}% YoY")
 
     # 3Y CAGR
-    cagr = result.get("rev_cagr_3y")
+    cagr = result.get("rev_cagr")
     if cagr is not None:
         sign = "+" if cagr >= 0 else ""
         snapshot_parts.append(f"3Y CAGR {sign}{cagr:.0f}%")
 
     # GM + trend arrow
-    gm = result.get("gross_margin_ttm")
-    gm_trend = gross_margin_trend  # raw pp change
+    gm = result.get("gross_margin")
+    gm_trend = gm_trend_val  # raw pp change
     if gm is not None:
         if gm_trend is not None:
             if gm_trend > 1:
@@ -1152,8 +1175,8 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
         snapshot_parts.append(f"GM {gm:.0f}%{arrow}")
 
     # Net margin + optional ⚡ + FCF margin
-    nm = result.get("net_margin_ttm")
-    fcf = result.get("fcf_margin_ttm")
+    nm = result.get("net_margin")
+    fcf = result.get("fcf_margin")
     if nm is not None and fcf is not None:
         nm_sign = "+" if nm >= 0 else ""
         fcf_sign = "+" if fcf >= 0 else ""
@@ -1253,11 +1276,11 @@ def main():
     # Build list of tickers to process
     ticker_col = key_col.get("ticker", 0)
     exchange_col = key_col.get("exchange")
-    company_col = key_col.get("company", 1)
-    data_date_col = key_col.get("data")
+    company_col = key_col.get("company_name", 2)
+    fund_date_col = key_col.get("data")
 
     # Determine the max column index we need to pad to
-    pad_cols = [ticker_col, company_col, data_date_col or 0]
+    pad_cols = [ticker_col, company_col, fund_date_col or 0]
     if exchange_col is not None:
         pad_cols.append(exchange_col)
 
@@ -1280,8 +1303,8 @@ def main():
             exchange = "US"
 
         # Skip if data is recent unless --force
-        if not args.force and data_date_col is not None:
-            fund_date_str = padded[data_date_col].strip() if data_date_col < len(padded) else ""
+        if not args.force and fund_date_col is not None:
+            fund_date_str = padded[fund_date_col].strip() if fund_date_col < len(padded) else ""
             if fund_date_str:
                 try:
                     last_date = dateparser.parse(fund_date_str).date()
@@ -1380,6 +1403,8 @@ def main():
         logger.info("=== DRY RUN complete. %d tickers processed in %.1fs ===",
                      len(tickers_to_process), elapsed)
     else:
+        # Clear any background colors that may have leaked to data rows
+        clear_data_row_formatting(service, logger)
         logger.info(
             "=== Updated %d tickers. Skipped %d due to errors. (%.1fs) ===",
             total_written, errors, elapsed,

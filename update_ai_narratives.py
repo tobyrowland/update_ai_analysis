@@ -38,44 +38,27 @@ MAX_RETRIES = 2  # total attempts per ticker
 # Header names used to locate columns dynamically from row 2.
 # The script reads actual sheet headers rather than relying on hardcoded positions.
 HEADER_TICKER = "ticker"
-HEADER_COMPANY = "company"
+HEADER_COMPANY = "company_name"
 HEADER_SHORT_OUTLOOK = "short_outlook"
-HEADER_OUTLOOK = "outlook"
-HEADER_RISKS = "risks"
-HEADER_ANALYZED = "ai_analysis_date"
+HEADER_OUTLOOK = "full_outlook"
+HEADER_RISKS = "key_risks"
+HEADER_ANALYZED = "ai"
 
 # Map legacy/alternative sheet headers → current lowercase underscore keys.
 HEADER_ALIASES = {
     "Ticker":               "ticker",
-    "Company":              "company",
-    "Company Name":         "company",
+    "Company":              "company_name",
+    "Company Name":         "company_name",
     "Short Outlook":        "short_outlook",
-    "Outlook":              "outlook",
-    "Full Outlook":         "outlook",
-    "Key Risks":            "risks",
-    "AI":                   "ai_analysis_date",
-    "Analyzed":             "ai_analysis_date",
-    "AI Analyzed":          "ai_analysis_date",
+    "Outlook":              "full_outlook",
+    "Full Outlook":         "full_outlook",
+    "Key Risks":            "key_risks",
+    "AI":                   "ai",
+    "Analyzed":             "ai",
+    "AI Analyzed":          "ai",
     "Data":                 "data",
     "Data As Of":           "data",
     "Fundamentals Date":    "data",
-    "fundamentals_date":    "data",
-    # Current sheet headers (lowercase with %, &, special chars)
-    "rev_growth_ttm%":          "rev_growth_ttm",
-    "rev_growth_qoq%":          "rev_growth_qoq",
-    "rev_cagr%":                "rev_cagr_3y",
-    "rev_consistency_score":    "rev_consistency",
-    "gross_margin%":            "gross_margin_ttm",
-    "gm_trend%":                "gross_margin_trend",
-    "operating_margin%":        "operating_margin_ttm",
-    "net_margin%":              "net_margin_ttm",
-    "net_margin_yoy%":          "net_margin_yoy_delta",
-    "fcf_margin%":              "fcf_margin_ttm",
-    "opex_%_of_revenue":        "opex_pct_revenue",
-    "s&m+r&d_%_of_revenue":     "sm_rd_pct_revenue",
-    "qrtrs_to_profitability":   "qtrs_to_profitability",
-    "eps_only":                 "eps_quarterly",
-    "eps_yoy%":                 "eps_yoy_pct",
 }
 
 NULL_VALUE = "—"  # must match eodhd_updater.py
@@ -87,22 +70,22 @@ FINANCIAL_HEADERS = [
     "fundamentals_snapshot",
     "annual_revenue_5y",
     "quarterly_revenue",
-    "rev_growth_ttm",
-    "rev_growth_qoq",
-    "rev_cagr_3y",
-    "rev_consistency",
-    "gross_margin_ttm",
-    "gross_margin_trend",
-    "operating_margin_ttm",
-    "net_margin_ttm",
-    "net_margin_yoy_delta",
-    "fcf_margin_ttm",
-    "opex_pct_revenue",
-    "sm_rd_pct_revenue",
+    "rev_growth_ttm%",
+    "rev_growth_qoq%",
+    "rev_cagr%",
+    "rev_consistency_score",
+    "gross_margin%",
+    "gm_trend%",
+    "operating_margin%",
+    "net_margin%",
+    "net_margin_yoy%",
+    "fcf_margin%",
+    "opex_%_of_revenue",
+    "s&m+r&d_%_of_revenue",
     "rule_of_40",
-    "qtrs_to_profitability",
-    "eps_quarterly",
-    "eps_yoy_pct",
+    "qrtrs_to_profitability",
+    "eps_only",
+    "eps_yoy%",
 ]
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -166,7 +149,7 @@ def read_all_rows(service) -> list[list[str]]:
         .values()
         .get(
             spreadsheetId=SPREADSHEET_ID,
-            range=f"'{SHEET_NAME}'!A1:AB",
+            range=f"'{SHEET_NAME}'!A1:AD",
             valueRenderOption="FORMATTED_VALUE",
         )
         .execute()
