@@ -275,8 +275,8 @@ def _get_sheet_id(service) -> int:
     raise RuntimeError(f"Sheet '{SHEET_NAME}' not found")
 
 
-def clear_data_row_backgrounds(service, logger: logging.Logger):
-    """Reset background color to default on all data rows (row 3+)."""
+def clear_data_row_formatting(service, logger: logging.Logger):
+    """Reset background color and text color on all data rows (row 3+)."""
     sheet_id = _get_sheet_id(service)
     num_cols = len(ALL_COLUMNS)
     service.spreadsheets().batchUpdate(
@@ -292,13 +292,16 @@ def clear_data_row_backgrounds(service, logger: logging.Logger):
                 "cell": {
                     "userEnteredFormat": {
                         "backgroundColor": {"red": 1, "green": 1, "blue": 1},
+                        "textFormat": {
+                            "foregroundColor": {"red": 0, "green": 0, "blue": 0},
+                        },
                     }
                 },
-                "fields": "userEnteredFormat.backgroundColor",
+                "fields": "userEnteredFormat.backgroundColor,userEnteredFormat.textFormat.foregroundColor",
             }
         }]},
     ).execute()
-    logger.info("Cleared background colors on data rows (row 3+)")
+    logger.info("Reset formatting on data rows (row 3+)")
 
 
 def ensure_sheet_columns(service, needed: int, logger):
@@ -434,7 +437,7 @@ def write_ai_analysis_sheet(service, rows: list[dict], logger: logging.Logger):
     logger.info("Wrote %d rows (incl. 2 header rows) to %s", len(sheet_data), range_str)
 
     # Ensure data rows have no background color (only header rows should be colored)
-    clear_data_row_backgrounds(service, logger)
+    clear_data_row_formatting(service, logger)
 
 
 # ---------------------------------------------------------------------------
@@ -1104,7 +1107,7 @@ def main():
                      len(tickers_to_process), elapsed)
     else:
         # Clear any background colors that may have leaked to data rows
-        clear_data_row_backgrounds(service, logger)
+        clear_data_row_formatting(service, logger)
         logger.info(
             "=== Updated %d tickers. Skipped %d due to errors. (%.1fs) ===",
             total_written, errors, elapsed,

@@ -254,8 +254,8 @@ def main():
     logger.info("Appended %d new companies to '%s'", len(append_rows), TARGET_SHEET)
 
     # Clear background colors on data rows (new rows may inherit header colors)
-    from eodhd_updater import clear_data_row_backgrounds
-    clear_data_row_backgrounds(service, logger)
+    from eodhd_updater import clear_data_row_formatting
+    clear_data_row_formatting(service, logger)
 
     logger.info("=== Sync complete ===")
 
