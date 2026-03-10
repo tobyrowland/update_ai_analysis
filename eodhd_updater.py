@@ -73,6 +73,8 @@ GROUPS = [
     ]),
 ]
 
+# Maps internal column keys to the header text shown in the sheet.
+# The sheet now uses lowercase underscore names as headers.
 DISPLAY_NAMES = {
     "ticker":               "ticker",
     "exchange":             "exchange",
@@ -105,25 +107,43 @@ DISPLAY_NAMES = {
     "data":                 "data",
 }
 
-# The actual sheet may use different header names than DISPLAY_NAMES
-# (e.g. created by update_ai_narratives.py or edited manually).
-# Map known alternative sheet headers → canonical DISPLAY_NAMES value.
+# Map legacy/alternative sheet headers → current header names.
 HEADER_ALIASES = {
     "Company":              "company_name",
     "Company Name":         "company_name",
     "Ticker":               "ticker",
+    "Exchange":             "exchange",
     "Description":          "description",
+    "Annual Revenue (5Y)":  "annual_revenue_5y",
+    "Quarterly Revenue":    "quarterly_revenue",
+    "Rev Growth TTM %":     "rev_growth_ttm",
+    "Rev Growth QoQ %":     "rev_growth_qoq",
+    "Rev CAGR 3Y %":       "rev_cagr",
+    "Rev Consistency Score": "rev_consistency_score",
+    "Gross Margin %":       "gross_margin",
+    "GM Trend (Qtly)":      "gm_trend",
+    "Operating Margin %":   "operating_margin",
+    "Net Margin %":         "net_margin",
+    "Net Margin YoY Δ":     "net_margin_yoy",
+    "FCF Margin %":         "fcf_margin",
+    "Opex % of Revenue":    "opex_pct_revenue",
+    "S&M+R&D % of Revenue": "sm_rd_pct_revenue",
+    "Rule of 40":           "rule_of_40",
+    "Qtrs to Profitability": "qrtrs_to_profitability",
+    "EPS Qtrly":            "eps_only",
+    "EPS YoY %":            "eps_yoy",
     "R40 Score":            "r40_score",
     "Fundamentals Snapshot": "fundamentals_snapshot",
     "Short Outlook":        "short_outlook",
     "Outlook":              "full_outlook",
+    "Full Outlook":         "full_outlook",
     "Key Risks":            "key_risks",
     "AI":                   "ai",
+    "Analyzed":             "ai",
+    "AI Analyzed":          "ai",
     "Data":                 "data",
     "Data As Of":           "data",
     "Fundamentals Date":    "data",
-    "Analyzed":             "ai",
-    "AI Analyzed":          "ai",
 }
 
 COL_WIDTHS = {
@@ -445,26 +465,285 @@ def write_ai_analysis_sheet(service, rows: list[dict], logger: logging.Logger):
 # EODHD API
 # ---------------------------------------------------------------------------
 
+# Map common exchange names (as they appear in the spreadsheet) to the
+# suffix codes that EODHD expects.  Keys are compared case-insensitively.
+EXCHANGE_TO_EODHD = {
+    # United States
+    "NASDAQ":   "US",
+    "NYSE":     "US",
+    "NYSEARCA": "US",
+    "NYSEMKT":  "US",
+    "AMEX":     "US",
+    "OTC":      "US",
+    "BATS":     "US",
+    "US":       "US",
+    # United Kingdom
+    "LSE":      "LSE",
+    "LON":      "LSE",
+    "LONDON":   "LSE",
+    # India
+    "NSE":      "NSE",
+    "BSE":      "BSE",
+    "NSEI":     "NSE",
+    # Japan
+    "TSE":      "TSE",
+    "TYO":      "TSE",
+    "JPX":      "TSE",
+    # Germany
+    "XETRA":    "XETRA",
+    "FRA":      "F",
+    "ETR":      "XETRA",
+    "GETTEX":   "MU",
+    "MU":       "MU",
+    "STU":      "STU",
+    "BE":       "BE",
+    "DU":       "DU",
+    "HM":       "HM",
+    "HA":       "HA",
+    # Other Europe
+    "EPA":      "PA",
+    "PAR":      "PA",
+    "AMS":      "AS",
+    "SWX":      "SW",
+    "BIT":      "MI",
+    "BME":      "MC",
+    # Asia-Pacific
+    "HKG":      "HK",
+    "HKEX":     "HK",
+    "KRX":      "KO",
+    "KOSDAQ":   "KO",
+    "TWSE":     "TW",
+    "TPE":      "TW",
+    "SGX":      "SG",
+    "ASX":      "AU",
+    "NZX":      "NZ",
+    # Americas
+    "TSX":      "TO",
+    "TSXV":     "V",
+    "SAO":      "SA",
+    "BVMF":     "SA",
+    # Africa / Middle East
+    "JSE":      "JSE",
+    "TADAWUL":  "SR",
+    "SAU":      "SR",
+    "NSENG":    "NSENG",   # Nigerian Stock Exchange (via EODHD code)
+    "NGS":      "NSENG",
+    "NGSE":     "NSENG",
+}
 
-def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger) -> dict | None:
-    """Fetch full fundamental data from EODHD for a US ticker."""
-    symbol = f"{ticker}.US"
+
+def _resolve_exchange(exchange: str) -> str:
+    """Convert a spreadsheet exchange name to the EODHD suffix code."""
+    key = exchange.strip().upper()
+    return EXCHANGE_TO_EODHD.get(key, key)
+
+
+# Fallback exchange chains — when the primary exchange returns 404,
+# try these alternatives in order.  The idea is to cover cases where
+# the sheet lists a regional exchange but EODHD only has the ticker on
+# a major exchange (or vice-versa).
+EXCHANGE_FALLBACKS = {
+    # German regional exchanges → try XETRA, Frankfurt, then US
+    "MU":    ["XETRA", "F", "US"],
+    "STU":   ["XETRA", "F", "US"],
+    "BE":    ["XETRA", "F", "US"],
+    "DU":    ["XETRA", "F", "US"],
+    "HM":    ["XETRA", "F", "US"],
+    "HA":    ["XETRA", "F", "US"],
+    "XETRA": ["F", "US"],
+    "F":     ["XETRA", "US"],
+    # India — BSE symbols are often numeric; try NSE which uses names
+    "BSE":   ["NSE"],
+    "NSE":   ["BSE"],
+    # Japan
+    "TSE":   ["US"],
+    # UK
+    "LSE":   ["US"],
+    # Canada
+    "TO":    ["V", "US"],
+    "V":     ["TO", "US"],
+    # Hong Kong
+    "HK":    ["US"],
+    # Korea
+    "KO":    ["US"],
+    # Australia
+    "AU":    ["US"],
+    # Nigeria
+    "NSENG": ["LSE", "US"],
+}
+
+# Always append US as a last-ditch fallback (many international companies
+# have US-listed ADRs or cross-listings that carry fundamentals data).
+for _exc, _chain in EXCHANGE_FALLBACKS.items():
+    if "US" not in _chain:
+        _chain.append("US")
+
+
+def _has_financials(data: dict) -> bool:
+    """Check whether an EODHD response contains usable financial data.
+
+    Some tickers return 200 OK but have empty Financials / Earnings
+    sections, which produces all-None metrics.  We consider the data
+    usable if there is at least one yearly or quarterly income statement
+    entry, or at least one earnings history entry.
+    """
+    financials = data.get("Financials") or {}
+    income = financials.get("Income_Statement") or {}
+    yearly = income.get("yearly") or {}
+    quarterly = income.get("quarterly") or {}
+    earnings = (data.get("Earnings") or {}).get("History") or {}
+    return bool(yearly or quarterly or earnings)
+
+
+def _try_fetch_one(ticker: str, exchange: str, api_key: str,
+                   timeout: int = 30) -> tuple[dict | None, int]:
+    """Attempt a single EODHD fundamentals fetch.
+
+    Returns (json_data, http_status).  json_data is None on any failure
+    or if the response lacks usable financial data.
+    http_status is 0 for non-HTTP errors, -1 if fetched OK but empty.
+    """
+    symbol = f"{ticker}.{exchange}"
     url = f"{EODHD_BASE_URL}/{symbol}"
     params = {"api_token": api_key, "fmt": "json"}
-
     try:
-        resp = requests.get(url, params=params, timeout=30)
+        resp = requests.get(url, params=params, timeout=timeout)
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        if not _has_financials(data):
+            return None, -1  # 200 OK but no usable data
+        return data, resp.status_code
     except requests.exceptions.HTTPError as exc:
-        if exc.response is not None and exc.response.status_code == 404:
-            logger.warning("Ticker %s not found on EODHD (404)", symbol)
-        else:
-            logger.warning("EODHD HTTP error for %s: %s", symbol, exc)
-        return None
+        status = exc.response.status_code if exc.response is not None else 0
+        return None, status
+    except Exception:
+        return None, 0
+
+
+def _search_eodhd(query: str, api_key: str, logger: logging.Logger,
+                  original_ticker: str = "") -> tuple[str, str] | None:
+    """Use the EODHD search API to find the best (ticker, exchange) for a query.
+
+    *query* can be a ticker code or a company name.
+    Returns (ticker_code, exchange_code) or None.
+    """
+    url = "https://eodhd.com/api/search/" + query
+    params = {"api_token": api_key, "fmt": "json", "limit": 10}
+    try:
+        resp = requests.get(url, params=params, timeout=15)
+        resp.raise_for_status()
+        results = resp.json()
+        if not results:
+            return None
+        # Prefer results whose Code matches the original ticker exactly
+        check_code = original_ticker.upper() or query.upper()
+        for r in results:
+            if r.get("Code", "").upper() == check_code:
+                ex = r.get("Exchange", "")
+                if ex:
+                    logger.info("Search API exact match %s → %s.%s",
+                                query, r["Code"], ex)
+                    return (r["Code"], ex)
+        # Otherwise take the first result that has fundamentals-friendly
+        # exchange (prefer US, then major exchanges)
+        preferred = ["US", "LSE", "NSE", "XETRA", "TO", "AS", "PA"]
+        for pref in preferred:
+            for r in results:
+                if r.get("Exchange", "") == pref:
+                    logger.info("Search API preferred match %s → %s.%s",
+                                query, r["Code"], r["Exchange"])
+                    return (r["Code"], r["Exchange"])
+        # Fall back to first result
+        r = results[0]
+        ex = r.get("Exchange", "")
+        code = r.get("Code", "")
+        if ex and code:
+            logger.info("Search API best guess for %s → %s.%s", query, code, ex)
+            return (code, ex)
     except Exception as exc:
-        logger.warning("EODHD request failed for %s: %s", symbol, exc)
+        logger.debug("EODHD search failed for '%s': %s", query, exc)
+    return None
+
+
+def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger,
+                            exchange: str = "US",
+                            company: str = "") -> dict | None:
+    """Fetch full fundamental data from EODHD for a ticker.
+
+    Tries the primary exchange first, then walks through
+    EXCHANGE_FALLBACKS, and finally falls back to the EODHD search API
+    (searching by both ticker code and company name).
+    """
+    primary = _resolve_exchange(exchange)
+    logger.info("Fetching fundamentals for %s (exchange: %s → %s)", ticker, exchange, primary)
+
+    # Retryable status codes: 404 (not found), 0 (network error),
+    # -1 (200 OK but no usable financial data)
+    RETRYABLE = (404, 0, -1)
+    tried = {primary}
+
+    # 1. Try primary exchange
+    data, status = _try_fetch_one(ticker, primary, api_key)
+    if data is not None:
+        return data
+    if status == -1:
+        logger.info("  %s.%s returned data but no financials — trying fallbacks", ticker, primary)
+    if status not in RETRYABLE:
+        logger.warning("EODHD HTTP %d for %s.%s, not retrying", status, ticker, primary)
         return None
+
+    # 2. Try fallback exchanges (same ticker code, different exchange)
+    fallbacks = EXCHANGE_FALLBACKS.get(primary, [])
+    for alt in fallbacks:
+        if alt in tried:
+            continue
+        tried.add(alt)
+        logger.info("  Trying fallback %s.%s", ticker, alt)
+        time.sleep(0.3)
+        data, status = _try_fetch_one(ticker, alt, api_key)
+        if data is not None:
+            logger.info("  Found %s on %s (fallback from %s)", ticker, alt, primary)
+            return data
+        if status not in RETRYABLE:
+            logger.warning("EODHD HTTP %d for %s.%s, stopping fallback chain",
+                           status, ticker, alt)
+            return None
+
+    # 3. Search API — try by ticker code first
+    logger.info("  All fallbacks exhausted for %s, trying search API", ticker)
+    result = _search_eodhd(ticker, api_key, logger, original_ticker=ticker)
+    if result:
+        search_ticker, search_exchange = result
+        if search_exchange not in tried or search_ticker.upper() != ticker.upper():
+            time.sleep(0.3)
+            data, status = _try_fetch_one(search_ticker, search_exchange, api_key)
+            if data is not None:
+                logger.info("  Found %s.%s via search (ticker query)",
+                            search_ticker, search_exchange)
+                return data
+            tried.add(search_exchange)
+
+    # 4. Search API — try by company name (handles cases like
+    #    TSE code 7974 → US ADR "NTDOY" for Nintendo)
+    if company:
+        # Use first few words to avoid overly specific queries
+        search_name = " ".join(company.split()[:3])
+        logger.info("  Searching by company name: '%s'", search_name)
+        time.sleep(0.3)
+        result = _search_eodhd(search_name, api_key, logger, original_ticker=ticker)
+        if result:
+            search_ticker, search_exchange = result
+            if search_exchange not in tried or search_ticker.upper() != ticker.upper():
+                time.sleep(0.3)
+                data, status = _try_fetch_one(search_ticker, search_exchange, api_key)
+                if data is not None:
+                    logger.info("  Found %s.%s via company name search '%s'",
+                                search_ticker, search_exchange, search_name)
+                    return data
+
+    logger.warning("Could not find fundamentals for %s on any exchange "
+                   "(tried %s + search)", ticker, tried)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -510,12 +789,14 @@ def _sorted_entries(section: dict) -> list[tuple[str, dict]]:
 # ---------------------------------------------------------------------------
 
 
-def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger) -> dict | None:
+def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
+                     exchange: str = "US", company: str = "") -> dict | None:
     """Fetch EODHD fundamentals and compute all financial metrics.
 
     Returns a dict keyed by EODHD_COLUMNS column keys, or None on failure.
     """
-    raw = _fetch_fundamentals_raw(ticker, api_key, logger)
+    raw = _fetch_fundamentals_raw(ticker, api_key, logger, exchange=exchange,
+                                  company=company)
     if raw is None:
         return None
 
@@ -966,18 +1247,21 @@ def main():
     logger.info("Read %d rows from sheet (including headers)", len(all_rows))
 
     # ── Read sheet headers and build column mapping ─────────────────
-    # The sheet layout is managed manually. The script reads row 2
-    # headers and maps them to column keys — it never rewrites headers.
-    display_to_key = {}
-    for key, display in DISPLAY_NAMES.items():
-        display_to_key[display] = key
+    # The sheet now uses lowercase underscore column keys as headers.
+    # We also support legacy display-name headers via HEADER_ALIASES.
+    all_keys = set(DISPLAY_NAMES.keys())
 
     key_col = {}  # column_key → 0-based column index
     if len(all_rows) >= 2:
         for idx, header in enumerate(all_rows[1]):
             name = header.strip()
+            # Apply aliases first (maps legacy names → current keys)
             name = HEADER_ALIASES.get(name, name)
-            col_key = display_to_key.get(name)
+            # Check if the header matches a known column key directly
+            if name in all_keys:
+                col_key = name
+            else:
+                col_key = None
             if col_key and col_key not in key_col:
                 key_col[col_key] = idx
 
@@ -991,21 +1275,32 @@ def main():
 
     # Build list of tickers to process
     ticker_col = key_col.get("ticker", 0)
+    exchange_col = key_col.get("exchange")
     company_col = key_col.get("company_name", 2)
     fund_date_col = key_col.get("data")
+
+    # Determine the max column index we need to pad to
+    pad_cols = [ticker_col, company_col, fund_date_col or 0]
+    if exchange_col is not None:
+        pad_cols.append(exchange_col)
 
     tickers_to_process = []
     for i, row in enumerate(data_rows):
         row_number = i + 3  # 1-indexed sheet row
-        padded = row + [""] * (max(ticker_col, company_col, fund_date_col or 0) + 1 - len(row))
+        padded = row + [""] * (max(pad_cols) + 1 - len(row))
         ticker = padded[ticker_col].strip()
         company = padded[company_col].strip()
+        exchange = padded[exchange_col].strip() if exchange_col is not None else ""
 
         if not ticker:
             continue
 
         if args.ticker and ticker.upper() != args.ticker.upper():
             continue
+
+        # Default exchange to US if not specified
+        if not exchange:
+            exchange = "US"
 
         # Skip if data is recent unless --force
         if not args.force and fund_date_col is not None:
@@ -1019,7 +1314,7 @@ def main():
                 except (ValueError, TypeError):
                     pass
 
-        tickers_to_process.append((row_number, ticker, company, row))
+        tickers_to_process.append((row_number, ticker, company, exchange, row))
 
     if args.limit:
         tickers_to_process = tickers_to_process[:args.limit]
@@ -1035,15 +1330,16 @@ def main():
     total_written = 0
     errors = 0
 
-    for idx, (row_number, ticker, company, existing_row) in enumerate(tickers_to_process):
+    for idx, (row_number, ticker, company, exchange, existing_row) in enumerate(tickers_to_process):
         try:
-            eodhd_data = fetch_eodhd_data(ticker, eodhd_key, logger)
+            eodhd_data = fetch_eodhd_data(ticker, eodhd_key, logger,
+                                            exchange=exchange, company=company)
             if eodhd_data is None:
                 errors += 1
                 continue
 
             if args.dry_run:
-                logger.info("[DRY RUN] %s (%s):", ticker, company)
+                logger.info("[DRY RUN] %s.%s (%s):", ticker, exchange, company)
                 logger.info("  r40_score:             %s", eodhd_data.get("r40_score", ""))
                 logger.info("  fundamentals_snapshot: %s", eodhd_data.get("fundamentals_snapshot", ""))
                 for key in EODHD_COLUMNS:
