@@ -183,7 +183,7 @@ def main():
     # Headers in row 2 (index 1)
     target_headers = target_rows[1] if len(target_rows) >= 2 else target_rows[0]
     tgt_ticker_col = find_column(target_headers, "ticker")
-    tgt_company_col = find_column(target_headers, "company", "company name")
+    tgt_company_col = find_column(target_headers, "company_name", "company", "company name")
     tgt_exchange_col = find_column(target_headers, "exchange")
 
     if tgt_ticker_col is None:

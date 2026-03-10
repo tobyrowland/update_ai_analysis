@@ -37,46 +37,53 @@ MAX_RETRIES = 2  # total attempts per ticker
 
 # Header names used to locate columns dynamically from row 2.
 # The script reads actual sheet headers rather than relying on hardcoded positions.
-HEADER_TICKER = "Ticker"
-HEADER_COMPANY = "Company"
-HEADER_SHORT_OUTLOOK = "Short Outlook"
-HEADER_OUTLOOK = "Outlook"
-HEADER_RISKS = "Key Risks"
-HEADER_ANALYZED = "AI"
+HEADER_TICKER = "ticker"
+HEADER_COMPANY = "company_name"
+HEADER_SHORT_OUTLOOK = "short_outlook"
+HEADER_OUTLOOK = "full_outlook"
+HEADER_RISKS = "key_risks"
+HEADER_ANALYZED = "ai"
 
 # Known aliases for headers (in case the sheet uses slightly different names)
 HEADER_ALIASES = {
-    "Company Name":       "Company",
-    "Data As Of":         "Data",
-    "Fundamentals Date":  "Data",
-    "Analyzed":           "AI",
-    "AI Analyzed":        "AI",
+    "Ticker":               "ticker",
+    "Company":              "company_name",
+    "Company Name":         "company_name",
+    "Short Outlook":        "short_outlook",
+    "Outlook":              "full_outlook",
+    "Key Risks":            "key_risks",
+    "AI":                   "ai",
+    "Data":                 "data",
+    "Data As Of":           "data",
+    "Fundamentals Date":    "data",
+    "Analyzed":             "ai",
+    "AI Analyzed":          "ai",
 }
 
 NULL_VALUE = "—"  # must match eodhd_updater.py
 
 # Financial column labels for prompt context (order doesn't matter for lookup)
 FINANCIAL_HEADERS = [
-    "R40 Score",
-    "Fundamentals Snapshot",
-    "Annual Revenue (5Y)",
-    "Quarterly Revenue",
-    "Rev Growth TTM %",
-    "Rev Growth QoQ %",
-    "Rev CAGR 3Y %",
-    "Rev Consistency Score",
-    "Gross Margin %",
-    "GM Trend (Qtly)",
-    "Operating Margin %",
-    "Net Margin %",
-    "Net Margin YoY Δ",
-    "FCF Margin %",
-    "Opex % of Revenue",
-    "S&M+R&D % of Revenue",
-    "Rule of 40",
-    "Qtrs to Profitability",
-    "EPS Qtrly",
-    "EPS YoY %",
+    "r40_score",
+    "fundamentals_snapshot",
+    "annual_revenue_5y",
+    "quarterly_revenue",
+    "rev_growth_ttm%",
+    "rev_growth_qoq%",
+    "rev_cagr%",
+    "rev_consistency_score",
+    "gross_margin%",
+    "gm_trend%",
+    "operating_margin%",
+    "net_margin%",
+    "net_margin_yoy%",
+    "fcf_margin%",
+    "opex_%_of_revenue",
+    "s&m+r&d_%_of_revenue",
+    "rule_of_40",
+    "qrtrs_to_profitability",
+    "eps_only",
+    "eps_yoy%",
 ]
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -140,7 +147,7 @@ def read_all_rows(service) -> list[list[str]]:
         .values()
         .get(
             spreadsheetId=SPREADSHEET_ID,
-            range=f"'{SHEET_NAME}'!A1:AB",
+            range=f"'{SHEET_NAME}'!A1:AD",
             valueRenderOption="FORMATTED_VALUE",
         )
         .execute()
