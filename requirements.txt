@@ -1,6 +1,8 @@
-google-auth
+anthropic>=0.40.0
+google-auth>=2.28.0
 google-auth-httplib2
 google-api-python-client
-requests
+gspread>=6.0.0
+requests>=2.31.0
 python-dateutil
 python-dotenv
