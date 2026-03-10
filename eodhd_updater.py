@@ -264,6 +264,43 @@ def read_all_rows(service) -> list[list[str]]:
     return result.get("values", [])
 
 
+def _get_sheet_id(service) -> int:
+    """Return the numeric sheet ID for SHEET_NAME."""
+    meta = service.spreadsheets().get(
+        spreadsheetId=SPREADSHEET_ID, fields="sheets.properties"
+    ).execute()
+    for sheet in meta.get("sheets", []):
+        if sheet["properties"]["title"] == SHEET_NAME:
+            return sheet["properties"]["sheetId"]
+    raise RuntimeError(f"Sheet '{SHEET_NAME}' not found")
+
+
+def clear_data_row_backgrounds(service, logger: logging.Logger):
+    """Reset background color to default on all data rows (row 3+)."""
+    sheet_id = _get_sheet_id(service)
+    num_cols = len(ALL_COLUMNS)
+    service.spreadsheets().batchUpdate(
+        spreadsheetId=SPREADSHEET_ID,
+        body={"requests": [{
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": 2,  # row 3 (0-indexed)
+                    "startColumnIndex": 0,
+                    "endColumnIndex": num_cols,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "backgroundColor": {"red": 1, "green": 1, "blue": 1},
+                    }
+                },
+                "fields": "userEnteredFormat.backgroundColor",
+            }
+        }]},
+    ).execute()
+    logger.info("Cleared background colors on data rows (row 3+)")
+
+
 def ensure_sheet_columns(service, needed: int, logger):
     """Expand sheet column count if it currently has fewer than `needed` columns."""
     meta = service.spreadsheets().get(
@@ -395,6 +432,9 @@ def write_ai_analysis_sheet(service, rows: list[dict], logger: logging.Logger):
     ).execute()
 
     logger.info("Wrote %d rows (incl. 2 header rows) to %s", len(sheet_data), range_str)
+
+    # Ensure data rows have no background color (only header rows should be colored)
+    clear_data_row_backgrounds(service, logger)
 
 
 # ---------------------------------------------------------------------------
@@ -1063,6 +1103,8 @@ def main():
         logger.info("=== DRY RUN complete. %d tickers processed in %.1fs ===",
                      len(tickers_to_process), elapsed)
     else:
+        # Clear any background colors that may have leaked to data rows
+        clear_data_row_backgrounds(service, logger)
         logger.info(
             "=== Updated %d tickers. Skipped %d due to errors. (%.1fs) ===",
             total_written, errors, elapsed,
