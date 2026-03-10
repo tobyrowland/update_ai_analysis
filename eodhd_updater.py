@@ -470,6 +470,13 @@ EXCHANGE_TO_EODHD = {
     "XETRA":    "XETRA",
     "FRA":      "F",
     "ETR":      "XETRA",
+    "GETTEX":   "MU",
+    "MU":       "MU",
+    "STU":      "STU",
+    "BE":       "BE",
+    "DU":       "DU",
+    "HM":       "HM",
+    "HA":       "HA",
     # Other Europe
     "EPA":      "PA",
     "PAR":      "PA",
@@ -510,6 +517,7 @@ def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger,
     """Fetch full fundamental data from EODHD for a ticker on the given exchange."""
     eodhd_exchange = _resolve_exchange(exchange)
     symbol = f"{ticker}.{eodhd_exchange}"
+    logger.info("Fetching fundamentals for %s (exchange: %s → %s)", ticker, exchange, eodhd_exchange)
     url = f"{EODHD_BASE_URL}/{symbol}"
     params = {"api_token": api_key, "fmt": "json"}
 
