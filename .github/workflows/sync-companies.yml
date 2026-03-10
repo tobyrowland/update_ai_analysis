@@ -2,7 +2,7 @@ name: Sync Companies to AI Analysis
 
 on:
   schedule:
-    # Runs at midnight UTC daily
+    # Runs at midnight UTC daily (midnight GMT / 1 AM BST)
     - cron: "0 0 * * *"
   workflow_dispatch: # Allow manual trigger from GitHub UI
 
