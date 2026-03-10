@@ -230,6 +230,8 @@ Search results:
 Company: {company_name}
 Ticker: {ticker}
 
+IMPORTANT: Do NOT repeat revenue %, margins, or financial metrics — these are already captured in other columns. Focus PURELY on qualitative factors: competitive position, management execution signals, industry tailwinds/headwinds, and what could change the thesis.
+
 Instructions:
 - Only use information from the last 3 months for news/earnings.
 - Mention the date of the earnings report you found.
@@ -253,15 +255,20 @@ Examples:
 - "LNG containment system designer for gas carriers and onshore tanks"
 - "Semiconductor deposition equipment maker for advanced chip manufacturing"
 
-"short_outlook": 14-20 word summary of fundamental outlook based on latest earnings. Focus ONLY on business fundamentals (revenue, margins, guidance, catalysts). Do NOT mention valuation or price.
+"short_outlook": 14-20 words. Be opinionated — take a clear stance on whether the fundamental trajectory is improving or deteriorating, and why. Do NOT mention valuation or price. Do NOT repeat financial metrics.
 Start with emoji: 🟢 (positive), 🟡 (neutral/mixed), 🔴 (concerning).
-Example: "🟢 Revenue accelerating, margins expanding, strong guidance raised for FY2025"
+Example: "🟢 Enterprise platform shift gaining traction as legacy competitors struggle to adapt to AI-native workflows"
 
-"key_risks": 14-20 words on the main 1-2 risks.
+"key_risks": 14-20 words on the main 1-2 risks. Must be COMPANY-SPECIFIC. No generic risks. Name the actual competitor, the actual regulation, the actual customer concentration issue.
 Start with emoji: 🟢 (low/manageable), 🟡 (moderate), 🔴 (high/concerning).
-Example: "🟡 Customer concentration risk and macro slowdown could pressure near-term growth"
+Bad example: "🟡 Intense competition in fintech sector poses risks"
+Good example: "🟡 Chime's interchange revenue vulnerable if Durbin Amendment extends to fintechs; Robinhood/SoFi encroaching on core demographic"
 
-"full_outlook": ~400 characters covering: recent earnings (with date), margin trajectory, key catalysts, path to profitability, and near-term view. For pre-profit companies, specifically mention what's driving losses (R&D, SBC, expansion) and whether operating leverage is visible.
+"full_outlook": ~400 characters. NOT a recap of earnings numbers. Instead cover:
+- WHY the growth is happening (product, market, competitive win)
+- What the BEAR CASE looks like specifically (not generic "competition")
+- One specific thing to watch in the next 2 quarters that will prove/disprove the thesis
+- Any management credibility signals (guidance history, beat/miss pattern)
 """
 
 
