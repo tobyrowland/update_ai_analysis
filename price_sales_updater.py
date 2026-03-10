@@ -2,9 +2,13 @@
 """
 Price-Sales Weekly Updater.
 
-Reads tickers from the 'AI Analysis' sheet, fetches price/financial data from
-FMP (Financial Modeling Prep), computes Price-to-Sales ratios, and maintains
-a rolling 52-week P/S history table in the 'Price-Sales' sheet tab.
+Reads tickers from the 'AI Analysis' sheet, fetches market cap and revenue data
+from EODHD, computes Price-to-Sales ratios, and maintains a rolling 52-week P/S
+history table in the 'Price-Sales' sheet tab.
+
+For backfill (new tickers), fetches 52 weeks of weekly closing prices and
+combines with revenue TTM to build historical P/S.  For weekly updates, fetches
+the current fundamentals snapshot for a single new data point.
 
 Runs every Sunday at 02:00 UTC via GitHub Actions.
 """
@@ -33,10 +37,10 @@ SOURCE_SHEET = "AI Analysis"
 PS_SHEET = "Price-Sales"
 LOGS_SHEET = "Logs"
 
-FMP_BASE_URL = "https://financialmodelingprep.com/api/v3"
-FMP_API_KEY = "AzoPanREVvnVtzhfghwGtHyE4I2sf4AU"
+EODHD_BASE_URL = "https://eodhd.com/api"
+EODHD_API_KEY = os.environ.get("EODHD_API_KEY", "")
 
-DELAY_BETWEEN_CALLS = 0.5  # seconds between FMP API calls (rate limiting)
+DELAY_BETWEEN_CALLS = 0.5  # seconds between EODHD API calls
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 # Price-Sales sheet column order (matches header row)
@@ -52,37 +56,60 @@ LOG_COLUMNS = [
 ]
 
 # ---------------------------------------------------------------------------
-# FMP ticker formatting
+# EODHD exchange mapping (reused from eodhd_updater.py)
 # ---------------------------------------------------------------------------
 
-US_EXCHANGES = {"NASDAQ", "NYSE", "OTC", "AMEX"}
-
-SUFFIX_MAP = {
-    "NSE": ".NS",        # India (NSE)
-    "BSE": ".BO",        # India (BSE)
-    "GETTEX": ".F",      # Germany (Frankfurt via Gettex)
-    "FWB": ".F",         # Germany (Frankfurt)
-    "DUS": ".DU",        # Germany (Düsseldorf)
-    "MIL": ".MI",        # Italy (Milan)
-    "VIE": ".VI",        # Austria (Vienna)
-    "BMV": ".MX",        # Mexico
-    "DFM": ".AE",        # UAE (Dubai)
-    "ASX": ".AX",        # Australia
-    "MYX": ".KL",        # Malaysia
-    "EURONEXT": ".PA",   # Euronext Paris (default)
-    "TRADEGATE": ".TG",  # Germany (Tradegate)
-    "NSENG": ".LG",      # Nigeria (Lagos)
+EXCHANGE_TO_EODHD = {
+    # United States
+    "NASDAQ": "US", "NYSE": "US", "NYSEARCA": "US", "NYSEMKT": "US",
+    "AMEX": "US", "OTC": "US", "BATS": "US", "US": "US",
+    # United Kingdom
+    "LSE": "LSE", "LON": "LSE", "LONDON": "LSE",
+    # India
+    "NSE": "NSE", "BSE": "BSE", "NSEI": "NSE",
+    # Japan
+    "TSE": "TSE", "TYO": "TSE", "JPX": "TSE",
+    # Germany
+    "XETRA": "XETRA", "FRA": "F", "ETR": "XETRA",
+    "GETTEX": "MU", "MU": "MU", "STU": "STU",
+    "BE": "BE", "DU": "DU", "HM": "HM", "HA": "HA", "FWB": "F",
+    # Other Europe
+    "EPA": "PA", "PAR": "PA", "AMS": "AS", "SWX": "SW",
+    "BIT": "MI", "BME": "MC", "MIL": "MI", "VIE": "VI",
+    "EURONEXT": "PA",
+    # Asia-Pacific
+    "HKG": "HK", "HKEX": "HK", "KRX": "KO", "KOSDAQ": "KO",
+    "TWSE": "TW", "TPE": "TW", "SGX": "SG", "ASX": "AU", "NZX": "NZ",
+    "MYX": "KL", "DFM": "AE",
+    # Americas
+    "TSX": "TO", "TSXV": "V", "SAO": "SA", "BVMF": "SA", "BMV": "MX",
+    # Africa / Middle East
+    "JSE": "JSE", "TADAWUL": "SR", "SAU": "SR",
+    "NSENG": "NSENG", "NGS": "NSENG", "NGSE": "NSENG",
+    "TRADEGATE": "MU",
 }
 
+EXCHANGE_FALLBACKS = {
+    "MU": ["XETRA", "F", "US"], "STU": ["XETRA", "F", "US"],
+    "BE": ["XETRA", "F", "US"], "DU": ["XETRA", "F", "US"],
+    "HM": ["XETRA", "F", "US"], "HA": ["XETRA", "F", "US"],
+    "XETRA": ["F", "US"], "F": ["XETRA", "US"],
+    "BSE": ["NSE"], "NSE": ["BSE"],
+    "TSE": ["US"], "LSE": ["US"],
+    "TO": ["V", "US"], "V": ["TO", "US"],
+    "HK": ["US"], "KO": ["US"], "AU": ["US"],
+    "NSENG": ["LSE", "US"],
+}
 
-def build_fmp_ticker(ticker: str, exchange: str) -> str:
-    """Convert ticker + exchange to FMP-compatible ticker symbol."""
-    if exchange in US_EXCHANGES:
-        return ticker
-    suffix = SUFFIX_MAP.get(exchange)
-    if suffix:
-        return ticker + suffix
-    return ticker  # fallback: bare ticker
+for _exc, _chain in EXCHANGE_FALLBACKS.items():
+    if "US" not in _chain:
+        _chain.append("US")
+
+
+def _resolve_exchange(exchange: str) -> str:
+    """Convert a spreadsheet exchange name to the EODHD suffix code."""
+    key = exchange.strip().upper()
+    return EXCHANGE_TO_EODHD.get(key, key)
 
 
 # ---------------------------------------------------------------------------
@@ -137,17 +164,6 @@ def get_sheets_service():
     return build("sheets", "v4", credentials=creds)
 
 
-def _col_letter(index: int) -> str:
-    """Convert 0-based column index to spreadsheet letter (0=A, 25=Z, 26=AA)."""
-    result = ""
-    while True:
-        result = chr(ord("A") + index % 26) + result
-        index = index // 26 - 1
-        if index < 0:
-            break
-    return result
-
-
 def read_ticker_list(service, logger) -> list[dict]:
     """Read ticker + exchange from AI Analysis sheet, starting at row 3."""
     result = (
@@ -188,7 +204,6 @@ def read_ps_sheet(service, logger) -> dict[str, dict]:
         logger.info("Price-Sales sheet is empty")
         return {}
 
-    # First row is header
     headers = rows[0]
     ps_map = {}
     for row in rows[1:]:
@@ -215,21 +230,15 @@ def ensure_ps_sheet_exists(service, logger):
             logger.info("Sheet '%s' already exists", PS_SHEET)
             return
 
-    # Create the sheet
     service.spreadsheets().batchUpdate(
         spreadsheetId=SPREADSHEET_ID,
         body={
             "requests": [
-                {
-                    "addSheet": {
-                        "properties": {"title": PS_SHEET}
-                    }
-                }
+                {"addSheet": {"properties": {"title": PS_SHEET}}}
             ]
         },
     ).execute()
 
-    # Write header row
     service.spreadsheets().values().update(
         spreadsheetId=SPREADSHEET_ID,
         range=f"'{PS_SHEET}'!A1",
@@ -237,7 +246,6 @@ def ensure_ps_sheet_exists(service, logger):
         body={"values": [PS_COLUMNS]},
     ).execute()
 
-    # Freeze row 1
     sheet_id = _get_sheet_id(service, PS_SHEET)
     service.spreadsheets().batchUpdate(
         spreadsheetId=SPREADSHEET_ID,
@@ -273,11 +281,7 @@ def ensure_logs_sheet_exists(service, logger):
         spreadsheetId=SPREADSHEET_ID,
         body={
             "requests": [
-                {
-                    "addSheet": {
-                        "properties": {"title": LOGS_SHEET}
-                    }
-                }
+                {"addSheet": {"properties": {"title": LOGS_SHEET}}}
             ]
         },
     ).execute()
@@ -319,14 +323,10 @@ def append_rows(service, sheet_name: str, rows: list[list], logger):
 
 
 def update_rows_by_ticker(service, sheet_name: str, updates: list[dict], logger):
-    """Update existing rows by matching ticker in column A.
-
-    Each update dict has keys matching PS_COLUMNS.
-    """
+    """Update existing rows by matching ticker in column A."""
     if not updates:
         return
 
-    # Read current sheet to find row numbers for each ticker
     result = (
         service.spreadsheets()
         .values()
@@ -351,7 +351,6 @@ def update_rows_by_ticker(service, sheet_name: str, updates: list[dict], logger)
             logger.warning("Ticker %s not found in sheet for update, skipping", ticker)
             continue
 
-        # Build row values in column order (skip ticker — column A stays)
         row_values = [upd.get(col, "") for col in PS_COLUMNS[1:]]
         batch_data.append(
             {
@@ -369,64 +368,101 @@ def update_rows_by_ticker(service, sheet_name: str, updates: list[dict], logger)
 
 
 # ---------------------------------------------------------------------------
-# FMP API helpers
+# EODHD API helpers
 # ---------------------------------------------------------------------------
 
 
-def fmp_get(endpoint: str, params: dict | None = None, logger=None) -> dict | list | None:
-    """Make a GET request to FMP API. Returns parsed JSON or None on error."""
-    url = f"{FMP_BASE_URL}/{endpoint}"
-    query = {"apikey": FMP_API_KEY}
+def _safe_float(val) -> float | None:
+    """Convert a value to float, returning None on failure."""
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        return f if f == f else None  # NaN check
+    except (ValueError, TypeError):
+        return None
+
+
+def eodhd_get(endpoint: str, params: dict | None = None,
+              logger=None) -> dict | list | None:
+    """Make a GET request to EODHD API."""
+    url = f"{EODHD_BASE_URL}/{endpoint}"
+    query = {"api_token": EODHD_API_KEY, "fmt": "json"}
     if params:
         query.update(params)
 
     try:
         resp = requests.get(url, params=query, timeout=30)
         resp.raise_for_status()
-        data = resp.json()
-        # FMP returns empty list for no data, or error dict
-        if isinstance(data, dict) and "Error Message" in data:
-            if logger:
-                logger.warning("FMP error for %s: %s", endpoint, data["Error Message"])
-            return None
-        return data
+        return resp.json()
+    except requests.exceptions.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else 0
+        if logger:
+            logger.warning("EODHD %s → HTTP %s", endpoint, status)
+        return None
     except Exception as e:
         if logger:
-            logger.warning("FMP request failed for %s: %s", endpoint, e)
+            logger.warning("EODHD request failed for %s: %s", endpoint, e)
         return None
 
 
-def fetch_profile(fmp_ticker: str, bare_ticker: str, logger) -> dict | None:
-    """Fetch company profile. Retry with bare ticker if formatted one fails."""
-    data = fmp_get(f"profile/{fmp_ticker}", logger=logger)
-    if data and isinstance(data, list) and len(data) > 0:
-        return data[0]
+def fetch_fundamentals(ticker: str, exchange: str, logger) -> dict | None:
+    """Fetch EODHD fundamentals with exchange fallback.
 
-    # Retry with bare ticker if different
-    if fmp_ticker != bare_ticker:
-        logger.info("Retrying profile with bare ticker: %s", bare_ticker)
-        data = fmp_get(f"profile/{bare_ticker}", logger=logger)
-        if data and isinstance(data, list) and len(data) > 0:
-            return data[0]
+    Returns the full JSON response or None.
+    """
+    eodhd_exchange = _resolve_exchange(exchange)
+    symbol = f"{ticker}.{eodhd_exchange}"
+
+    time.sleep(DELAY_BETWEEN_CALLS)
+    data = eodhd_get(f"fundamentals/{symbol}", logger=logger)
+    if data and isinstance(data, dict) and data.get("Financials"):
+        return data
+
+    # Try fallbacks
+    fallbacks = EXCHANGE_FALLBACKS.get(eodhd_exchange, ["US"])
+    for fb_exchange in fallbacks:
+        if fb_exchange == eodhd_exchange:
+            continue
+        fb_symbol = f"{ticker}.{fb_exchange}"
+        logger.info("Retrying fundamentals: %s → %s", symbol, fb_symbol)
+        time.sleep(DELAY_BETWEEN_CALLS)
+        data = eodhd_get(f"fundamentals/{fb_symbol}", logger=logger)
+        if data and isinstance(data, dict) and data.get("Financials"):
+            return data
 
     return None
 
 
-def fetch_income_statements(fmp_ticker: str, bare_ticker: str, logger) -> list | None:
-    """Fetch 4 most recent quarterly income statements."""
-    data = fmp_get(
-        f"income-statement/{fmp_ticker}",
-        params={"period": "quarter", "limit": "4"},
+def fetch_weekly_prices(ticker: str, exchange: str, from_date: str,
+                        to_date: str, logger) -> list | None:
+    """Fetch weekly end-of-day prices from EODHD for backfill.
+
+    Returns list of {date, close} dicts sorted oldest-first, or None.
+    """
+    eodhd_exchange = _resolve_exchange(exchange)
+    symbol = f"{ticker}.{eodhd_exchange}"
+
+    time.sleep(DELAY_BETWEEN_CALLS)
+    data = eodhd_get(
+        f"eod/{symbol}",
+        params={"from": from_date, "to": to_date, "period": "w", "order": "a"},
         logger=logger,
     )
     if data and isinstance(data, list) and len(data) > 0:
         return data
 
-    if fmp_ticker != bare_ticker:
-        logger.info("Retrying income statement with bare ticker: %s", bare_ticker)
-        data = fmp_get(
-            f"income-statement/{bare_ticker}",
-            params={"period": "quarter", "limit": "4"},
+    # Try fallbacks
+    fallbacks = EXCHANGE_FALLBACKS.get(eodhd_exchange, ["US"])
+    for fb_exchange in fallbacks:
+        if fb_exchange == eodhd_exchange:
+            continue
+        fb_symbol = f"{ticker}.{fb_exchange}"
+        logger.info("Retrying eod prices: %s → %s", symbol, fb_symbol)
+        time.sleep(DELAY_BETWEEN_CALLS)
+        data = eodhd_get(
+            f"eod/{fb_symbol}",
+            params={"from": from_date, "to": to_date, "period": "w", "order": "a"},
             logger=logger,
         )
         if data and isinstance(data, list) and len(data) > 0:
@@ -435,28 +471,54 @@ def fetch_income_statements(fmp_ticker: str, bare_ticker: str, logger) -> list |
     return None
 
 
-def fetch_historical_prices(
-    fmp_ticker: str, bare_ticker: str, from_date: str, to_date: str, logger
-) -> list | None:
-    """Fetch historical daily prices for a date range."""
-    data = fmp_get(
-        f"historical-price-full/{fmp_ticker}",
-        params={"from": from_date, "to": to_date},
-        logger=logger,
-    )
-    if data and isinstance(data, dict) and data.get("historical"):
-        return data["historical"]
+def get_revenue_ttm(fundamentals: dict) -> float | None:
+    """Extract trailing-twelve-month revenue from EODHD fundamentals."""
+    # Try Highlights.RevenueTTM first
+    highlights = fundamentals.get("Highlights", {})
+    rev_ttm = _safe_float(highlights.get("RevenueTTM"))
+    if rev_ttm and rev_ttm > 0:
+        return rev_ttm
 
-    if fmp_ticker != bare_ticker:
-        logger.info("Retrying historical prices with bare ticker: %s", bare_ticker)
-        data = fmp_get(
-            f"historical-price-full/{bare_ticker}",
-            params={"from": from_date, "to": to_date},
-            logger=logger,
-        )
-        if data and isinstance(data, dict) and data.get("historical"):
-            return data["historical"]
+    # Fallback: sum last 4 quarterly income statements
+    financials = fundamentals.get("Financials", {})
+    quarterly = financials.get("Income_Statement", {}).get("quarterly", {})
+    if not quarterly:
+        return None
 
+    # Sort by date descending
+    sorted_q = sorted(quarterly.items(), key=lambda x: x[0], reverse=True)
+    total = 0.0
+    count = 0
+    for _date, entry in sorted_q[:4]:
+        rev = _safe_float(entry.get("totalRevenue"))
+        if rev is not None:
+            total += rev
+            count += 1
+    return total if count >= 2 else None  # need at least 2 quarters
+
+
+def get_market_cap(fundamentals: dict) -> float | None:
+    """Extract market capitalization from EODHD fundamentals."""
+    highlights = fundamentals.get("Highlights", {})
+    return _safe_float(highlights.get("MarketCapitalization"))
+
+
+def get_shares_outstanding(fundamentals: dict) -> float | None:
+    """Extract shares outstanding from EODHD fundamentals."""
+    shares = fundamentals.get("SharesStats", {})
+    val = _safe_float(shares.get("SharesOutstanding"))
+    if val and val > 0:
+        return val
+    # Fallback: MarketCap / price
+    highlights = fundamentals.get("Highlights", {})
+    mcap = _safe_float(highlights.get("MarketCapitalization"))
+    # General.PreviousClose or similar
+    general = fundamentals.get("General", {})
+    # Try technicals
+    technicals = fundamentals.get("Technicals", {})
+    price = _safe_float(technicals.get("50DayMA"))
+    if mcap and price and price > 0:
+        return mcap / price
     return None
 
 
@@ -481,15 +543,6 @@ def get_backfill_from() -> date:
     return date.today() - timedelta(weeks=52)
 
 
-def is_friday(date_str: str) -> bool:
-    """Check if a YYYY-MM-DD date string is a Friday."""
-    try:
-        d = datetime.strptime(date_str, "%Y-%m-%d")
-        return d.weekday() == 4
-    except ValueError:
-        return False
-
-
 # ---------------------------------------------------------------------------
 # Core P/S logic
 # ---------------------------------------------------------------------------
@@ -503,106 +556,70 @@ def compute_ps_for_ticker(
     backfill_from: date,
     logger,
 ) -> dict | None:
-    """Fetch data from FMP and compute P/S ratio + history for one ticker.
+    """Fetch data from EODHD and compute P/S ratio + history for one ticker.
 
     Returns a dict ready for sheet writing, or None if data is insufficient.
     """
-    fmp_ticker = build_fmp_ticker(ticker, exchange)
-    bare_ticker = ticker
     last_friday_str = last_friday.isoformat()
-    backfill_from_str = backfill_from.isoformat()
-
     mode = "backfill" if existing is None else "update"
 
-    # --- Fetch profile ---
-    time.sleep(DELAY_BETWEEN_CALLS)
-    profile = fetch_profile(fmp_ticker, bare_ticker, logger)
-    if not profile:
-        logger.warning("SKIP %s: no profile data", ticker)
+    # --- Fetch fundamentals (market cap, revenue, shares) ---
+    fundamentals = fetch_fundamentals(ticker, exchange, logger)
+    if not fundamentals:
+        logger.warning("SKIP %s: no fundamentals data", ticker)
         return None
 
-    shares = profile.get("sharesOutstanding")
-    if not shares or float(shares) <= 0:
-        logger.warning("SKIP %s: sharesOutstanding=%s", ticker, shares)
-        return None
-    shares = float(shares)
-
-    # --- Fetch income statements ---
-    time.sleep(DELAY_BETWEEN_CALLS)
-    statements = fetch_income_statements(fmp_ticker, bare_ticker, logger)
-    if not statements:
-        logger.warning("SKIP %s: no income statement data", ticker)
-        return None
-
-    revenue_ttm = sum(float(q.get("revenue", 0) or 0) for q in statements[:4])
-    if revenue_ttm <= 0:
+    revenue_ttm = get_revenue_ttm(fundamentals)
+    if not revenue_ttm or revenue_ttm <= 0:
         logger.warning("SKIP %s: revenue_ttm=%s", ticker, revenue_ttm)
         return None
 
-    # --- Fetch historical prices ---
-    time.sleep(DELAY_BETWEEN_CALLS)
-    if mode == "backfill":
-        from_date = backfill_from_str
+    market_cap = get_market_cap(fundamentals)
+    shares = get_shares_outstanding(fundamentals)
+
+    # Current P/S from fundamentals
+    if market_cap and market_cap > 0:
+        ps_current = round(market_cap / revenue_ttm, 2)
     else:
-        from_date = last_friday_str
-    historical = fetch_historical_prices(
-        fmp_ticker, bare_ticker, from_date, last_friday_str, logger
-    )
-    if not historical:
-        logger.warning("SKIP %s: no historical price data", ticker)
+        logger.warning("SKIP %s: no market cap data", ticker)
         return None
 
-    # --- Compute P/S history ---
+    # --- Build history ---
     new_history = []
 
     if mode == "backfill":
-        # Filter to Fridays, sort oldest first, take up to 52
-        fridays = sorted(
-            [d for d in historical if is_friday(d["date"])],
-            key=lambda d: d["date"],
+        # Fetch weekly prices for backfill
+        backfill_from_str = backfill_from.isoformat()
+        weekly_prices = fetch_weekly_prices(
+            ticker, exchange, backfill_from_str, last_friday_str, logger
         )
-        fridays = fridays[-52:]  # keep last 52
 
-        for day in fridays:
-            price = float(day.get("close", 0) or 0)
-            if price <= 0:
-                continue
-            ps_val = round((price * shares) / revenue_ttm, 2)
-            if ps_val <= 0:
-                continue
-            new_history.append([day["date"], ps_val])
+        if weekly_prices and shares and shares > 0:
+            # Compute historical P/S using weekly close * shares / revenue_ttm
+            # Note: revenue_ttm is current (not historical), so this is approximate
+            for day in weekly_prices[-52:]:
+                close = _safe_float(day.get("adjusted_close") or day.get("close"))
+                if not close or close <= 0:
+                    continue
+                ps_val = round((close * shares) / revenue_ttm, 2)
+                if ps_val > 0:
+                    new_history.append([day["date"], ps_val])
+        else:
+            logger.info("%s: no weekly prices for backfill, using current P/S only",
+                        ticker)
+
+        # Always ensure we have at least the current data point
+        if not new_history or new_history[-1][0] != last_friday_str:
+            new_history.append([last_friday_str, ps_current])
 
     else:
-        # Update: parse existing history, append new Friday entry
+        # Update: parse existing history, append new data point
         try:
             existing_history = json.loads(existing.get("ps_history_json", "[]"))
         except (json.JSONDecodeError, TypeError):
             existing_history = []
 
-        # Find the Friday entry
-        friday_entry = None
-        for d in historical:
-            if d["date"] == last_friday_str:
-                friday_entry = d
-                break
-        if not friday_entry and historical:
-            friday_entry = historical[0]  # fallback to most recent
-
-        if not friday_entry:
-            logger.warning("SKIP %s: no Friday price found", ticker)
-            return None
-
-        price = float(friday_entry.get("close", 0) or 0)
-        if price <= 0:
-            logger.warning("SKIP %s: invalid price %s", ticker, price)
-            return None
-
-        ps_val = round((price * shares) / revenue_ttm, 2)
-        if ps_val <= 0:
-            logger.warning("SKIP %s: invalid ps_val %s", ticker, ps_val)
-            return None
-
-        existing_history.append([last_friday_str, ps_val])
+        existing_history.append([last_friday_str, ps_current])
         # Keep rolling 52-entry window
         if len(existing_history) > 52:
             existing_history = existing_history[-52:]
@@ -614,13 +631,14 @@ def compute_ps_for_ticker(
 
     # --- Compute stats ---
     values = [h[1] for h in new_history]
-    ps_current = values[-1]
     ps_52w_high = round(max(values), 2)
     ps_52w_low = round(min(values), 2)
     ps_12m_median = round(statistics.median(values), 2)
 
     # ATH: sticky — never goes down
-    prev_ath = float(existing.get("ps_ath", 0)) if existing else 0
+    prev_ath = 0
+    if existing:
+        prev_ath = _safe_float(existing.get("ps_ath")) or 0
     ps_ath = round(max(prev_ath, ps_current, ps_52w_high), 2)
     pct_of_ath = round(ps_current / ps_ath, 2) if ps_ath > 0 else 0
 
@@ -675,8 +693,12 @@ def main():
     args = parser.parse_args()
 
     logger.info("=" * 60)
-    logger.info("Price-Sales updater starting")
+    logger.info("Price-Sales updater starting (EODHD)")
     logger.info("=" * 60)
+
+    if not EODHD_API_KEY:
+        logger.error("EODHD_API_KEY env var is not set")
+        sys.exit(1)
 
     service = get_sheets_service()
 
