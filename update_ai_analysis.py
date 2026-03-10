@@ -33,7 +33,9 @@ SPREADSHEET_ID = os.environ.get(
 SHEET_NAME = "AI Analysis"
 SERPAPI_ENDPOINT = "https://serpapi.com/search"
 GEMINI_MODEL = "gemini-2.5-flash"
-DELAY_BETWEEN_TICKERS = 1  # seconds
+DELAY_BETWEEN_TICKERS = 3  # seconds between tickers
+DELAY_BETWEEN_SEARCHES = 1  # seconds between SerpAPI calls
+DELAY_AFTER_GEMINI = 2  # seconds after Gemini call
 MAX_RETRIES = 2
 RETRY_DELAY = 10
 
@@ -206,10 +208,12 @@ def gather_web_context(
     ]
 
     parts = []
-    for q in queries:
+    for i, q in enumerate(queries):
         result = serpapi_search(q, api_key, logger)
         if result:
             parts.append(result)
+        if i < len(queries) - 1:
+            time.sleep(DELAY_BETWEEN_SEARCHES)
 
     return "\n".join(parts)
 
@@ -414,6 +418,7 @@ def main():
 
             # Step 2: Gemini analysis
             result = call_gemini(company, ticker, web_context, gemini_key, logger)
+            time.sleep(DELAY_AFTER_GEMINI)
             if result is None:
                 failed += 1
                 continue
