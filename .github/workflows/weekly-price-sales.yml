@@ -1,0 +1,55 @@
+name: Weekly Price-Sales Update
+
+on:
+  schedule:
+    # Runs at 2:00 AM UTC every Sunday
+    - cron: "0 2 * * 0"
+  workflow_dispatch:
+    inputs:
+      tickers:
+        description: "Specific tickers to process (space-separated, e.g. 'DDOG CHOLAFIN CGD'). Leave empty for all."
+        type: string
+        default: ""
+      force:
+        description: "Force update all tickers (ignore staleness check)"
+        type: boolean
+        default: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Price-Sales Updater
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          ARGS=""
+          if [ -n "${{ github.event.inputs.tickers }}" ]; then
+            ARGS="--tickers ${{ github.event.inputs.tickers }}"
+          fi
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            ARGS="$ARGS --force"
+          fi
+          python price_sales_updater.py $ARGS
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: price-sales-logs-${{ github.run_id }}
+          path: logs/
+          retention-days: 30
