@@ -1,0 +1,671 @@
+{
+  "name": "get price-sales data weekly",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2 * * 0"
+            }
+          ]
+        }
+      },
+      "id": "node-cron-trigger",
+      "name": "Weekly Sunday 2AM UTC",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {},
+      "id": "node-manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [220, 500]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1js3dUTJtKhY1dUcwzYUGBOdKDZXBurLtRGgcIV8msYk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "AI Analysis"
+        },
+        "options": {
+          "range": "A3:B",
+          "headerRow": 0
+        }
+      },
+      "id": "node-get-ticker-list",
+      "name": "Get Ticker List",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [480, 400],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-credential",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1js3dUTJtKhY1dUcwzYUGBOdKDZXBurLtRGgcIV8msYk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Price-Sales"
+        },
+        "options": {}
+      },
+      "id": "node-get-existing-ps",
+      "name": "Get Existing Price-Sales Data",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [480, 600],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-credential",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Build lookup: ticker → existing row object\nconst psRows = $('Get Existing Price-Sales Data').all();\nconst psMap = {};\nfor (const row of psRows) {\n  const t = row.json.ticker;\n  if (t && t !== 'ticker') {\n    psMap[t] = row.json;\n  }\n}\n\n// Compute last Friday's date (workflow runs Sunday)\nfunction getLastFriday() {\n  const d = new Date();\n  d.setUTCHours(0, 0, 0, 0);\n  const dayOfWeek = d.getUTCDay();\n  const daysBack = dayOfWeek === 0 ? 2 : (dayOfWeek + 2) % 7 || 7;\n  d.setUTCDate(d.getUTCDate() - daysBack);\n  return d.toISOString().split('T')[0];\n}\n\nfunction getBackfillFrom() {\n  const d = new Date(Date.now() - 52 * 7 * 24 * 60 * 60 * 1000);\n  return d.toISOString().split('T')[0];\n}\n\nfunction buildFmpTicker(ticker, exchange) {\n  const usExchanges = ['NASDAQ', 'NYSE', 'OTC', 'AMEX'];\n  if (usExchanges.includes(exchange)) return ticker;\n  const suffixMap = {\n    'NSE': `${ticker}.NS`, 'BSE': `${ticker}.BO`,\n    'GETTEX': `${ticker}.F`, 'FWB': `${ticker}.F`,\n    'DUS': `${ticker}.DU`, 'MIL': `${ticker}.MI`,\n    'VIE': `${ticker}.VI`, 'BMV': `${ticker}.MX`,\n    'DFM': `${ticker}.AE`, 'ASX': `${ticker}.AX`,\n    'MYX': `${ticker}.KL`, 'EURONEXT': `${ticker}.PA`,\n    'TRADEGATE': `${ticker}.TG`, 'NSENG': `${ticker}.LG`,\n  };\n  return suffixMap[exchange] || ticker;\n}\n\nconst lastFriday = getLastFriday();\nconst backfillFrom = getBackfillFrom();\nconst tickers = $('Get Ticker List').all();\nconst results = [];\n\nfor (const item of tickers) {\n  const { ticker, exchange } = item.json;\n  if (!ticker) continue;\n\n  const existing = psMap[ticker] || null;\n  let mode;\n\n  if (!existing) {\n    mode = 'backfill';\n  } else if (!existing.last_updated || existing.last_updated < lastFriday) {\n    mode = 'update';\n  } else {\n    continue; // already current — skip\n  }\n\n  results.push({\n    json: {\n      ticker,\n      exchange,\n      fmp_ticker: buildFmpTicker(ticker, exchange),\n      mode,\n      last_friday: lastFriday,\n      backfill_from: backfillFrom,\n      existing: existing\n    }\n  });\n}\n\nreturn results;"
+      },
+      "id": "node-classify",
+      "name": "Build PS Map + Classify",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [740, 400]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://financialmodelingprep.com/api/v3/profile/{{ $json.fmp_ticker }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "AzoPanREVvnVtzhfghwGtHyE4I2sf4AU"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "node-fetch-profile",
+      "name": "Fetch FMP Profile",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1000, 300],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "parameters": {
+        "amount": 0.5,
+        "unit": "seconds"
+      },
+      "id": "node-wait-rate-limit",
+      "name": "Wait 500ms",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1240, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://financialmodelingprep.com/api/v3/income-statement/{{ $json.fmp_ticker }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "period",
+              "value": "quarter"
+            },
+            {
+              "name": "limit",
+              "value": "4"
+            },
+            {
+              "name": "apikey",
+              "value": "AzoPanREVvnVtzhfghwGtHyE4I2sf4AU"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "node-fetch-income",
+      "name": "Fetch FMP Income Statement",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1480, 300],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Access the income statement response and the prior context\nconst incomeData = $json;\nconst profileData = $('Fetch FMP Profile').item;\nconst classifyData = $('Build PS Map + Classify').item;\n\n// Extract income statement array - could be in different places depending on response\nlet stmts = [];\nif (Array.isArray(incomeData)) {\n  stmts = incomeData;\n} else if (incomeData && Array.isArray(incomeData.body)) {\n  stmts = incomeData.body;\n} else if (incomeData && incomeData.data && Array.isArray(incomeData.data)) {\n  stmts = incomeData.data;\n}\n\nlet revenue_ttm = null;\nlet revenue_error = null;\n\nif (stmts.length === 0) {\n  revenue_error = 'no_data';\n} else {\n  const quarters = stmts.slice(0, 4);\n  revenue_ttm = quarters.reduce((sum, q) => sum + (parseFloat(q.revenue) || 0), 0);\n  if (revenue_ttm === 0) {\n    revenue_error = 'zero_revenue';\n  }\n}\n\n// Extract profile data\nlet sharesOutstanding = null;\nlet profileArr = [];\nif (Array.isArray(profileData.json)) {\n  profileArr = profileData.json;\n} else if (profileData.json && Array.isArray(profileData.json.body)) {\n  profileArr = profileData.json.body;\n} else if (profileData.json && Array.isArray(profileData.json.data)) {\n  profileArr = profileData.json.data;\n} else if (profileData.json && profileData.json.sharesOutstanding) {\n  profileArr = [profileData.json];\n}\n\nif (profileArr.length > 0) {\n  sharesOutstanding = profileArr[0].sharesOutstanding || null;\n}\n\nreturn {\n  json: {\n    ...classifyData.json,\n    sharesOutstanding,\n    revenue_ttm,\n    revenue_error\n  }\n};"
+      },
+      "id": "node-compute-revenue",
+      "name": "Compute Revenue TTM",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1720, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://financialmodelingprep.com/api/v3/historical-price-full/{{ $json.fmp_ticker }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "from",
+              "value": "={{ $json.mode === 'backfill' ? $json.backfill_from : $json.last_friday }}"
+            },
+            {
+              "name": "to",
+              "value": "={{ $json.last_friday }}"
+            },
+            {
+              "name": "apikey",
+              "value": "AzoPanREVvnVtzhfghwGtHyE4I2sf4AU"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "node-fetch-prices",
+      "name": "Fetch FMP Historical Prices",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1960, 300],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "function getMedian(values) {\n  const sorted = [...values].sort((a, b) => a - b);\n  const mid = Math.floor(sorted.length / 2);\n  return sorted.length % 2 !== 0\n    ? sorted[mid]\n    : (sorted[mid - 1] + sorted[mid]) / 2;\n}\n\nfunction isFriday(dateStr) {\n  return new Date(dateStr + 'T12:00:00Z').getUTCDay() === 5;\n}\n\nconst today = new Date().toISOString().split('T')[0];\n\nconst priceResponse = $json;\nconst revenueData = $('Compute Revenue TTM').item.json;\n\nconst ticker = revenueData.ticker;\nconst mode = revenueData.mode;\nconst last_friday = revenueData.last_friday;\nconst existing = revenueData.existing;\nconst shares = parseFloat(revenueData.sharesOutstanding);\nconst rev = parseFloat(revenueData.revenue_ttm);\n\n// Validate inputs\nif (!shares || !rev || shares <= 0 || rev <= 0) {\n  return { json: { _skip: true, ticker, reason: `missing shares (${shares}) or revenue (${rev})` } };\n}\n\n// Get historical price data - handle different response shapes\nlet historical = [];\nif (priceResponse && Array.isArray(priceResponse.historical)) {\n  historical = priceResponse.historical;\n} else if (priceResponse && priceResponse.body && Array.isArray(priceResponse.body.historical)) {\n  historical = priceResponse.body.historical;\n} else if (Array.isArray(priceResponse)) {\n  historical = priceResponse;\n}\n\nif (historical.length === 0) {\n  return { json: { _skip: true, ticker, reason: 'no historical price data' } };\n}\n\nlet newHistory = [];\n\nif (mode === 'backfill') {\n  // Filter to Fridays, sort oldest first, take up to 52\n  const fridays = historical\n    .filter(d => isFriday(d.date))\n    .sort((a, b) => a.date.localeCompare(b.date))\n    .slice(-52);\n\n  for (const day of fridays) {\n    const price = parseFloat(day.close);\n    if (!price || price <= 0) continue;\n    const ps_val = parseFloat(((price * shares) / rev).toFixed(2));\n    if (!isFinite(ps_val) || ps_val <= 0) continue;\n    newHistory.push([day.date, ps_val]);\n  }\n} else {\n  // Update: parse existing history, append new Friday entry\n  let existing_history = [];\n  try {\n    existing_history = JSON.parse(existing.ps_history_json || '[]');\n  } catch(e) { existing_history = []; }\n\n  // Find the Friday entry from historical response\n  const fridayEntry = historical.find(d => d.date === last_friday)\n    || historical[0];\n\n  if (!fridayEntry) {\n    return { json: { _skip: true, ticker, reason: 'no Friday price found' } };\n  }\n\n  const price = parseFloat(fridayEntry.close);\n  const ps_val = parseFloat(((price * shares) / rev).toFixed(2));\n  if (!isFinite(ps_val) || ps_val <= 0) {\n    return { json: { _skip: true, ticker, reason: 'invalid ps_val' } };\n  }\n\n  existing_history.push([last_friday, ps_val]);\n  // Keep rolling 52-entry window\n  if (existing_history.length > 52) {\n    existing_history = existing_history.slice(existing_history.length - 52);\n  }\n  newHistory = existing_history;\n}\n\nif (newHistory.length === 0) {\n  return { json: { _skip: true, ticker, reason: 'empty history after processing' } };\n}\n\n// Compute all stats from history\nconst values = newHistory.map(h => h[1]);\nconst ps_current = values[values.length - 1];\nconst ps_52w_high = parseFloat(Math.max(...values).toFixed(2));\nconst ps_52w_low = parseFloat(Math.min(...values).toFixed(2));\nconst ps_12m_median = parseFloat(getMedian(values).toFixed(2));\n\n// ATH: sticky — never goes down\nconst prev_ath = mode === 'update'\n  ? parseFloat(existing.ps_ath || 0)\n  : 0;\nconst ps_ath = parseFloat(Math.max(prev_ath, ps_current, ps_52w_high).toFixed(2));\nconst pct_of_ath = parseFloat((ps_current / ps_ath).toFixed(2));\n\nconst first_recorded = mode === 'backfill'\n  ? newHistory[0][0]\n  : (existing.first_recorded || newHistory[0][0]);\n\nreturn {\n  json: {\n    ticker,\n    mode,\n    ps_current,\n    ps_ath,\n    ps_52w_high,\n    ps_52w_low,\n    ps_12m_median,\n    pct_of_ath,\n    ps_history_json: JSON.stringify(newHistory),\n    last_updated: last_friday,\n    first_recorded,\n    is_new_row: mode === 'backfill',\n    _skip: false\n  }\n};"
+      },
+      "id": "node-compute-ps",
+      "name": "Compute PS + Build History",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2200, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "filter-skip",
+              "leftValue": "={{ $json._skip }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "node-filter-skips",
+      "name": "Filter Skipped Tickers",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [2440, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "route-new",
+                    "leftValue": "={{ $json.is_new_row }}",
+                    "rightValue": true,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "New Rows"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "route-existing",
+                    "leftValue": "={{ $json.is_new_row }}",
+                    "rightValue": false,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Existing Rows"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-switch",
+      "name": "Route New vs Existing",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [2680, 300]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1js3dUTJtKhY1dUcwzYUGBOdKDZXBurLtRGgcIV8msYk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Price-Sales"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "ticker": "={{ $json.ticker }}",
+            "ps_current": "={{ $json.ps_current }}",
+            "ps_ath": "={{ $json.ps_ath }}",
+            "ps_52w_high": "={{ $json.ps_52w_high }}",
+            "ps_52w_low": "={{ $json.ps_52w_low }}",
+            "ps_12m_median": "={{ $json.ps_12m_median }}",
+            "pct_of_ath": "={{ $json.pct_of_ath }}",
+            "ps_history_json": "={{ $json.ps_history_json }}",
+            "last_updated": "={{ $json.last_updated }}",
+            "first_recorded": "={{ $json.first_recorded }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-append-new",
+      "name": "Append New Row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2940, 180],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-credential",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1js3dUTJtKhY1dUcwzYUGBOdKDZXBurLtRGgcIV8msYk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Price-Sales"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "ticker": "={{ $json.ticker }}",
+            "ps_current": "={{ $json.ps_current }}",
+            "ps_ath": "={{ $json.ps_ath }}",
+            "ps_52w_high": "={{ $json.ps_52w_high }}",
+            "ps_52w_low": "={{ $json.ps_52w_low }}",
+            "ps_12m_median": "={{ $json.ps_12m_median }}",
+            "pct_of_ath": "={{ $json.pct_of_ath }}",
+            "ps_history_json": "={{ $json.ps_history_json }}",
+            "last_updated": "={{ $json.last_updated }}",
+            "first_recorded": "={{ $json.first_recorded }}"
+          }
+        },
+        "options": {
+          "cellFormat": "USER_ENTERED"
+        },
+        "matchingColumns": ["ticker"]
+      },
+      "id": "node-update-existing",
+      "name": "Update Existing Row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2940, 460],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-credential",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Gather all processed items from Compute PS node\nlet allItems = [];\ntry {\n  allItems = $('Compute PS + Build History').all();\n} catch(e) {\n  allItems = [];\n}\n\nconst processed = allItems.filter(i => !i.json._skip);\nconst skipped = allItems.filter(i => i.json._skip);\nconst backfilled = processed.filter(i => i.json.mode === 'backfill').length;\nconst updated = processed.filter(i => i.json.mode === 'update').length;\n\nreturn [{\n  json: {\n    run_date: new Date().toISOString().split('T')[0],\n    backfilled,\n    updated,\n    skipped: skipped.length,\n    total: backfilled + updated,\n    run_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-log-summary",
+      "name": "Log Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3200, 300]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1js3dUTJtKhY1dUcwzYUGBOdKDZXBurLtRGgcIV8msYk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Logs"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "run_date": "={{ $json.run_date }}",
+            "backfilled": "={{ $json.backfilled }}",
+            "updated": "={{ $json.updated }}",
+            "skipped": "={{ $json.skipped }}",
+            "total": "={{ $json.total }}",
+            "run_at": "={{ $json.run_at }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-write-log",
+      "name": "Write Log Row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [3440, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-credential",
+          "name": "Google Sheets"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Weekly Sunday 2AM UTC": {
+      "main": [
+        [
+          {
+            "node": "Get Ticker List",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Existing Price-Sales Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Ticker List",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Existing Price-Sales Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Ticker List": {
+      "main": [
+        [
+          {
+            "node": "Build PS Map + Classify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Existing Price-Sales Data": {
+      "main": [
+        [
+          {
+            "node": "Build PS Map + Classify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build PS Map + Classify": {
+      "main": [
+        [
+          {
+            "node": "Fetch FMP Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch FMP Profile": {
+      "main": [
+        [
+          {
+            "node": "Wait 500ms",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 500ms": {
+      "main": [
+        [
+          {
+            "node": "Fetch FMP Income Statement",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch FMP Income Statement": {
+      "main": [
+        [
+          {
+            "node": "Compute Revenue TTM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Revenue TTM": {
+      "main": [
+        [
+          {
+            "node": "Fetch FMP Historical Prices",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch FMP Historical Prices": {
+      "main": [
+        [
+          {
+            "node": "Compute PS + Build History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute PS + Build History": {
+      "main": [
+        [
+          {
+            "node": "Filter Skipped Tickers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Skipped Tickers": {
+      "main": [
+        [
+          {
+            "node": "Route New vs Existing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route New vs Existing": {
+      "main": [
+        [
+          {
+            "node": "Append New Row",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Existing Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append New Row": {
+      "main": [
+        [
+          {
+            "node": "Log Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Existing Row": {
+      "main": [
+        [
+          {
+            "node": "Log Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Summary": {
+      "main": [
+        [
+          {
+            "node": "Write Log Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "pinData": {},
+  "active": false,
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": ""
+  }
+}
