@@ -294,10 +294,11 @@ def clear_data_row_formatting(service, logger: logging.Logger):
                         "backgroundColor": {"red": 1, "green": 1, "blue": 1},
                         "textFormat": {
                             "foregroundColor": {"red": 0, "green": 0, "blue": 0},
+                            "bold": False,
                         },
                     }
                 },
-                "fields": "userEnteredFormat.backgroundColor,userEnteredFormat.textFormat.foregroundColor",
+                "fields": "userEnteredFormat.backgroundColor,userEnteredFormat.textFormat",
             }
         }]},
     ).execute()
