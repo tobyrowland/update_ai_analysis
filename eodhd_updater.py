@@ -69,52 +69,86 @@ GROUPS = [
         "outlook", "risks",
     ]),
     ("LAST ANALYSIS", "1B3A4B", [
-        "ai_analysis_date", "fundamentals_date",
+        "ai_analysis_date",
+    ]),
+    ("DATA DATE", "2E4057", [
+        "data",
     ]),
 ]
 
+# Maps internal column keys to the header text shown in the sheet.
+# The sheet now uses lowercase underscore names as headers.
 DISPLAY_NAMES = {
-    "ticker":               "Ticker",
-    "exchange":             "Exchange",
-    "company":              "Company",
-    "description":          "Description",
-    "annual_revenue_5y":    "Annual Revenue (5Y)",
-    "quarterly_revenue":    "Quarterly Revenue",
-    "rev_growth_ttm":       "Rev Growth TTM %",
-    "rev_growth_qoq":       "Rev Growth QoQ %",
-    "rev_cagr_3y":          "Rev CAGR 3Y %",
-    "rev_consistency":      "Rev Consistency Score",
-    "gross_margin_ttm":     "Gross Margin %",
-    "gross_margin_trend":   "GM Trend (Qtly)",
-    "operating_margin_ttm": "Operating Margin %",
-    "net_margin_ttm":       "Net Margin %",
-    "net_margin_yoy_delta": "Net Margin YoY Δ",
-    "fcf_margin_ttm":       "FCF Margin %",
-    "opex_pct_revenue":     "Opex % of Revenue",
-    "sm_rd_pct_revenue":    "S&M+R&D % of Revenue",
-    "rule_of_40":           "Rule of 40",
-    "qtrs_to_profitability": "Qtrs to Profitability",
-    "eps_quarterly":        "EPS Qtrly",
-    "eps_yoy_pct":          "EPS YoY %",
-    "r40_score":            "R40 Score",
-    "fundamentals_snapshot": "Fundamentals Snapshot",
-    "short_outlook":        "Short Outlook",
-    "outlook":              "Outlook",
-    "risks":                "Key Risks",
-    "ai_analysis_date":     "AI",
-    "fundamentals_date":    "Data",
+    "ticker":               "ticker",
+    "exchange":             "exchange",
+    "company":              "company",
+    "description":          "description",
+    "annual_revenue_5y":    "annual_revenue_5y",
+    "quarterly_revenue":    "quarterly_revenue",
+    "rev_growth_ttm":       "rev_growth_ttm",
+    "rev_growth_qoq":       "rev_growth_qoq",
+    "rev_cagr_3y":          "rev_cagr_3y",
+    "rev_consistency":      "rev_consistency",
+    "gross_margin_ttm":     "gross_margin_ttm",
+    "gross_margin_trend":   "gross_margin_trend",
+    "operating_margin_ttm": "operating_margin_ttm",
+    "net_margin_ttm":       "net_margin_ttm",
+    "net_margin_yoy_delta": "net_margin_yoy_delta",
+    "fcf_margin_ttm":       "fcf_margin_ttm",
+    "opex_pct_revenue":     "opex_pct_revenue",
+    "sm_rd_pct_revenue":    "sm_rd_pct_revenue",
+    "rule_of_40":           "rule_of_40",
+    "qtrs_to_profitability": "qtrs_to_profitability",
+    "eps_quarterly":        "eps_quarterly",
+    "eps_yoy_pct":          "eps_yoy_pct",
+    "r40_score":            "r40_score",
+    "fundamentals_snapshot": "fundamentals_snapshot",
+    "short_outlook":        "short_outlook",
+    "outlook":              "outlook",
+    "risks":                "risks",
+    "ai_analysis_date":     "ai_analysis_date",
+    "data":                 "data",
 }
 
-# The actual sheet may use different header names than DISPLAY_NAMES
-# (e.g. created by update_ai_narratives.py or edited manually).
-# Map known alternative sheet headers → canonical DISPLAY_NAMES value.
+# Map legacy/alternative sheet headers → current header names.
 HEADER_ALIASES = {
-    "Company Name":       "Company",
-    "Full Outlook":       "Outlook",
-    "Data As Of":         "Data",
-    "Fundamentals Date":  "Data",
-    "Analyzed":           "AI",
-    "AI Analyzed":        "AI",
+    # Legacy display-name headers → new lowercase keys
+    "Ticker":               "ticker",
+    "Exchange":             "exchange",
+    "Company":              "company",
+    "Company Name":         "company",
+    "Description":          "description",
+    "Annual Revenue (5Y)":  "annual_revenue_5y",
+    "Quarterly Revenue":    "quarterly_revenue",
+    "Rev Growth TTM %":     "rev_growth_ttm",
+    "Rev Growth QoQ %":     "rev_growth_qoq",
+    "Rev CAGR 3Y %":       "rev_cagr_3y",
+    "Rev Consistency Score": "rev_consistency",
+    "Gross Margin %":       "gross_margin_ttm",
+    "GM Trend (Qtly)":      "gross_margin_trend",
+    "Operating Margin %":   "operating_margin_ttm",
+    "Net Margin %":         "net_margin_ttm",
+    "Net Margin YoY Δ":     "net_margin_yoy_delta",
+    "FCF Margin %":         "fcf_margin_ttm",
+    "Opex % of Revenue":    "opex_pct_revenue",
+    "S&M+R&D % of Revenue": "sm_rd_pct_revenue",
+    "Rule of 40":           "rule_of_40",
+    "Qtrs to Profitability": "qtrs_to_profitability",
+    "EPS Qtrly":            "eps_quarterly",
+    "EPS YoY %":            "eps_yoy_pct",
+    "R40 Score":            "r40_score",
+    "Fundamentals Snapshot": "fundamentals_snapshot",
+    "Short Outlook":        "short_outlook",
+    "Outlook":              "outlook",
+    "Full Outlook":         "outlook",
+    "Key Risks":            "risks",
+    "AI":                   "ai_analysis_date",
+    "Analyzed":             "ai_analysis_date",
+    "AI Analyzed":          "ai_analysis_date",
+    "Data":                 "data",
+    "Data As Of":           "data",
+    "Fundamentals Date":    "data",
+    "data":    "data",
 }
 
 COL_WIDTHS = {
@@ -146,7 +180,7 @@ COL_WIDTHS = {
     "outlook": 80,
     "risks": 50,
     "ai_analysis_date": 16,
-    "fundamentals_date": 16,
+    "data": 16,
 }
 
 # Columns that should be formatted as percentages
@@ -176,7 +210,7 @@ EODHD_COLUMNS = [
     "opex_pct_revenue", "sm_rd_pct_revenue",
     "rule_of_40", "qtrs_to_profitability",
     "eps_quarterly", "eps_yoy_pct",
-    "r40_score", "fundamentals_snapshot", "fundamentals_date",
+    "r40_score", "fundamentals_snapshot", "data",
 ]
 
 # ---------------------------------------------------------------------------
@@ -937,7 +971,7 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
     if snapshot_parts:
         result["fundamentals_snapshot"] = " | ".join(snapshot_parts)
 
-    result["fundamentals_date"] = datetime.now().strftime("%Y-%m-%d")
+    result["data"] = datetime.now().strftime("%Y-%m-%d")
 
     return result
 
@@ -978,18 +1012,21 @@ def main():
     logger.info("Read %d rows from sheet (including headers)", len(all_rows))
 
     # ── Read sheet headers and build column mapping ─────────────────
-    # The sheet layout is managed manually. The script reads row 2
-    # headers and maps them to column keys — it never rewrites headers.
-    display_to_key = {}
-    for key, display in DISPLAY_NAMES.items():
-        display_to_key[display] = key
+    # The sheet now uses lowercase underscore column keys as headers.
+    # We also support legacy display-name headers via HEADER_ALIASES.
+    all_keys = set(DISPLAY_NAMES.keys())
 
     key_col = {}  # column_key → 0-based column index
     if len(all_rows) >= 2:
         for idx, header in enumerate(all_rows[1]):
             name = header.strip()
+            # Apply aliases first (maps legacy names → current keys)
             name = HEADER_ALIASES.get(name, name)
-            col_key = display_to_key.get(name)
+            # Check if the header matches a known column key directly
+            if name in all_keys:
+                col_key = name
+            else:
+                col_key = None
             if col_key and col_key not in key_col:
                 key_col[col_key] = idx
 
@@ -1005,10 +1042,10 @@ def main():
     ticker_col = key_col.get("ticker", 0)
     exchange_col = key_col.get("exchange")
     company_col = key_col.get("company", 1)
-    fund_date_col = key_col.get("fundamentals_date")
+    data_date_col = key_col.get("data")
 
     # Determine the max column index we need to pad to
-    pad_cols = [ticker_col, company_col, fund_date_col or 0]
+    pad_cols = [ticker_col, company_col, data_date_col or 0]
     if exchange_col is not None:
         pad_cols.append(exchange_col)
 
@@ -1031,8 +1068,8 @@ def main():
             exchange = "US"
 
         # Skip if data is recent unless --force
-        if not args.force and fund_date_col is not None:
-            fund_date_str = padded[fund_date_col].strip() if fund_date_col < len(padded) else ""
+        if not args.force and data_date_col is not None:
+            fund_date_str = padded[data_date_col].strip() if data_date_col < len(padded) else ""
             if fund_date_str:
                 try:
                     last_date = dateparser.parse(fund_date_str).date()

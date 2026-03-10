@@ -37,47 +37,56 @@ MAX_RETRIES = 2  # total attempts per ticker
 
 # Header names used to locate columns dynamically from row 2.
 # The script reads actual sheet headers rather than relying on hardcoded positions.
-HEADER_TICKER = "Ticker"
-HEADER_COMPANY = "Company"
-HEADER_SHORT_OUTLOOK = "Short Outlook"
-HEADER_OUTLOOK = "Outlook"
-HEADER_RISKS = "Key Risks"
-HEADER_ANALYZED = "AI"
+HEADER_TICKER = "ticker"
+HEADER_COMPANY = "company"
+HEADER_SHORT_OUTLOOK = "short_outlook"
+HEADER_OUTLOOK = "outlook"
+HEADER_RISKS = "risks"
+HEADER_ANALYZED = "ai_analysis_date"
 
-# Known aliases for headers (in case the sheet uses slightly different names)
+# Map legacy/alternative sheet headers → current lowercase underscore keys.
 HEADER_ALIASES = {
-    "Company Name":       "Company",
-    "Full Outlook":       "Outlook",
-    "Data As Of":         "Data",
-    "Fundamentals Date":  "Data",
-    "Analyzed":           "AI",
-    "AI Analyzed":        "AI",
+    "Ticker":               "ticker",
+    "Company":              "company",
+    "Company Name":         "company",
+    "Short Outlook":        "short_outlook",
+    "Outlook":              "outlook",
+    "Full Outlook":         "outlook",
+    "Key Risks":            "risks",
+    "AI":                   "ai_analysis_date",
+    "Analyzed":             "ai_analysis_date",
+    "AI Analyzed":          "ai_analysis_date",
+    "Data":                 "data",
+    "Data As Of":           "data",
+    "Fundamentals Date":    "data",
+    "fundamentals_date":    "data",
 }
 
 NULL_VALUE = "—"  # must match eodhd_updater.py
 
-# Financial column labels for prompt context (order doesn't matter for lookup)
+# Financial column labels for prompt context (order doesn't matter for lookup).
+# These are the lowercase underscore column keys used in the sheet.
 FINANCIAL_HEADERS = [
-    "R40 Score",
-    "Fundamentals Snapshot",
-    "Annual Revenue (5Y)",
-    "Quarterly Revenue",
-    "Rev Growth TTM %",
-    "Rev Growth QoQ %",
-    "Rev CAGR 3Y %",
-    "Rev Consistency Score",
-    "Gross Margin %",
-    "GM Trend (Qtly)",
-    "Operating Margin %",
-    "Net Margin %",
-    "Net Margin YoY Δ",
-    "FCF Margin %",
-    "Opex % of Revenue",
-    "S&M+R&D % of Revenue",
-    "Rule of 40",
-    "Qtrs to Profitability",
-    "EPS Qtrly",
-    "EPS YoY %",
+    "r40_score",
+    "fundamentals_snapshot",
+    "annual_revenue_5y",
+    "quarterly_revenue",
+    "rev_growth_ttm",
+    "rev_growth_qoq",
+    "rev_cagr_3y",
+    "rev_consistency",
+    "gross_margin_ttm",
+    "gross_margin_trend",
+    "operating_margin_ttm",
+    "net_margin_ttm",
+    "net_margin_yoy_delta",
+    "fcf_margin_ttm",
+    "opex_pct_revenue",
+    "sm_rd_pct_revenue",
+    "rule_of_40",
+    "qtrs_to_profitability",
+    "eps_quarterly",
+    "eps_yoy_pct",
 ]
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
