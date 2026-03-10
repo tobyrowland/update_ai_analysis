@@ -143,6 +143,7 @@ def main():
     source_headers = source_rows[0]
     src_ticker_col = find_column(source_headers, "ticker")
     src_company_col = find_column(source_headers, "company_name")
+    src_exchange_col = find_column(source_headers, "exchange")
 
     if src_ticker_col is None:
         logger.error("Could not find 'ticker' column in %s headers: %s",
@@ -152,19 +153,24 @@ def main():
         logger.error("Could not find 'company_name' column in %s headers: %s",
                       SOURCE_SHEET, source_headers)
         sys.exit(1)
+    if src_exchange_col is None:
+        logger.error("Could not find 'exchange' column in %s headers: %s",
+                      SOURCE_SHEET, source_headers)
+        sys.exit(1)
 
-    logger.info("Source '%s': ticker=col %d, company_name=col %d",
-                SOURCE_SHEET, src_ticker_col, src_company_col)
+    logger.info("Source '%s': ticker=col %d, company_name=col %d, exchange=col %d",
+                SOURCE_SHEET, src_ticker_col, src_company_col, src_exchange_col)
 
     # Extract source companies (data starts at row 2, index 1)
-    source_companies = {}  # ticker → company_name
+    source_companies = {}  # ticker → {company_name, exchange}
     for row in source_rows[1:]:
-        max_col = max(src_ticker_col, src_company_col)
+        max_col = max(src_ticker_col, src_company_col, src_exchange_col)
         padded = row + [""] * (max_col + 1 - len(row))
         ticker = padded[src_ticker_col].strip().upper()
         company = padded[src_company_col].strip()
+        exchange = padded[src_exchange_col].strip()
         if ticker:
-            source_companies[ticker] = company
+            source_companies[ticker] = {"company_name": company, "exchange": exchange}
 
     logger.info("Found %d companies in '%s'", len(source_companies), SOURCE_SHEET)
 
@@ -177,7 +183,8 @@ def main():
     # Headers in row 2 (index 1)
     target_headers = target_rows[1] if len(target_rows) >= 2 else target_rows[0]
     tgt_ticker_col = find_column(target_headers, "ticker")
-    tgt_company_col = find_column(target_headers, "company", "company name")
+    tgt_company_col = find_column(target_headers, "company_name", "company", "company name")
+    tgt_exchange_col = find_column(target_headers, "exchange")
 
     if tgt_ticker_col is None:
         logger.error("Could not find 'Ticker' column in %s headers: %s",
@@ -187,9 +194,13 @@ def main():
         logger.error("Could not find 'Company' / 'Company Name' column in %s headers: %s",
                       TARGET_SHEET, target_headers)
         sys.exit(1)
+    if tgt_exchange_col is None:
+        logger.error("Could not find 'Exchange' column in %s headers: %s",
+                      TARGET_SHEET, target_headers)
+        sys.exit(1)
 
-    logger.info("Target '%s': Ticker=col %d, Company=col %d",
-                TARGET_SHEET, tgt_ticker_col, tgt_company_col)
+    logger.info("Target '%s': Ticker=col %d, Company=col %d, Exchange=col %d",
+                TARGET_SHEET, tgt_ticker_col, tgt_company_col, tgt_exchange_col)
 
     # Extract existing tickers in AI Analysis
     existing_tickers = set()
@@ -203,8 +214,8 @@ def main():
 
     # --- Find new companies ---
     new_companies = {
-        ticker: name
-        for ticker, name in source_companies.items()
+        ticker: info
+        for ticker, info in source_companies.items()
         if ticker not in existing_tickers
     }
 
@@ -213,21 +224,22 @@ def main():
         return
 
     logger.info("Found %d new companies to add:", len(new_companies))
-    for ticker, name in sorted(new_companies.items()):
-        logger.info("  %s — %s", ticker, name)
+    for ticker, info in sorted(new_companies.items()):
+        logger.info("  %s — %s (%s)", ticker, info["company_name"], info["exchange"])
 
     if args.dry_run:
         logger.info("=== DRY RUN complete — no changes made ===")
         return
 
     # --- Append new rows to AI Analysis ---
-    # Build rows with ticker and company in the correct columns
+    # Build rows with ticker, company, and exchange in the correct columns
     num_cols = len(target_headers)
     append_rows = []
-    for ticker, name in sorted(new_companies.items()):
+    for ticker, info in sorted(new_companies.items()):
         new_row = [""] * num_cols
         new_row[tgt_ticker_col] = ticker
-        new_row[tgt_company_col] = name
+        new_row[tgt_company_col] = info["company_name"]
+        new_row[tgt_exchange_col] = info["exchange"]
         append_rows.append(new_row)
 
     # Append after the last row
@@ -240,6 +252,11 @@ def main():
     ).execute()
 
     logger.info("Appended %d new companies to '%s'", len(append_rows), TARGET_SHEET)
+
+    # Clear background colors on data rows (new rows may inherit header colors)
+    from eodhd_updater import clear_data_row_formatting
+    clear_data_row_formatting(service, logger)
+
     logger.info("=== Sync complete ===")
 
 
