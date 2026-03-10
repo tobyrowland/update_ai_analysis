@@ -512,28 +512,145 @@ def _resolve_exchange(exchange: str) -> str:
     return EXCHANGE_TO_EODHD.get(key, key)
 
 
-def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger,
-                            exchange: str = "US") -> dict | None:
-    """Fetch full fundamental data from EODHD for a ticker on the given exchange."""
-    eodhd_exchange = _resolve_exchange(exchange)
-    symbol = f"{ticker}.{eodhd_exchange}"
-    logger.info("Fetching fundamentals for %s (exchange: %s → %s)", ticker, exchange, eodhd_exchange)
+# Fallback exchange chains — when the primary exchange returns 404,
+# try these alternatives in order.  The idea is to cover cases where
+# the sheet lists a regional exchange but EODHD only has the ticker on
+# a major exchange (or vice-versa).
+EXCHANGE_FALLBACKS = {
+    # German regional exchanges → try XETRA, Frankfurt, then US
+    "MU":    ["XETRA", "F", "US"],
+    "STU":   ["XETRA", "F", "US"],
+    "BE":    ["XETRA", "F", "US"],
+    "DU":    ["XETRA", "F", "US"],
+    "HM":    ["XETRA", "F", "US"],
+    "HA":    ["XETRA", "F", "US"],
+    "XETRA": ["F", "US"],
+    "F":     ["XETRA", "US"],
+    # India — BSE symbols are often numeric; try NSE which uses names
+    "BSE":   ["NSE"],
+    "NSE":   ["BSE"],
+    # Japan
+    "TSE":   ["US"],
+    # UK
+    "LSE":   ["US"],
+    # Canada
+    "TO":    ["V", "US"],
+    "V":     ["TO", "US"],
+    # Hong Kong
+    "HK":    ["US"],
+    # Korea
+    "KO":    ["US"],
+    # Australia
+    "AU":    ["US"],
+}
+
+# Always append US as a last-ditch fallback (many international companies
+# have US-listed ADRs or cross-listings that carry fundamentals data).
+for _exc, _chain in EXCHANGE_FALLBACKS.items():
+    if "US" not in _chain:
+        _chain.append("US")
+
+
+def _try_fetch_one(ticker: str, exchange: str, api_key: str,
+                   timeout: int = 30) -> tuple[dict | None, int]:
+    """Attempt a single EODHD fundamentals fetch.
+
+    Returns (json_data, http_status).  json_data is None on any failure.
+    http_status is 0 for non-HTTP errors.
+    """
+    symbol = f"{ticker}.{exchange}"
     url = f"{EODHD_BASE_URL}/{symbol}"
     params = {"api_token": api_key, "fmt": "json"}
-
     try:
-        resp = requests.get(url, params=params, timeout=30)
+        resp = requests.get(url, params=params, timeout=timeout)
         resp.raise_for_status()
-        return resp.json()
+        return resp.json(), resp.status_code
     except requests.exceptions.HTTPError as exc:
-        if exc.response is not None and exc.response.status_code == 404:
-            logger.warning("Ticker %s not found on EODHD (404)", symbol)
-        else:
-            logger.warning("EODHD HTTP error for %s: %s", symbol, exc)
-        return None
+        status = exc.response.status_code if exc.response is not None else 0
+        return None, status
+    except Exception:
+        return None, 0
+
+
+def _search_eodhd(query: str, api_key: str, logger: logging.Logger) -> str | None:
+    """Use the EODHD search API to find the best exchange for a ticker.
+
+    Returns the EODHD exchange code (e.g. 'US') or None.
+    """
+    url = "https://eodhd.com/api/search/" + query
+    params = {"api_token": api_key, "fmt": "json", "limit": 5}
+    try:
+        resp = requests.get(url, params=params, timeout=15)
+        resp.raise_for_status()
+        results = resp.json()
+        if not results:
+            return None
+        # Prefer results whose Code matches the ticker exactly
+        for r in results:
+            if r.get("Code", "").upper() == query.upper():
+                ex = r.get("Exchange", "")
+                if ex:
+                    logger.info("Search API matched %s → %s.%s", query, r["Code"], ex)
+                    return ex
+        # Otherwise take the first result
+        ex = results[0].get("Exchange", "")
+        if ex:
+            logger.info("Search API best guess for %s → %s.%s",
+                        query, results[0].get("Code", "?"), ex)
+            return ex
     except Exception as exc:
-        logger.warning("EODHD request failed for %s: %s", symbol, exc)
+        logger.debug("EODHD search failed for '%s': %s", query, exc)
+    return None
+
+
+def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger,
+                            exchange: str = "US") -> dict | None:
+    """Fetch full fundamental data from EODHD for a ticker.
+
+    Tries the primary exchange first, then walks through
+    EXCHANGE_FALLBACKS, and finally falls back to the EODHD search API.
+    """
+    primary = _resolve_exchange(exchange)
+    logger.info("Fetching fundamentals for %s (exchange: %s → %s)", ticker, exchange, primary)
+
+    # 1. Try primary exchange
+    data, status = _try_fetch_one(ticker, primary, api_key)
+    if data is not None:
+        return data
+    if status not in (404, 0):
+        # Non-404 HTTP error (auth, rate-limit, server error) — don't retry
+        logger.warning("EODHD HTTP %d for %s.%s, not retrying", status, ticker, primary)
         return None
+
+    # 2. Try fallback exchanges
+    fallbacks = EXCHANGE_FALLBACKS.get(primary, [])
+    for alt in fallbacks:
+        if alt == primary:
+            continue
+        logger.info("  Trying fallback %s.%s", ticker, alt)
+        time.sleep(0.3)  # light rate-limit courtesy
+        data, status = _try_fetch_one(ticker, alt, api_key)
+        if data is not None:
+            logger.info("  Found %s on %s (fallback from %s)", ticker, alt, primary)
+            return data
+        if status not in (404, 0):
+            logger.warning("EODHD HTTP %d for %s.%s, stopping fallback chain",
+                           status, ticker, alt)
+            return None
+
+    # 3. Last resort: EODHD search API
+    logger.info("  All fallbacks exhausted for %s, trying search API", ticker)
+    search_exchange = _search_eodhd(ticker, api_key, logger)
+    if search_exchange and search_exchange != primary and search_exchange not in fallbacks:
+        time.sleep(0.3)
+        data, status = _try_fetch_one(ticker, search_exchange, api_key)
+        if data is not None:
+            logger.info("  Found %s on %s via search API", ticker, search_exchange)
+            return data
+
+    logger.warning("Could not find fundamentals for %s on any exchange "
+                   "(tried %s + %s + search)", ticker, primary, fallbacks)
+    return None
 
 
 # ---------------------------------------------------------------------------
