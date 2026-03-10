@@ -4,7 +4,7 @@ AI Analysis Updater for stock tracking spreadsheet.
 
 Reads the 'AI Analysis' sheet, identifies rows where description is blank,
 searches for recent news/earnings via SerpAPI, generates AI analysis using
-Claude, and writes results back to the sheet.
+Gemini, and writes results back to the sheet.
 
 Designed to run nightly via GitHub Actions at 02:00 UTC.
 """
@@ -12,15 +12,16 @@ Designed to run nightly via GitHub Actions at 02:00 UTC.
 import json
 import logging
 import os
+import subprocess
 import sys
+import tempfile
 import time
 from datetime import date
 from pathlib import Path
 
-import anthropic
-import gspread
 import requests
 from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -31,8 +32,10 @@ SPREADSHEET_ID = os.environ.get(
 )
 SHEET_NAME = "AI Analysis"
 SERPAPI_ENDPOINT = "https://serpapi.com/search"
-CLAUDE_MODEL = "claude-opus-4-5"
+GEMINI_MODEL = "gemini-2.5-flash"
 DELAY_BETWEEN_TICKERS = 1  # seconds
+MAX_RETRIES = 2
+RETRY_DELAY = 10
 
 # Column indices (0-based) matching the sheet structure
 COL_TICKER = 0       # A
@@ -77,15 +80,15 @@ def setup_logging() -> logging.Logger:
 
 
 # ---------------------------------------------------------------------------
-# Google Sheets helpers
+# Google Sheets helpers (using googleapiclient, matching existing pattern)
 # ---------------------------------------------------------------------------
 
 
-def get_gspread_client() -> gspread.Client:
-    """Create a gspread client from the service account credentials."""
-    sa_value = os.environ.get("GOOGLE_SERVICE_ACCOUNT", "")
+def get_sheets_service():
+    """Create a Google Sheets API service from the service account credentials."""
+    sa_value = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
     if not sa_value:
-        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT env var is not set")
+        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON env var is not set")
 
     if sa_value.strip().startswith("{"):
         info = json.loads(sa_value)
@@ -97,12 +100,22 @@ def get_gspread_client() -> gspread.Client:
             sa_value, scopes=SCOPES
         )
 
-    return gspread.authorize(creds)
+    return build("sheets", "v4", credentials=creds)
 
 
-def read_all_rows(worksheet: gspread.Worksheet) -> list[list[str]]:
-    """Return all rows from the worksheet."""
-    return worksheet.get_all_values()
+def read_all_rows(service) -> list[list[str]]:
+    """Return all rows from the AI Analysis sheet."""
+    result = (
+        service.spreadsheets()
+        .values()
+        .get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"'{SHEET_NAME}'!A1:AD",
+            valueRenderOption="FORMATTED_VALUE",
+        )
+        .execute()
+    )
+    return result.get("values", [])
 
 
 def _col_letter(idx: int) -> str:
@@ -117,18 +130,19 @@ def _col_letter(idx: int) -> str:
 
 
 def write_ticker_updates(
-    worksheet: gspread.Worksheet, row_number: int, values: dict[str, str]
+    service, row_number: int, values: dict[str, str]
 ) -> None:
     """Batch-write values for a single ticker row. values maps col_letter -> value."""
-    cells = []
+    data = []
     for col_letter, value in values.items():
         cell_ref = f"{col_letter}{row_number}"
-        cells.append({"range": f"'{SHEET_NAME}'!{cell_ref}", "values": [[value]]})
+        data.append({"range": f"'{SHEET_NAME}'!{cell_ref}", "values": [[value]]})
 
-    if cells:
-        worksheet.spreadsheet.values_batch_update(
-            body={"valueInputOption": "USER_ENTERED", "data": cells}
-        )
+    if data:
+        body = {"valueInputOption": "USER_ENTERED", "data": data}
+        service.spreadsheets().values().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID, body=body
+        ).execute()
 
 
 # ---------------------------------------------------------------------------
@@ -201,15 +215,12 @@ def gather_web_context(
 
 
 # ---------------------------------------------------------------------------
-# Claude AI call
+# Gemini AI call
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = (
-    "You are a concise financial analyst assistant. "
-    "Return ONLY valid JSON — no markdown, no backticks, no explanation."
-)
+PROMPT_TEMPLATE = """\
+You are a concise financial analyst assistant. Return ONLY valid JSON — no markdown, no backticks, no explanation.
 
-USER_PROMPT_TEMPLATE = """\
 Today's date is {today}.
 
 Search results:
@@ -254,64 +265,87 @@ Example: "🟡 Customer concentration risk and macro slowdown could pressure nea
 """
 
 
-def call_claude(
-    company: str, ticker: str, web_context: str, logger: logging.Logger
+def _call_gemini_subprocess(prompt: str, api_key: str, model: str, timeout: int = 90) -> str:
+    """Call Gemini via curl subprocess with a hard OS timeout."""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    payload = json.dumps({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json"},
+    })
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        f.write(payload)
+        payload_path = f.name
+    try:
+        result = subprocess.run(
+            ["curl", "-s", "-X", "POST", url,
+             "-H", "Content-Type: application/json",
+             "-d", f"@{payload_path}",
+             "--max-time", str(timeout)],
+            capture_output=True, text=True, timeout=timeout + 10,
+        )
+        return result.stdout
+    finally:
+        os.unlink(payload_path)
+
+
+def call_gemini(
+    company: str, ticker: str, web_context: str, api_key: str, logger: logging.Logger
 ) -> dict | None:
-    """Call Claude API and return parsed JSON result, or None on failure."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        logger.error("ANTHROPIC_API_KEY env var is not set")
-        return None
-
-    client = anthropic.Anthropic(api_key=api_key)
-
-    user_prompt = USER_PROMPT_TEMPLATE.format(
+    """Call Gemini API and return parsed JSON result, or None on failure."""
+    prompt = PROMPT_TEMPLATE.format(
         today=date.today().isoformat(),
         web_context=web_context if web_context else "(No search results available)",
         company_name=company,
         ticker=ticker,
     )
 
-    try:
-        message = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=1024,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-    except Exception as exc:
-        logger.error("Claude API call failed for %s: %s", ticker, exc)
-        return None
+    for attempt in range(MAX_RETRIES):
+        try:
+            raw = _call_gemini_subprocess(prompt, api_key, GEMINI_MODEL)
+            data = json.loads(raw)
 
-    # Extract text from response
-    text = ""
-    for block in message.content:
-        if block.type == "text":
-            text += block.text
+            if "error" in data:
+                raise Exception(f"{data['error'].get('code')} {data['error'].get('message', '')}")
 
-    text = text.strip()
+            text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
 
-    # Strip markdown fences if present
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-    if text.endswith("```"):
-        text = text[:-3].strip()
-    if text.startswith("json"):
-        text = text[4:].strip()
+            # Strip markdown fences if present
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+            if text.endswith("```"):
+                text = text[:-3].strip()
+            if text.startswith("json"):
+                text = text[4:].strip()
 
-    try:
-        result = json.loads(text)
-    except json.JSONDecodeError:
-        logger.error("Claude returned invalid JSON for %s: %s", ticker, text[:300])
-        return None
+            try:
+                result = json.loads(text)
+            except json.JSONDecodeError:
+                logger.error("Gemini returned invalid JSON for %s: %s", ticker, text[:300])
+                return None
 
-    required_keys = {"description", "short_outlook", "full_outlook", "key_risks"}
-    missing = required_keys - set(result.keys())
-    if missing:
-        logger.error("Claude response missing keys for %s: %s", ticker, missing)
-        return None
+            required_keys = {"description", "short_outlook", "full_outlook", "key_risks"}
+            missing = required_keys - set(result.keys())
+            if missing:
+                logger.error("Gemini response missing keys for %s: %s", ticker, missing)
+                return None
 
-    return result
+            return result
+
+        except Exception as exc:
+            exc_str = str(exc)
+            if attempt < MAX_RETRIES - 1:
+                delay = RETRY_DELAY if "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str else 5
+                logger.warning(
+                    "Gemini call failed (attempt %d/%d), retrying in %ds: %s",
+                    attempt + 1, MAX_RETRIES, delay, exc,
+                )
+                time.sleep(delay)
+            else:
+                logger.error("Gemini call failed (attempt %d/%d), skipping: %s",
+                             attempt + 1, MAX_RETRIES, exc)
+                return None
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -325,21 +359,18 @@ def main():
     start_time = time.time()
 
     # Validate required keys
-    serp_api_key = os.environ.get("SERP_API_KEY", "")
-    if not serp_api_key:
-        logger.warning("SERP_API_KEY not set — will skip web searches")
-
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not anthropic_key:
-        logger.error("ANTHROPIC_API_KEY env var is not set")
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    if not gemini_key:
+        logger.error("GEMINI_API_KEY env var is not set")
         sys.exit(1)
 
-    # Connect to Google Sheets
-    client = get_gspread_client()
-    spreadsheet = client.open_by_key(SPREADSHEET_ID)
-    worksheet = spreadsheet.worksheet(SHEET_NAME)
+    serp_api_key = os.environ.get("SERPAPI_API_KEY", "")
+    if not serp_api_key:
+        logger.warning("SERPAPI_API_KEY not set — will skip web searches")
 
-    all_rows = read_all_rows(worksheet)
+    # Connect to Google Sheets
+    service = get_sheets_service()
+    all_rows = read_all_rows(service)
     logger.info("Read %d rows from sheet (including %d header rows)", len(all_rows), HEADER_ROWS)
 
     # Data starts after header rows
@@ -374,8 +405,8 @@ def main():
             if serp_api_key:
                 web_context = gather_web_context(company, ticker, serp_api_key, logger)
 
-            # Step 2: Claude analysis
-            result = call_claude(company, ticker, web_context, logger)
+            # Step 2: Gemini analysis
+            result = call_gemini(company, ticker, web_context, gemini_key, logger)
             if result is None:
                 failed += 1
                 continue
@@ -390,7 +421,7 @@ def main():
                 _col_letter(COL_AI_DATE): today_str,
             }
 
-            write_ticker_updates(worksheet, row_number, values)
+            write_ticker_updates(service, row_number, values)
             logger.info("Successfully updated %s", ticker)
             succeeded += 1
 
