@@ -597,43 +597,59 @@ def _try_fetch_one(ticker: str, exchange: str, api_key: str,
         return None, 0
 
 
-def _search_eodhd(query: str, api_key: str, logger: logging.Logger) -> str | None:
-    """Use the EODHD search API to find the best exchange for a ticker.
+def _search_eodhd(query: str, api_key: str, logger: logging.Logger,
+                  original_ticker: str = "") -> tuple[str, str] | None:
+    """Use the EODHD search API to find the best (ticker, exchange) for a query.
 
-    Returns the EODHD exchange code (e.g. 'US') or None.
+    *query* can be a ticker code or a company name.
+    Returns (ticker_code, exchange_code) or None.
     """
     url = "https://eodhd.com/api/search/" + query
-    params = {"api_token": api_key, "fmt": "json", "limit": 5}
+    params = {"api_token": api_key, "fmt": "json", "limit": 10}
     try:
         resp = requests.get(url, params=params, timeout=15)
         resp.raise_for_status()
         results = resp.json()
         if not results:
             return None
-        # Prefer results whose Code matches the ticker exactly
+        # Prefer results whose Code matches the original ticker exactly
+        check_code = original_ticker.upper() or query.upper()
         for r in results:
-            if r.get("Code", "").upper() == query.upper():
+            if r.get("Code", "").upper() == check_code:
                 ex = r.get("Exchange", "")
                 if ex:
-                    logger.info("Search API matched %s → %s.%s", query, r["Code"], ex)
-                    return ex
-        # Otherwise take the first result
-        ex = results[0].get("Exchange", "")
-        if ex:
-            logger.info("Search API best guess for %s → %s.%s",
-                        query, results[0].get("Code", "?"), ex)
-            return ex
+                    logger.info("Search API exact match %s → %s.%s",
+                                query, r["Code"], ex)
+                    return (r["Code"], ex)
+        # Otherwise take the first result that has fundamentals-friendly
+        # exchange (prefer US, then major exchanges)
+        preferred = ["US", "LSE", "NSE", "XETRA", "TO", "AS", "PA"]
+        for pref in preferred:
+            for r in results:
+                if r.get("Exchange", "") == pref:
+                    logger.info("Search API preferred match %s → %s.%s",
+                                query, r["Code"], r["Exchange"])
+                    return (r["Code"], r["Exchange"])
+        # Fall back to first result
+        r = results[0]
+        ex = r.get("Exchange", "")
+        code = r.get("Code", "")
+        if ex and code:
+            logger.info("Search API best guess for %s → %s.%s", query, code, ex)
+            return (code, ex)
     except Exception as exc:
         logger.debug("EODHD search failed for '%s': %s", query, exc)
     return None
 
 
 def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger,
-                            exchange: str = "US") -> dict | None:
+                            exchange: str = "US",
+                            company: str = "") -> dict | None:
     """Fetch full fundamental data from EODHD for a ticker.
 
     Tries the primary exchange first, then walks through
-    EXCHANGE_FALLBACKS, and finally falls back to the EODHD search API.
+    EXCHANGE_FALLBACKS, and finally falls back to the EODHD search API
+    (searching by both ticker code and company name).
     """
     primary = _resolve_exchange(exchange)
     logger.info("Fetching fundamentals for %s (exchange: %s → %s)", ticker, exchange, primary)
@@ -641,6 +657,7 @@ def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger,
     # Retryable status codes: 404 (not found), 0 (network error),
     # -1 (200 OK but no usable financial data)
     RETRYABLE = (404, 0, -1)
+    tried = {primary}
 
     # 1. Try primary exchange
     data, status = _try_fetch_one(ticker, primary, api_key)
@@ -652,13 +669,14 @@ def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger,
         logger.warning("EODHD HTTP %d for %s.%s, not retrying", status, ticker, primary)
         return None
 
-    # 2. Try fallback exchanges
+    # 2. Try fallback exchanges (same ticker code, different exchange)
     fallbacks = EXCHANGE_FALLBACKS.get(primary, [])
     for alt in fallbacks:
-        if alt == primary:
+        if alt in tried:
             continue
+        tried.add(alt)
         logger.info("  Trying fallback %s.%s", ticker, alt)
-        time.sleep(0.3)  # light rate-limit courtesy
+        time.sleep(0.3)
         data, status = _try_fetch_one(ticker, alt, api_key)
         if data is not None:
             logger.info("  Found %s on %s (fallback from %s)", ticker, alt, primary)
@@ -668,18 +686,40 @@ def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger,
                            status, ticker, alt)
             return None
 
-    # 3. Last resort: EODHD search API
+    # 3. Search API — try by ticker code first
     logger.info("  All fallbacks exhausted for %s, trying search API", ticker)
-    search_exchange = _search_eodhd(ticker, api_key, logger)
-    if search_exchange and search_exchange != primary and search_exchange not in fallbacks:
+    result = _search_eodhd(ticker, api_key, logger, original_ticker=ticker)
+    if result:
+        search_ticker, search_exchange = result
+        if search_exchange not in tried or search_ticker.upper() != ticker.upper():
+            time.sleep(0.3)
+            data, status = _try_fetch_one(search_ticker, search_exchange, api_key)
+            if data is not None:
+                logger.info("  Found %s.%s via search (ticker query)",
+                            search_ticker, search_exchange)
+                return data
+            tried.add(search_exchange)
+
+    # 4. Search API — try by company name (handles cases like
+    #    TSE code 7974 → US ADR "NTDOY" for Nintendo)
+    if company:
+        # Use first few words to avoid overly specific queries
+        search_name = " ".join(company.split()[:3])
+        logger.info("  Searching by company name: '%s'", search_name)
         time.sleep(0.3)
-        data, status = _try_fetch_one(ticker, search_exchange, api_key)
-        if data is not None:
-            logger.info("  Found %s on %s via search API", ticker, search_exchange)
-            return data
+        result = _search_eodhd(search_name, api_key, logger, original_ticker=ticker)
+        if result:
+            search_ticker, search_exchange = result
+            if search_exchange not in tried or search_ticker.upper() != ticker.upper():
+                time.sleep(0.3)
+                data, status = _try_fetch_one(search_ticker, search_exchange, api_key)
+                if data is not None:
+                    logger.info("  Found %s.%s via company name search '%s'",
+                                search_ticker, search_exchange, search_name)
+                    return data
 
     logger.warning("Could not find fundamentals for %s on any exchange "
-                   "(tried %s + %s + search)", ticker, primary, fallbacks)
+                   "(tried %s + search)", ticker, tried)
     return None
 
 
@@ -727,12 +767,13 @@ def _sorted_entries(section: dict) -> list[tuple[str, dict]]:
 
 
 def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
-                     exchange: str = "US") -> dict | None:
+                     exchange: str = "US", company: str = "") -> dict | None:
     """Fetch EODHD fundamentals and compute all financial metrics.
 
     Returns a dict keyed by EODHD_COLUMNS column keys, or None on failure.
     """
-    raw = _fetch_fundamentals_raw(ticker, api_key, logger, exchange=exchange)
+    raw = _fetch_fundamentals_raw(ticker, api_key, logger, exchange=exchange,
+                                  company=company)
     if raw is None:
         return None
 
@@ -1268,7 +1309,8 @@ def main():
 
     for idx, (row_number, ticker, company, exchange, existing_row) in enumerate(tickers_to_process):
         try:
-            eodhd_data = fetch_eodhd_data(ticker, eodhd_key, logger, exchange=exchange)
+            eodhd_data = fetch_eodhd_data(ticker, eodhd_key, logger,
+                                            exchange=exchange, company=company)
             if eodhd_data is None:
                 errors += 1
                 continue
