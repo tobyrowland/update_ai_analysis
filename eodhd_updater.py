@@ -503,6 +503,9 @@ EXCHANGE_TO_EODHD = {
     "JSE":      "JSE",
     "TADAWUL":  "SR",
     "SAU":      "SR",
+    "NSENG":    "NSENG",   # Nigerian Stock Exchange (via EODHD code)
+    "NGS":      "NSENG",
+    "NGSE":     "NSENG",
 }
 
 
@@ -542,6 +545,8 @@ EXCHANGE_FALLBACKS = {
     "KO":    ["US"],
     # Australia
     "AU":    ["US"],
+    # Nigeria
+    "NSENG": ["LSE", "US"],
 }
 
 # Always append US as a last-ditch fallback (many international companies
@@ -551,12 +556,29 @@ for _exc, _chain in EXCHANGE_FALLBACKS.items():
         _chain.append("US")
 
 
+def _has_financials(data: dict) -> bool:
+    """Check whether an EODHD response contains usable financial data.
+
+    Some tickers return 200 OK but have empty Financials / Earnings
+    sections, which produces all-None metrics.  We consider the data
+    usable if there is at least one yearly or quarterly income statement
+    entry, or at least one earnings history entry.
+    """
+    financials = data.get("Financials") or {}
+    income = financials.get("Income_Statement") or {}
+    yearly = income.get("yearly") or {}
+    quarterly = income.get("quarterly") or {}
+    earnings = (data.get("Earnings") or {}).get("History") or {}
+    return bool(yearly or quarterly or earnings)
+
+
 def _try_fetch_one(ticker: str, exchange: str, api_key: str,
                    timeout: int = 30) -> tuple[dict | None, int]:
     """Attempt a single EODHD fundamentals fetch.
 
-    Returns (json_data, http_status).  json_data is None on any failure.
-    http_status is 0 for non-HTTP errors.
+    Returns (json_data, http_status).  json_data is None on any failure
+    or if the response lacks usable financial data.
+    http_status is 0 for non-HTTP errors, -1 if fetched OK but empty.
     """
     symbol = f"{ticker}.{exchange}"
     url = f"{EODHD_BASE_URL}/{symbol}"
@@ -564,7 +586,10 @@ def _try_fetch_one(ticker: str, exchange: str, api_key: str,
     try:
         resp = requests.get(url, params=params, timeout=timeout)
         resp.raise_for_status()
-        return resp.json(), resp.status_code
+        data = resp.json()
+        if not _has_financials(data):
+            return None, -1  # 200 OK but no usable data
+        return data, resp.status_code
     except requests.exceptions.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else 0
         return None, status
@@ -613,12 +638,17 @@ def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger,
     primary = _resolve_exchange(exchange)
     logger.info("Fetching fundamentals for %s (exchange: %s → %s)", ticker, exchange, primary)
 
+    # Retryable status codes: 404 (not found), 0 (network error),
+    # -1 (200 OK but no usable financial data)
+    RETRYABLE = (404, 0, -1)
+
     # 1. Try primary exchange
     data, status = _try_fetch_one(ticker, primary, api_key)
     if data is not None:
         return data
-    if status not in (404, 0):
-        # Non-404 HTTP error (auth, rate-limit, server error) — don't retry
+    if status == -1:
+        logger.info("  %s.%s returned data but no financials — trying fallbacks", ticker, primary)
+    if status not in RETRYABLE:
         logger.warning("EODHD HTTP %d for %s.%s, not retrying", status, ticker, primary)
         return None
 
@@ -633,7 +663,7 @@ def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger,
         if data is not None:
             logger.info("  Found %s on %s (fallback from %s)", ticker, alt, primary)
             return data
-        if status not in (404, 0):
+        if status not in RETRYABLE:
             logger.warning("EODHD HTTP %d for %s.%s, stopping fallback chain",
                            status, ticker, alt)
             return None
