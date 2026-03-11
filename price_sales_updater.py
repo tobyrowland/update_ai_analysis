@@ -450,7 +450,9 @@ def fetch_weekly_prices(ticker: str, exchange: str, from_date: str,
         logger=logger,
     )
     if data and isinstance(data, list) and len(data) > 0:
+        logger.info("Got %d weekly prices for %s (%s to %s)", len(data), symbol, from_date, to_date)
         return data
+    logger.info("No weekly prices for %s (got %s)", symbol, type(data).__name__)
 
     # Try fallbacks
     fallbacks = EXCHANGE_FALLBACKS.get(eodhd_exchange, ["US"])
@@ -598,19 +600,27 @@ def compute_ps_for_ticker(
             ticker, exchange, backfill_from_str, last_friday_str, logger
         )
 
-        if weekly_prices and shares and shares > 0:
-            # Compute historical P/S using weekly close * shares / revenue_ttm
-            # Note: revenue_ttm is current (not historical), so this is approximate
-            for day in weekly_prices[-52:]:
-                close = _safe_float(day.get("adjusted_close") or day.get("close"))
-                if not close or close <= 0:
-                    continue
-                ps_val = round((close * shares) / revenue_ttm, 2)
-                if ps_val > 0:
-                    new_history.append([day["date"], ps_val])
+        if weekly_prices and len(weekly_prices) > 1:
+            # Use price-ratio method: ps_week = ps_current * (week_close / latest_close)
+            # This is equivalent to (price * shares) / revenue but doesn't need shares
+            latest_close = _safe_float(
+                weekly_prices[-1].get("adjusted_close")
+                or weekly_prices[-1].get("close")
+            )
+            if latest_close and latest_close > 0:
+                for day in weekly_prices[-52:]:
+                    close = _safe_float(day.get("adjusted_close") or day.get("close"))
+                    if not close or close <= 0:
+                        continue
+                    ps_val = round(ps_current * (close / latest_close), 2)
+                    if ps_val > 0:
+                        new_history.append([day["date"], ps_val])
+                logger.info("%s: backfilled %d weekly data points", ticker, len(new_history))
+            else:
+                logger.info("%s: latest close invalid, using current P/S only", ticker)
         else:
-            logger.info("%s: no weekly prices for backfill, using current P/S only",
-                        ticker)
+            logger.info("%s: no weekly prices returned (%s), using current P/S only",
+                        ticker, "None" if weekly_prices is None else f"{len(weekly_prices)} pts")
 
         # Always ensure we have at least the current data point
         if not new_history or new_history[-1][0] != last_friday_str:
