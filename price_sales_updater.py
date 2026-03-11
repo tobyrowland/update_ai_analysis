@@ -45,8 +45,8 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 # Price-Sales sheet column order (matches header row)
 PS_COLUMNS = [
-    "ticker", "company", "ps_current", "ps_52w_high", "ps_52w_low",
-    "ps_12m_median", "ps_ath", "pct_of_ath", "ps_history_json", "last_updated",
+    "ticker", "company_name", "ps_now", "52w_high", "52w_low",
+    "12m_median", "ath", "%_of_ath", "history_json", "last_updated",
     "first_recorded",
 ]
 
@@ -679,7 +679,7 @@ def compute_ps_for_ticker(
     else:
         # Update: parse existing history, append new data point
         try:
-            existing_history = json.loads(existing.get("ps_history_json", "[]"))
+            existing_history = json.loads(existing.get("history_json", "[]"))
         except (json.JSONDecodeError, TypeError):
             existing_history = []
 
@@ -702,7 +702,7 @@ def compute_ps_for_ticker(
     # ATH: sticky — never goes down
     prev_ath = 0
     if existing:
-        prev_ath = _safe_float(existing.get("ps_ath")) or 0
+        prev_ath = _safe_float(existing.get("ath")) or 0
     ps_ath = round(max(prev_ath, ps_current, ps_52w_high), 2)
     pct_of_ath = round(ps_current / ps_ath, 2) if ps_ath > 0 else 0
 
@@ -720,14 +720,14 @@ def compute_ps_for_ticker(
 
     return {
         "ticker": ticker,
-        "company": company_name,
-        "ps_current": ps_current,
-        "ps_ath": ps_ath,
-        "ps_52w_high": ps_52w_high,
-        "ps_52w_low": ps_52w_low,
-        "ps_12m_median": ps_12m_median,
-        "pct_of_ath": pct_of_ath,
-        "ps_history_json": json.dumps(new_history),
+        "company_name": company_name,
+        "ps_now": ps_current,
+        "52w_high": ps_52w_high,
+        "52w_low": ps_52w_low,
+        "12m_median": ps_12m_median,
+        "ath": ps_ath,
+        "%_of_ath": pct_of_ath,
+        "history_json": json.dumps(new_history),
         "last_updated": last_friday_str,
         "first_recorded": first_recorded,
         "mode": mode,
