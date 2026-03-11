@@ -45,7 +45,7 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 # Price-Sales sheet column order (matches header row)
 PS_COLUMNS = [
-    "ticker", "ps_current", "ps_ath", "ps_52w_high", "ps_52w_low",
+    "ticker", "company", "ps_current", "ps_ath", "ps_52w_high", "ps_52w_low",
     "ps_12m_median", "pct_of_ath", "ps_history_json", "last_updated",
     "first_recorded",
 ]
@@ -194,7 +194,7 @@ def read_ps_sheet(service, logger) -> dict[str, dict]:
         .values()
         .get(
             spreadsheetId=SPREADSHEET_ID,
-            range=f"'{PS_SHEET}'!A1:J",
+            range=f"'{PS_SHEET}'!A1:K",
             valueRenderOption="FORMATTED_VALUE",
         )
         .execute()
@@ -569,6 +569,10 @@ def compute_ps_for_ticker(
         logger.warning("SKIP %s: no fundamentals data", ticker)
         return None
 
+    # Extract company name
+    general = fundamentals.get("General", {})
+    company_name = general.get("Name", "")
+
     revenue_ttm = get_revenue_ttm(fundamentals)
     if not revenue_ttm or revenue_ttm <= 0:
         logger.warning("SKIP %s: revenue_ttm=%s", ticker, revenue_ttm)
@@ -656,6 +660,7 @@ def compute_ps_for_ticker(
 
     return {
         "ticker": ticker,
+        "company": company_name,
         "ps_current": ps_current,
         "ps_ath": ps_ath,
         "ps_52w_high": ps_52w_high,
