@@ -45,8 +45,8 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 # Price-Sales sheet column order (matches header row)
 PS_COLUMNS = [
-    "ticker", "company", "ps_current", "ps_ath", "ps_52w_high", "ps_52w_low",
-    "ps_12m_median", "pct_of_ath", "ps_history_json", "last_updated",
+    "ticker", "company", "ps_current", "ps_52w_high", "ps_52w_low",
+    "ps_12m_median", "ps_ath", "pct_of_ath", "ps_history_json", "last_updated",
     "first_recorded",
 ]
 
