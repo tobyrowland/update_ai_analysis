@@ -434,41 +434,95 @@ def fetch_fundamentals(ticker: str, exchange: str, logger) -> dict | None:
     return None
 
 
-def fetch_weekly_prices(ticker: str, exchange: str, from_date: str,
-                        to_date: str, logger) -> list | None:
-    """Fetch weekly end-of-day prices from EODHD for backfill.
+# Yahoo Finance ticker suffix mapping (for historical prices)
+YAHOO_SUFFIX = {
+    "US": "", "NSE": ".NS", "BSE": ".BO",
+    "XETRA": ".DE", "F": ".F", "MU": ".MU", "STU": ".SG",
+    "BE": ".BE", "DU": ".DU", "HM": ".HM", "HA": ".HA",
+    "PA": ".PA", "AS": ".AS", "SW": ".SW", "MI": ".MI", "MC": ".MC",
+    "VI": ".VI",
+    "LSE": ".L", "HK": ".HK", "KO": ".KS", "TW": ".TW",
+    "SG": ".SI", "AU": ".AX", "NZ": ".NZ", "KL": ".KL", "AE": ".AE",
+    "TO": ".TO", "V": ".V", "SA": ".SA", "MX": ".MX",
+    "TSE": ".T", "JSE": ".JO", "SR": ".SR",
+    "NSENG": ".LG",
+}
 
-    Returns list of {date, close} dicts sorted oldest-first, or None.
+
+def fetch_weekly_prices(ticker: str, exchange: str, logger) -> list | None:
+    """Fetch ~52 weeks of weekly closing prices from Yahoo Finance.
+
+    Returns list of {"date": "YYYY-MM-DD", "close": float} dicts, or None.
     """
     eodhd_exchange = _resolve_exchange(exchange)
-    symbol = f"{ticker}.{eodhd_exchange}"
+    suffix = YAHOO_SUFFIX.get(eodhd_exchange, "")
+    yahoo_ticker = ticker + suffix
 
-    time.sleep(DELAY_BETWEEN_CALLS)
-    data = eodhd_get(
-        f"eod/{symbol}",
-        params={"from": from_date, "to": to_date, "period": "w", "order": "a"},
-        logger=logger,
-    )
-    if data and isinstance(data, list) and len(data) > 0:
-        logger.info("Got %d weekly prices for %s (%s to %s)", len(data), symbol, from_date, to_date)
-        return data
-    logger.info("No weekly prices for %s (got %s)", symbol, type(data).__name__)
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_ticker}"
+    params = {"range": "1y", "interval": "1wk"}
+    headers = {"User-Agent": "Mozilla/5.0"}
 
-    # Try fallbacks
-    fallbacks = EXCHANGE_FALLBACKS.get(eodhd_exchange, ["US"])
-    for fb_exchange in fallbacks:
-        if fb_exchange == eodhd_exchange:
-            continue
-        fb_symbol = f"{ticker}.{fb_exchange}"
-        logger.info("Retrying eod prices: %s → %s", symbol, fb_symbol)
-        time.sleep(DELAY_BETWEEN_CALLS)
-        data = eodhd_get(
-            f"eod/{fb_symbol}",
-            params={"from": from_date, "to": to_date, "period": "w", "order": "a"},
-            logger=logger,
+    try:
+        resp = requests.get(url, params=params, headers=headers, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        result = data.get("chart", {}).get("result", [])
+        if not result:
+            logger.warning("Yahoo Finance: no result for %s", yahoo_ticker)
+            return None
+
+        timestamps = result[0].get("timestamp", [])
+        adj_closes = (
+            result[0].get("indicators", {})
+            .get("adjclose", [{}])[0]
+            .get("adjclose", [])
         )
-        if data and isinstance(data, list) and len(data) > 0:
-            return data
+        if not timestamps or not adj_closes:
+            logger.warning("Yahoo Finance: no price data for %s", yahoo_ticker)
+            return None
+
+        prices = []
+        for ts, close in zip(timestamps, adj_closes):
+            if close is None:
+                continue
+            dt = datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+            prices.append({"date": dt, "close": close})
+
+        logger.info("Yahoo Finance: got %d weekly prices for %s", len(prices), yahoo_ticker)
+        return prices if prices else None
+
+    except Exception as e:
+        logger.warning("Yahoo Finance failed for %s: %s", yahoo_ticker, e)
+
+    # Fallback: try bare ticker (for US-listed ADRs)
+    if suffix:
+        try:
+            resp = requests.get(
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}",
+                params=params, headers=headers, timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            result = data.get("chart", {}).get("result", [])
+            if result:
+                timestamps = result[0].get("timestamp", [])
+                adj_closes = (
+                    result[0].get("indicators", {})
+                    .get("adjclose", [{}])[0]
+                    .get("adjclose", [])
+                )
+                prices = []
+                for ts, close in zip(timestamps, adj_closes):
+                    if close is None:
+                        continue
+                    dt = datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+                    prices.append({"date": dt, "close": close})
+                if prices:
+                    logger.info("Yahoo Finance: got %d weekly prices for %s (bare fallback)",
+                                len(prices), ticker)
+                    return prices
+        except Exception as e:
+            logger.warning("Yahoo Finance bare fallback failed for %s: %s", ticker, e)
 
     return None
 
@@ -581,7 +635,6 @@ def compute_ps_for_ticker(
         return None
 
     market_cap = get_market_cap(fundamentals)
-    shares = get_shares_outstanding(fundamentals)
 
     # Current P/S from fundamentals
     if market_cap and market_cap > 0:
@@ -594,11 +647,8 @@ def compute_ps_for_ticker(
     new_history = []
 
     if mode == "backfill":
-        # Fetch weekly prices for backfill
-        backfill_from_str = backfill_from.isoformat()
-        weekly_prices = fetch_weekly_prices(
-            ticker, exchange, backfill_from_str, last_friday_str, logger
-        )
+        # Fetch weekly prices for backfill via Yahoo Finance
+        weekly_prices = fetch_weekly_prices(ticker, exchange, logger)
 
         if weekly_prices and len(weekly_prices) > 1:
             # Use price-ratio method: ps_week = ps_current * (week_close / latest_close)
