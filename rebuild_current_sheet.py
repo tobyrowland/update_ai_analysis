@@ -288,11 +288,29 @@ def read_old_current(service, logger) -> tuple[list[str], list[list[str]]]:
         logger.error("CURRENT sheet is empty!")
         return [], []
 
-    old_headers = [str(h).strip() for h in rows_formula[0]]
-    data_rows = rows_formula[1:]
+    # Detect whether the sheet has the new 2-row header structure.
+    # If row 1 contains category labels (IDENTITY, PRICE, etc.) rather than
+    # column names (ticker, exchange, etc.), the real headers are in row 2.
+    row1 = [str(h).strip() for h in rows_formula[0]]
+    category_labels = {label for _, label in CATEGORY_MERGES}
+    row1_non_empty = {v for v in row1 if v}
 
-    logger.info("Old CURRENT sheet: %d headers, %d data rows", len(old_headers), len(data_rows))
-    logger.info("Old headers: %s", old_headers)
+    if row1_non_empty and row1_non_empty.issubset(category_labels):
+        # New structure: row 1 = categories, row 2 = headers, row 3+ = data
+        if len(rows_formula) < 2:
+            logger.error("Sheet has category row but no header row")
+            return [], []
+        old_headers = [str(h).strip() for h in rows_formula[1]]
+        data_rows = rows_formula[2:]
+        logger.info("Detected new 2-row header structure (category + titles)")
+    else:
+        # Old structure: row 1 = headers, row 2+ = data
+        old_headers = row1
+        data_rows = rows_formula[1:]
+        logger.info("Detected old single-row header structure")
+
+    logger.info("CURRENT sheet: %d headers, %d data rows", len(old_headers), len(data_rows))
+    logger.info("Headers: %s", old_headers)
 
     return old_headers, data_rows
 
