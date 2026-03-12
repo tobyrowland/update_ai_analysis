@@ -12,6 +12,7 @@ Runs nightly via GitHub Actions. Writes directly to Google Sheets.
 
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -226,6 +227,21 @@ def round_int_0dp(val):
         return round(float(val))
     except (ValueError, TypeError):
         return None
+
+
+def sanitize_value(val):
+    """Sanitize a value for Google Sheets JSON payload (no NaN/Inf)."""
+    if val is None:
+        return ""
+    if isinstance(val, float):
+        if math.isnan(val) or math.isinf(val):
+            return ""
+    return val
+
+
+def sanitize_row(row: list) -> list:
+    """Sanitize all values in a row for safe JSON serialization."""
+    return [sanitize_value(v) for v in row]
 
 
 def clean_ticker(raw_name: str) -> str:
@@ -500,9 +516,19 @@ def load_price_sales(service, logger) -> dict:
         logger.warning("Price-Sales tab has fewer than 2 rows")
         return {}
 
-    # Row 1 = headers, Row 2+ = data
-    headers = [str(h).strip().lower() for h in rows[0]]
-    data_rows = rows[1:]
+    # Detect whether row 1 is category headers or column titles.
+    # If row 1 contains 'ticker' it's column titles (single-row header).
+    # Otherwise row 1 is category headers and row 2 has column titles.
+    row1_lower = [str(h).strip().lower() for h in rows[0]]
+    if "ticker" in row1_lower:
+        headers = row1_lower
+        data_rows = rows[1:]
+    elif len(rows) >= 3:
+        headers = [str(h).strip().lower() for h in rows[1]]
+        data_rows = rows[2:]
+    else:
+        logger.warning("Price-Sales tab: cannot find column titles")
+        return {}
 
     col_map = {h: i for i, h in enumerate(headers)}
 
@@ -899,7 +925,10 @@ def write_current(service, final_rows: list[list], logger):
         cat_row = [""] * NUM_COLS
         header_row = list(CURRENT_HEADERS)
 
-    all_rows = [cat_row, header_row] + final_rows
+    # Sanitize all rows to remove NaN/Inf before JSON serialization
+    sanitized_rows = [sanitize_row(r) for r in final_rows]
+
+    all_rows = [cat_row, header_row] + sanitized_rows
     end_col = _col_letter(NUM_COLS - 1)
     end_row = len(all_rows)
     write_range = f"'{CURRENT_SHEET}'!A1:{end_col}{end_row}"
@@ -907,7 +936,7 @@ def write_current(service, final_rows: list[list], logger):
     # Clear data area first (preserve headers by overwriting everything)
     service.spreadsheets().values().clear(
         spreadsheetId=SPREADSHEET_ID,
-        range=f"'{CURRENT_SHEET}'!A3:ZZ",
+        range=f"'{CURRENT_SHEET}'!A3:{end_col}",
     ).execute()
 
     # Write all rows
