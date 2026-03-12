@@ -38,7 +38,8 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 # Row 1: merged category cells  (merge_range, label)
 CATEGORY_MERGES = [
-    ("A1:E1", "IDENTITY"),
+    ("A1:C1", "IDENTITY"),
+    ("D1:E1", "IDENTITY"),
     ("F1:G1", "PRICE"),
     ("H1:J1", "VALUATION"),
     ("K1:L1", "REVENUE"),
