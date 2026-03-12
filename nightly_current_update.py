@@ -352,6 +352,10 @@ def _screen_markets(markets: list[str], spy_perf_y: float, logger) -> list[dict]
         logger.error("TradingView screener error: %s", e)
         return []
 
+    # Log unique sector values for debugging
+    unique_sectors = df["sector"].dropna().unique() if "sector" in df.columns else []
+    logger.info("Unique sectors in results (%d): %s", len(unique_sectors), sorted(unique_sectors))
+
     equities = []
     for _, row in df.iterrows():
         raw_name = str(row.get("name", ""))
