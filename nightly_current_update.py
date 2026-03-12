@@ -100,7 +100,7 @@ TV_SELECT_FIELDS = [
     "total_revenue_ttm", "total_revenue_yoy_growth_ttm",
     "gross_profit_margin_fy", "after_tax_margin",
     "free_cash_flow_margin_ttm", "Perf.Y",
-    "recommendation_mark", "recommend_all_count",
+    "recommendation_mark",
     "net_income_ttm",
 ]
 
@@ -348,12 +348,6 @@ def _screen_markets(markets: list[str], spy_perf_y: float, logger) -> list[dict]
             .get_scanner_data()
         )
         logger.info("Screener returned %d results (total available: %d)", len(df), total_count)
-        logger.info("DataFrame columns: %s", list(df.columns))
-        if len(df) > 0:
-            sample = df.iloc[0]
-            logger.info("Sample row — recommendation_mark: %s (type: %s), recommend_all_count: %s (type: %s)",
-                        sample.get("recommendation_mark"), type(sample.get("recommendation_mark")).__name__,
-                        sample.get("recommend_all_count"), type(sample.get("recommend_all_count")).__name__)
     except Exception as e:
         logger.error("TradingView screener error: %s", e)
         return []
@@ -385,28 +379,15 @@ def _screen_markets(markets: list[str], spy_perf_y: float, logger) -> list[dict]
         else:
             perf_52w_vs_spy = None
 
-        # Rating string: "1.8 (12)" — mark + analyst count
+        # Rating: recommendation_mark score (1-5 scale, 1 decimal place)
         rec_mark = row.get("recommendation_mark")
-        rec_count = row.get("recommend_all_count")
         try:
             mark_f = float(rec_mark) if rec_mark is not None else None
             if mark_f is not None and math.isnan(mark_f):
                 mark_f = None
         except (ValueError, TypeError):
             mark_f = None
-        try:
-            count_i = int(float(rec_count)) if rec_count is not None else None
-            if count_i is not None and count_i < 0:
-                count_i = None
-        except (ValueError, TypeError, OverflowError):
-            count_i = None
-
-        if mark_f is not None and count_i is not None:
-            rating = f"{mark_f:.1f} ({count_i})"
-        elif mark_f is not None:
-            rating = f"{mark_f:.1f}"
-        else:
-            rating = ""
+        rating = f"{mark_f:.1f}" if mark_f is not None else ""
 
         equities.append({
             "ticker": ticker,
