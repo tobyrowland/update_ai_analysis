@@ -107,8 +107,8 @@ TV_SELECT_FIELDS = [
 # Countries to exclude
 EXCLUDED_COUNTRIES = {"China", "Hong Kong", "Taiwan"}
 
-# Sectors to exclude (REITs / real estate)
-EXCLUDED_SECTORS = {"Real Estate", "REIT", "Real Estate Investment Trusts"}
+# Sectors to exclude
+EXCLUDED_SECTORS = {"Real Estate", "REIT", "Real Estate Investment Trusts", "Non-Energy Minerals"}
 
 # Google Finance exchange mapping
 GF_EXCHANGE_MAP = {
@@ -341,8 +341,8 @@ def _screen_markets(markets: list[str], spy_perf_y: float, logger) -> list[dict]
                 col("gross_profit_margin_fy") > 45,
                 col("total_revenue_yoy_growth_ttm").between(20, 500),
                 col("total_revenue_ttm") > 100_000_000,
-                col("price_revenue_ttm") < 15,
-                col("recommendation_mark") <= 2.5,
+                col("price_revenue_ttm") < 20,
+                col("recommendation_mark") <= 1.8,
             )
             .limit(5000)
             .get_scanner_data()
