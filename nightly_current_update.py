@@ -195,14 +195,14 @@ def _col_letter(idx: int) -> str:
     return result
 
 
-def read_sheet(service, sheet_name: str, value_render="FORMATTED_VALUE"):
-    """Read all rows from a sheet tab."""
+def read_sheet(service, sheet_name: str, end_col: str = "AF", value_render="FORMATTED_VALUE"):
+    """Read all rows from a sheet tab with a bounded column range."""
     result = (
         service.spreadsheets()
         .values()
         .get(
             spreadsheetId=SPREADSHEET_ID,
-            range=f"'{sheet_name}'!A1:ZZ",
+            range=f"'{sheet_name}'!A1:{end_col}",
             valueRenderOption=value_render,
         )
         .execute()
@@ -446,7 +446,7 @@ def _screen_markets(markets: list[str], spy_perf_y: float, logger) -> list[dict]
 def load_ai_analysis(service, logger) -> dict:
     """Load AI Analysis tab into a dict keyed by ticker."""
     logger.info("Loading AI Analysis tab...")
-    rows = read_sheet(service, AI_ANALYSIS_SHEET)
+    rows = read_sheet(service, AI_ANALYSIS_SHEET, end_col="AD")
     if len(rows) < 3:
         logger.warning("AI Analysis tab has fewer than 3 rows")
         return {}
@@ -497,7 +497,7 @@ def load_ai_analysis(service, logger) -> dict:
 def load_price_sales(service, logger) -> dict:
     """Load Price-Sales tab into a dict keyed by ticker."""
     logger.info("Loading Price-Sales tab...")
-    rows = read_sheet(service, PRICE_SALES_SHEET)
+    rows = read_sheet(service, PRICE_SALES_SHEET, end_col="K")
     if len(rows) < 2:
         logger.warning("Price-Sales tab has fewer than 2 rows")
         return {}
