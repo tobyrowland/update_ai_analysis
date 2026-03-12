@@ -702,6 +702,25 @@ def main():
     # Migrate data to new structure
     new_data_rows = migrate_data(old_headers, old_data, logger)
 
+    # Safety check: abort if migration produced mostly empty rows (data loss)
+    if new_data_rows:
+        non_formula_cols = [i for i in range(NUM_COLS) if NEW_HEADERS[i] not in FORMULA_COLS]
+        populated_rows = 0
+        for row in new_data_rows:
+            filled = sum(1 for i in non_formula_cols if i < len(row) and row[i])
+            if filled >= 3:  # at least ticker + 2 other fields
+                populated_rows += 1
+        if populated_rows == 0:
+            logger.error(
+                "ABORTING: migration produced %d rows but none have >= 3 "
+                "populated non-formula cells. The source data may already be "
+                "corrupted. Restore the sheet from version history and retry.",
+                len(new_data_rows),
+            )
+            sys.exit(1)
+        logger.info("Safety check passed: %d/%d rows have data",
+                     populated_rows, len(new_data_rows))
+
     if args.dry_run:
         logger.info("=== DRY RUN — not writing changes ===")
         logger.info("Would write %d data rows with %d columns", len(new_data_rows), NUM_COLS)
