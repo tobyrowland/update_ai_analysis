@@ -29,9 +29,7 @@ from tradingview_screener import Query, col
 # Configuration
 # ---------------------------------------------------------------------------
 
-SPREADSHEET_ID = os.environ.get(
-    "SPREADSHEET_ID", "1js3dUTJtKhY1dUcwzYUGBOdKDZXBurLtRGgcIV8msYk"
-)
+SPREADSHEET_ID = "1js3dUTJtKhY1dUcwzYUGBOdKDZXBurLtRGgcIV8msYk"
 CURRENT_SHEET = "CURRENT"
 AI_ANALYSIS_SHEET = "AI Analysis"
 PRICE_SALES_SHEET = "Price-Sales"
