@@ -38,7 +38,8 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 # Row 1: merged category cells  (merge_range, label)
 CATEGORY_MERGES = [
-    ("A1:E1", "IDENTITY"),
+    ("A1:C1", "IDENTITY"),
+    ("D1:E1", "IDENTITY"),
     ("F1:G1", "PRICE"),
     ("H1:J1", "VALUATION"),
     ("K1:L1", "REVENUE"),
@@ -287,11 +288,29 @@ def read_old_current(service, logger) -> tuple[list[str], list[list[str]]]:
         logger.error("CURRENT sheet is empty!")
         return [], []
 
-    old_headers = [str(h).strip() for h in rows_formula[0]]
-    data_rows = rows_formula[1:]
+    # Detect whether the sheet has the new 2-row header structure.
+    # If row 1 contains category labels (IDENTITY, PRICE, etc.) rather than
+    # column names (ticker, exchange, etc.), the real headers are in row 2.
+    row1 = [str(h).strip() for h in rows_formula[0]]
+    category_labels = {label for _, label in CATEGORY_MERGES}
+    row1_non_empty = {v for v in row1 if v}
 
-    logger.info("Old CURRENT sheet: %d headers, %d data rows", len(old_headers), len(data_rows))
-    logger.info("Old headers: %s", old_headers)
+    if row1_non_empty and row1_non_empty.issubset(category_labels):
+        # New structure: row 1 = categories, row 2 = headers, row 3+ = data
+        if len(rows_formula) < 2:
+            logger.error("Sheet has category row but no header row")
+            return [], []
+        old_headers = [str(h).strip() for h in rows_formula[1]]
+        data_rows = rows_formula[2:]
+        logger.info("Detected new 2-row header structure (category + titles)")
+    else:
+        # Old structure: row 1 = headers, row 2+ = data
+        old_headers = row1
+        data_rows = rows_formula[1:]
+        logger.info("Detected old single-row header structure")
+
+    logger.info("CURRENT sheet: %d headers, %d data rows", len(old_headers), len(data_rows))
+    logger.info("Headers: %s", old_headers)
 
     return old_headers, data_rows
 
@@ -418,23 +437,40 @@ def write_new_structure(service, new_data_rows: list[list[str]], logger):
     ).execute()
     logger.info("Wrote %d rows to %s", len(all_rows), write_range)
 
-    # --- Step 5: Apply formatting via batchUpdate ---
-    requests_list = []
-
-    # Ensure enough columns
-    requests_list.append({
-        "updateSheetProperties": {
-            "properties": {
-                "sheetId": sheet_id,
-                "gridProperties": {
-                    "columnCount": max(NUM_COLS, 32),
-                    "frozenRowCount": 2,
-                    "frozenColumnCount": 3,
+    # --- Step 5: Remove old merges and set column count (separate batch) ---
+    setup_requests = [
+        {
+            "unmergeCells": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": 0,
+                    "endRowIndex": 1,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": max(NUM_COLS, 32),
                 },
-            },
-            "fields": "gridProperties.columnCount,gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
-        }
-    })
+            }
+        },
+        {
+            "updateSheetProperties": {
+                "properties": {
+                    "sheetId": sheet_id,
+                    "gridProperties": {
+                        "columnCount": max(NUM_COLS, 32),
+                        "frozenRowCount": 2,
+                        "frozenColumnCount": 3,
+                    },
+                },
+                "fields": "gridProperties.columnCount,gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
+            }
+        },
+    ]
+    service.spreadsheets().batchUpdate(
+        spreadsheetId=SPREADSHEET_ID,
+        body={"requests": setup_requests},
+    ).execute()
+
+    # --- Step 6: Apply formatting via batchUpdate ---
+    requests_list = []
 
     # Merge cells for category headers (row 1)
     for merge_range, _ in CATEGORY_MERGES:
@@ -665,6 +701,25 @@ def main():
 
     # Migrate data to new structure
     new_data_rows = migrate_data(old_headers, old_data, logger)
+
+    # Safety check: abort if migration produced mostly empty rows (data loss)
+    if new_data_rows:
+        non_formula_cols = [i for i in range(NUM_COLS) if NEW_HEADERS[i] not in FORMULA_COLS]
+        populated_rows = 0
+        for row in new_data_rows:
+            filled = sum(1 for i in non_formula_cols if i < len(row) and row[i])
+            if filled >= 3:  # at least ticker + 2 other fields
+                populated_rows += 1
+        if populated_rows == 0:
+            logger.error(
+                "ABORTING: migration produced %d rows but none have >= 3 "
+                "populated non-formula cells. The source data may already be "
+                "corrupted. Restore the sheet from version history and retry.",
+                len(new_data_rows),
+            )
+            sys.exit(1)
+        logger.info("Safety check passed: %d/%d rows have data",
+                     populated_rows, len(new_data_rows))
 
     if args.dry_run:
         logger.info("=== DRY RUN — not writing changes ===")
