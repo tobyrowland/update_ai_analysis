@@ -31,8 +31,8 @@ from tradingview_screener import Query, col
 # ---------------------------------------------------------------------------
 
 SPREADSHEET_ID = "1js3dUTJtKhY1dUcwzYUGBOdKDZXBurLtRGgcIV8msYk"
-V2_SHEET = "CURRENT_V2"
-CURRENT_SHEET = "CURRENT"
+TARGET_SHEET = "CURRENT"
+FIRST_SEEN_SHEETS = ["CURRENT_old", "current_old2"]  # Fallback sheets for first_seen
 AI_ANALYSIS_SHEET = "AI Analysis"
 PRICE_SALES_SHEET = "Price-Sales"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -518,42 +518,94 @@ def load_price_sales(service, logger) -> tuple[dict, dict]:
     return ps_data, ps_row_map
 
 
-def load_current_first_seen(service, logger) -> dict:
+def load_first_seen_data(service, logger) -> dict:
     """
-    Read CURRENT tab to get first_seen dates keyed by ticker.
-    Returns {ticker: first_seen_str}.
+    Try to load first_seen dates from old CURRENT sheets that have the column.
+    Also extracts days_on_list from the current TARGET_SHEET if available.
+    Returns {ticker: days_on_list_int_or_None}.
     """
-    logger.info("Loading CURRENT tab for first_seen dates...")
-    rows = read_sheet(service, CURRENT_SHEET, end_col="AF")
-    if len(rows) < 3:
-        logger.warning("CURRENT tab has fewer than 3 rows")
-        return {}
+    days_map = {}
 
-    headers = [str(h).strip().lower() for h in rows[1]]
-    data_rows = rows[2:]
+    # First, try to get days_on_list from the existing CURRENT (TARGET_SHEET)
+    # which already has the V2 layout with days_on_list column
+    logger.info("Loading existing days_on_list from %s...", TARGET_SHEET)
+    try:
+        rows = read_sheet(service, TARGET_SHEET, end_col="T")
+        if len(rows) >= 3:
+            headers = [str(h).strip().lower() for h in rows[1]]
+            ticker_idx = None
+            days_idx = None
+            for idx, h in enumerate(headers):
+                if h == "ticker":
+                    ticker_idx = idx
+                if h == "days_on_list":
+                    days_idx = idx
+            if ticker_idx is not None and days_idx is not None:
+                for row in rows[2:]:
+                    padded = row + [""] * (max(ticker_idx, days_idx) + 1 - len(row))
+                    raw_ticker = padded[ticker_idx]
+                    ticker = _extract_ticker_from_hyperlink(raw_ticker)
+                    if not ticker:
+                        continue
+                    days_val = _safe_float(padded[days_idx])
+                    if days_val is not None:
+                        days_map[ticker] = int(days_val) + 1  # Increment by 1 for today
+                logger.info("Loaded %d days_on_list values from %s", len(days_map), TARGET_SHEET)
+    except Exception as e:
+        logger.warning("Failed to read %s for days_on_list: %s", TARGET_SHEET, e)
 
-    ticker_idx = None
-    first_seen_idx = None
-    for idx, h in enumerate(headers):
-        if h == "ticker":
-            ticker_idx = idx
-        if h == "first_seen":
-            first_seen_idx = idx
+    # Then try old sheets for first_seen dates (for tickers not yet in days_map)
+    for old_sheet in FIRST_SEEN_SHEETS:
+        logger.info("Checking '%s' for first_seen data...", old_sheet)
+        try:
+            rows = read_sheet(service, old_sheet, end_col="AF")
+        except Exception as e:
+            logger.info("Sheet '%s' not readable: %s", old_sheet, e)
+            continue
 
-    if ticker_idx is None or first_seen_idx is None:
-        logger.warning("Cannot find ticker/first_seen in CURRENT headers: %s", headers)
-        return {}
+        if len(rows) < 2:
+            continue
 
-    first_seen_map = {}
-    for row in data_rows:
-        padded = row + [""] * (max(ticker_idx, first_seen_idx) + 1 - len(row))
-        ticker = padded[ticker_idx].strip().upper()
-        fs = padded[first_seen_idx].strip()
-        if ticker and fs:
-            first_seen_map[ticker] = fs
+        # Try both single-row and 2-row header detection
+        row1 = [str(h).strip().lower() for h in rows[0]]
+        if "ticker" in row1 and "first_seen" in row1:
+            headers = row1
+            data_rows = rows[1:]
+        elif len(rows) >= 3:
+            headers = [str(h).strip().lower() for h in rows[1]]
+            data_rows = rows[2:]
+        else:
+            continue
 
-    logger.info("Loaded %d first_seen dates from CURRENT", len(first_seen_map))
-    return first_seen_map
+        ticker_idx = None
+        first_seen_idx = None
+        for idx, h in enumerate(headers):
+            if h == "ticker":
+                ticker_idx = idx
+            if h == "first_seen":
+                first_seen_idx = idx
+
+        if ticker_idx is None or first_seen_idx is None:
+            logger.info("Sheet '%s' missing ticker/first_seen columns", old_sheet)
+            continue
+
+        count = 0
+        for row in data_rows:
+            padded = row + [""] * (max(ticker_idx, first_seen_idx) + 1 - len(row))
+            ticker = padded[ticker_idx].strip().upper()
+            fs = padded[first_seen_idx].strip()
+            if ticker and fs and ticker not in days_map:
+                try:
+                    from datetime import datetime
+                    fs_parsed = datetime.strptime(fs, "%Y-%m-%d").date()
+                    days_map[ticker] = (date.today() - fs_parsed).days
+                    count += 1
+                except (ValueError, TypeError):
+                    pass
+        logger.info("Loaded %d first_seen dates from '%s'", count, old_sheet)
+
+    logger.info("Total days_on_list data: %d tickers", len(days_map))
+    return days_map
 
 
 # ---------------------------------------------------------------------------
@@ -567,7 +619,7 @@ def load_v2_data(service, logger) -> dict:
     Ticker is in col D (index 3). Uses FORMULA render to preserve hyperlinks.
     """
     logger.info("Loading existing CURRENT_V2 data...")
-    rows = read_sheet(service, V2_SHEET, end_col="T", value_render="FORMULA")
+    rows = read_sheet(service, TARGET_SHEET, end_col="T", value_render="FORMULA")
     if len(rows) < 3:
         logger.warning("CURRENT_V2 tab has fewer than 3 rows (headers + data)")
         return {}
@@ -670,13 +722,13 @@ def upsert_v2(
     ai_row_map: dict,
     ps_data: dict,
     ps_row_map: dict,
-    first_seen_map: dict,
+    days_map: dict,
     existing: dict,
     sheet_gids: dict,
     logger,
 ) -> list[list]:
     """
-    Build the full data rows for CURRENT_V2 after upserting screened equities.
+    Build the full data rows for CURRENT tab after upserting screened equities.
     Returns list of row-lists ready for batch write.
     """
     today_str = date.today().isoformat()
@@ -750,15 +802,9 @@ def upsert_v2(
         else:
             row["price_%_of_52w_high"] = ""
 
-        # -- days_on_list from CURRENT first_seen --
-        fs_date = first_seen_map.get(ticker)
-        if fs_date:
-            try:
-                from datetime import datetime
-                fs_parsed = datetime.strptime(fs_date, "%Y-%m-%d").date()
-                row["days_on_list"] = (date.today() - fs_parsed).days
-            except (ValueError, TypeError):
-                row["days_on_list"] = ""
+        # -- days_on_list --
+        if ticker in days_map:
+            row["days_on_list"] = days_map[ticker]
         elif is_new:
             row["days_on_list"] = 0
         # else keep existing value
@@ -818,14 +864,8 @@ def upsert_v2(
         if ps_now_val is not None and high_52w is not None and high_52w > 0:
             row["price_%_of_52w_high"] = ps_now_val / high_52w
 
-        fs_date = first_seen_map.get(ticker)
-        if fs_date:
-            try:
-                from datetime import datetime
-                fs_parsed = datetime.strptime(fs_date, "%Y-%m-%d").date()
-                row["days_on_list"] = (date.today() - fs_parsed).days
-            except (ValueError, TypeError):
-                pass
+        if ticker in days_map:
+            row["days_on_list"] = days_map[ticker]
 
     # -- Build scoring data --
     scoring_rows = []
@@ -894,7 +934,7 @@ def write_v2(service, final_rows: list[list], logger):
         return
 
     # Read existing header rows to preserve them
-    existing_headers = read_sheet(service, V2_SHEET, end_col="T", value_render="FORMULA")
+    existing_headers = read_sheet(service, TARGET_SHEET, end_col="T", value_render="FORMULA")
     if len(existing_headers) >= 2:
         cat_row = existing_headers[0]
         header_row = existing_headers[1]
@@ -916,12 +956,12 @@ def write_v2(service, final_rows: list[list], logger):
     all_rows = [cat_row, header_row] + sanitized_rows
     end_col = _col_letter(NUM_COLS - 1)
     end_row = len(all_rows)
-    write_range = f"'{V2_SHEET}'!A1:{end_col}{end_row}"
+    write_range = f"'{TARGET_SHEET}'!A1:{end_col}{end_row}"
 
     # Clear data area first
     service.spreadsheets().values().clear(
         spreadsheetId=SPREADSHEET_ID,
-        range=f"'{V2_SHEET}'!A3:{end_col}",
+        range=f"'{TARGET_SHEET}'!A3:{end_col}",
     ).execute()
 
     # Write all rows
@@ -965,15 +1005,15 @@ def main():
 
     ai_data, ai_row_map = load_ai_analysis(service, logger)
     ps_data, ps_row_map = load_price_sales(service, logger)
-    first_seen_map = load_current_first_seen(service, logger)
+    days_map = load_first_seen_data(service, logger)
 
-    # Load existing CURRENT_V2 data
+    # Load existing CURRENT data
     existing = load_v2_data(service, logger)
 
     # Step 3: Upsert
     final_rows = upsert_v2(
         screened, ai_data, ai_row_map, ps_data, ps_row_map,
-        first_seen_map, existing, sheet_gids, logger,
+        days_map, existing, sheet_gids, logger,
     )
 
     write_v2(service, final_rows, logger)
