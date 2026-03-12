@@ -419,23 +419,40 @@ def write_new_structure(service, new_data_rows: list[list[str]], logger):
     ).execute()
     logger.info("Wrote %d rows to %s", len(all_rows), write_range)
 
-    # --- Step 5: Apply formatting via batchUpdate ---
-    requests_list = []
-
-    # Ensure enough columns
-    requests_list.append({
-        "updateSheetProperties": {
-            "properties": {
-                "sheetId": sheet_id,
-                "gridProperties": {
-                    "columnCount": max(NUM_COLS, 32),
-                    "frozenRowCount": 2,
-                    "frozenColumnCount": 3,
+    # --- Step 5: Remove old merges and set column count (separate batch) ---
+    setup_requests = [
+        {
+            "unmergeCells": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": 0,
+                    "endRowIndex": 1,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": max(NUM_COLS, 32),
                 },
-            },
-            "fields": "gridProperties.columnCount,gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
-        }
-    })
+            }
+        },
+        {
+            "updateSheetProperties": {
+                "properties": {
+                    "sheetId": sheet_id,
+                    "gridProperties": {
+                        "columnCount": max(NUM_COLS, 32),
+                        "frozenRowCount": 2,
+                        "frozenColumnCount": 3,
+                    },
+                },
+                "fields": "gridProperties.columnCount,gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
+            }
+        },
+    ]
+    service.spreadsheets().batchUpdate(
+        spreadsheetId=SPREADSHEET_ID,
+        body={"requests": setup_requests},
+    ).execute()
+
+    # --- Step 6: Apply formatting via batchUpdate ---
+    requests_list = []
 
     # Merge cells for category headers (row 1)
     for merge_range, _ in CATEGORY_MERGES:
