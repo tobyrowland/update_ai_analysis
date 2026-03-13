@@ -24,8 +24,8 @@ Manual     rebuild_current_sheet.py  One-time CURRENT sheet structure rebuild
 
 ### nightly_current_update.py (06:30 UTC daily)
 3-pass TradingView screener across 35+ markets (Americas, Europe, Asia-Pacific).
-Filters: market cap $2B-$500B, gross margin >45%, rev growth 20-500%, revenue >$200M, P/S <15, rating ≤1.8.
-Excludes: China, Hong Kong, Taiwan, Real Estate, REIT, Non-Energy Minerals.
+Filters: market cap $2B-$500B, gross margin >45%, rev growth 20-500%, revenue >$200M, P/S <10, rating ≤1.8.
+Excludes: China, Hong Kong, Taiwan, Real Estate, REIT, Non-Energy Minerals, Finance, Utilities.
 Enriches with AI Analysis + Price-Sales data, computes composite_score, writes CURRENT tab.
 **Manual-only columns (never overwritten):** deep_dive, conviction_tier, next_earnings, status.
 

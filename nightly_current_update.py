@@ -341,8 +341,9 @@ def _screen_markets(markets: list[str], spy_perf_y: float, logger) -> list[dict]
                 col("gross_profit_margin_fy") > 45,
                 col("total_revenue_yoy_growth_ttm").between(20, 500),
                 col("total_revenue_ttm") > 200_000_000,
-                col("price_revenue_ttm") < 15,
+                col("price_revenue_ttm") < 10,
                 col("recommendation_mark") <= 1.8,
+                col("sector").not_in(["Finance", "Utilities", "Non-Energy Minerals"]),
             )
             .limit(5000)
             .get_scanner_data()
