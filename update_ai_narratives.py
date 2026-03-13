@@ -39,6 +39,7 @@ MAX_RETRIES = 2  # total attempts per ticker
 # The script reads actual sheet headers rather than relying on hardcoded positions.
 HEADER_TICKER = "ticker"
 HEADER_COMPANY = "company_name"
+HEADER_DESCRIPTION = "description"
 HEADER_SHORT_OUTLOOK = "short_outlook"
 HEADER_OUTLOOK = "full_outlook"
 HEADER_RISKS = "key_risks"
@@ -259,6 +260,7 @@ def gather_web_context(
     q2 = f"{company} {ticker} outlook forecast analyst {current_year}"
 
     s1 = serpapi_search(q1, api_key, logger)
+    time.sleep(1)
     s2 = serpapi_search(q2, api_key, logger)
 
     parts = []
@@ -302,7 +304,15 @@ Key Risks: 🟡 Prolonged cyclical downturn and continued inventory digestion in
 
 ---
 
-Now generate the three fields for {company_name} ({ticker}). Follow these rules exactly:
+Now generate the four fields for {company_name} ({ticker}). Follow these rules exactly:
+
+DESCRIPTION RULES:
+- One sentence summarising the company's core business, products/services, and industry
+- 60-80 characters
+- Examples:
+  "Japanese conveyor-belt sushi chain operator with global expansion"
+  "LNG containment system designer for gas carriers and onshore tanks"
+  "Semiconductor deposition equipment maker for advanced chip manufacturing"
 
 SHORT OUTLOOK RULES:
 - One sentence, max 15 words
@@ -323,6 +333,7 @@ KEY RISKS RULES:
 
 Respond ONLY with a JSON object in this exact format, no markdown, no preamble:
 {{
+  "description": "...",
   "short_outlook": "...",
   "full_outlook": "...",
   "key_risks": "..."
@@ -392,7 +403,7 @@ def call_gemini(prompt: str, api_key: str, logger: logging.Logger) -> dict | Non
                 logger.warning("Gemini returned non-JSON: %s", text[:200])
                 return None
 
-            required_keys = {"short_outlook", "full_outlook", "key_risks"}
+            required_keys = {"description", "short_outlook", "full_outlook", "key_risks"}
             missing = required_keys - set(result.keys())
             if missing:
                 logger.warning("Gemini response missing keys: %s (got: %s)", missing, list(result.keys()))
@@ -499,6 +510,7 @@ def process_company(
 
     # Map output fields to sheet columns dynamically
     field_to_header = {
+        "description": HEADER_DESCRIPTION,
         "short_outlook": HEADER_SHORT_OUTLOOK,
         "full_outlook": HEADER_OUTLOOK,
         "key_risks": HEADER_RISKS,
