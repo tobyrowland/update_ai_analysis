@@ -132,7 +132,7 @@ def _col_letter(idx: int) -> str:
 
 
 def write_ticker_updates(
-    service, row_number: int, values: dict[str, str]
+    service, row_number: int, values: dict[str, str], logger: logging.Logger = None
 ) -> None:
     """Batch-write values for a single ticker row. values maps col_letter -> value."""
     data = []
@@ -142,9 +142,16 @@ def write_ticker_updates(
 
     if data:
         body = {"valueInputOption": "USER_ENTERED", "data": data}
-        service.spreadsheets().values().batchUpdate(
+        resp = service.spreadsheets().values().batchUpdate(
             spreadsheetId=SPREADSHEET_ID, body=body
         ).execute()
+        updated = resp.get("totalUpdatedCells", 0)
+        expected = len(data)
+        if logger and updated != expected:
+            logger.warning(
+                "Row %d: expected to update %d cells but only %d were updated (possible merged cells?)",
+                row_number, expected, updated,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +359,11 @@ def call_gemini(
             if missing:
                 raise Exception(f"Gemini response missing keys: {missing}")
 
+            # Verify all required fields are non-empty strings
+            empty_fields = [k for k in required_keys if not str(result[k]).strip()]
+            if empty_fields:
+                raise Exception(f"Gemini returned empty values for: {empty_fields}")
+
             return result
 
         except Exception as exc:
@@ -445,7 +457,8 @@ def main():
                 _col_letter(COL_AI_DATE): today_str,
             }
 
-            write_ticker_updates(service, row_number, values)
+            logger.info("Writing %s — description: %r", ticker, result["description"])
+            write_ticker_updates(service, row_number, values, logger)
             logger.info("Successfully updated %s", ticker)
             succeeded += 1
 
