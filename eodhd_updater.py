@@ -1279,6 +1279,8 @@ def main():
     # The sheet now uses lowercase underscore column keys as headers.
     # We also support legacy display-name headers via HEADER_ALIASES.
     all_keys = set(DISPLAY_NAMES.keys())
+    # Reverse map: display name → internal key (e.g. "gross_margin%" → "gross_margin")
+    display_to_key = {v: k for k, v in DISPLAY_NAMES.items()}
 
     key_col = {}  # column_key → 0-based column index
     if len(all_rows) >= 2:
@@ -1289,6 +1291,9 @@ def main():
             # Check if the header matches a known column key directly
             if name in all_keys:
                 col_key = name
+            # Check if it's a display name (e.g. "gross_margin%" → "gross_margin")
+            elif name in display_to_key:
+                col_key = display_to_key[name]
             else:
                 col_key = None
             if col_key and col_key not in key_col:
