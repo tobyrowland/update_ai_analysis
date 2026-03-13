@@ -11,7 +11,6 @@ and Google Sheets as the primary data store/UI.
 ## Architecture
 
 ```
-02:00 UTC  update_ai_analysis.py     Claude AI narratives for blank descriptions
 04:30 UTC  sync_companies.py         Sync new tickers CURRENT → AI Analysis
 05:00 UTC  eodhd_updater.py          Fetch 20+ financial metrics from EODHD
 06:00 UTC  update_ai_narratives.py   Gemini refresh of stale narratives (90+ days)
@@ -32,11 +31,6 @@ Enriches with AI Analysis + Price-Sales data, computes composite_score, writes C
 Fetches revenue, margins, cash flow, EPS, R40 score from EODHD API.
 Updates AI Analysis sheet. Staleness threshold: 7 days. Rate limit: 1s between calls.
 Supports `--force` flag to ignore staleness.
-
-### update_ai_analysis.py (02:00 UTC daily)
-Generates AI narratives via Claude Opus for tickers with blank descriptions.
-Uses SerpAPI for 3 web searches per ticker (earnings, news, risks).
-Produces: description, short_outlook, full_outlook, key_risks.
 
 ### update_ai_narratives.py (06:00 UTC daily)
 Refreshes stale narratives (90+ days) using Gemini 2.5 Flash.
@@ -92,7 +86,6 @@ J: fundamentals_snapshot  T: composite_score (formula)
 ```
 SPREADSHEET_ID              Google Sheet ID (has default)
 GOOGLE_SERVICE_ACCOUNT_JSON Service account credentials (JSON string)
-ANTHROPIC_API_KEY           Claude API (update_ai_analysis.py)
 GEMINI_API_KEY              Gemini API (update_ai_narratives.py)
 SERP_API_KEY / SERPAPI_API_KEY  SerpAPI web search
 EODHD_API_KEY               EODHD financial data
@@ -118,7 +111,6 @@ pip install -r requirements.txt
 python nightly_current_update.py
 python eodhd_updater.py
 python eodhd_updater.py --force          # ignore staleness
-python update_ai_analysis.py
 python update_ai_narratives.py
 python price_sales_updater.py
 python price_sales_updater.py --tickers NVDA,AAPL --force
