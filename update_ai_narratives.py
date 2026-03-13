@@ -45,25 +45,27 @@ HEADER_OUTLOOK = "full_outlook"
 HEADER_RISKS = "key_risks"
 HEADER_ANALYZED = "ai"
 
-# Known aliases for headers (in case the sheet uses slightly different names)
+# Map legacy/alternative sheet headers → current lowercase underscore keys.
 HEADER_ALIASES = {
     "Ticker":               "ticker",
     "Company":              "company_name",
     "Company Name":         "company_name",
     "Short Outlook":        "short_outlook",
     "Outlook":              "full_outlook",
+    "Full Outlook":         "full_outlook",
     "Key Risks":            "key_risks",
     "AI":                   "ai",
+    "Analyzed":             "ai",
+    "AI Analyzed":          "ai",
     "Data":                 "data",
     "Data As Of":           "data",
     "Fundamentals Date":    "data",
-    "Analyzed":             "ai",
-    "AI Analyzed":          "ai",
 }
 
 NULL_VALUE = "—"  # must match eodhd_updater.py
 
-# Financial column labels for prompt context (order doesn't matter for lookup)
+# Financial column labels for prompt context (order doesn't matter for lookup).
+# These are the lowercase underscore column keys used in the sheet.
 FINANCIAL_HEADERS = [
     "r40_score",
     "fundamentals_snapshot",
