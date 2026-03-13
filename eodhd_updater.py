@@ -553,10 +553,18 @@ EXCHANGE_FALLBACKS = {
     "XETRA": ["F", "US"],
     "F":     ["XETRA", "US"],
     # India — BSE symbols are often numeric; try NSE which uses names
-    "BSE":   ["NSE"],
-    "NSE":   ["BSE"],
-    # Japan
+    "BSE":   ["NSE", "US"],
+    "NSE":   ["BSE", "US"],
+    # Japan — many TSE tickers have no US ADR, so search is key
     "TSE":   ["US"],
+    # Switzerland
+    "SW":    ["US"],
+    # Netherlands / Euronext
+    "AS":    ["US", "PA"],
+    # Other Europe
+    "PA":    ["US", "AS"],
+    "MI":    ["US"],
+    "MC":    ["US"],
     # UK
     "LSE":   ["US"],
     # Canada
@@ -646,7 +654,8 @@ def _search_eodhd(query: str, api_key: str, logger: logging.Logger,
                     return (r["Code"], ex)
         # Otherwise take the first result that has fundamentals-friendly
         # exchange (prefer US, then major exchanges)
-        preferred = ["US", "LSE", "NSE", "XETRA", "TO", "AS", "PA"]
+        preferred = ["US", "LSE", "NSE", "BSE", "TSE", "XETRA", "TO",
+                     "AS", "PA", "SW", "HK", "F", "MI", "MC"]
         for pref in preferred:
             for r in results:
                 if r.get("Exchange", "") == pref:
@@ -723,8 +732,28 @@ def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger,
                 return data
             tried.add(search_exchange)
 
+    # 3b. For OTC foreign tickers (ending in F or Y), strip suffix and
+    #     search for the underlying ticker — e.g. ADYYF → ADYY → Adyen
+    if primary == "US" and len(ticker) > 2 and ticker[-1] in ("F", "Y"):
+        base_ticker = ticker[:-1]
+        if base_ticker.upper() != ticker.upper():
+            logger.info("  Trying OTC base ticker search: %s", base_ticker)
+            time.sleep(0.3)
+            result = _search_eodhd(base_ticker, api_key, logger, original_ticker=ticker)
+            if result:
+                search_ticker, search_exchange = result
+                if search_exchange not in tried or search_ticker.upper() != ticker.upper():
+                    time.sleep(0.3)
+                    data, status = _try_fetch_one(search_ticker, search_exchange, api_key)
+                    if data is not None:
+                        logger.info("  Found %s.%s via OTC base ticker search",
+                                    search_ticker, search_exchange)
+                        return data
+                    tried.add(search_exchange)
+
     # 4. Search API — try by company name (handles cases like
-    #    TSE code 7974 → US ADR "NTDOY" for Nintendo)
+    #    TSE code 7974 → US ADR "NTDOY" for Nintendo,
+    #    GETTEX 49G → ONON.US for On Holding)
     if company:
         # Use first few words to avoid overly specific queries
         search_name = " ".join(company.split()[:3])
