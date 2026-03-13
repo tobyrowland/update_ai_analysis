@@ -339,10 +339,11 @@ def _screen_markets(markets: list[str], spy_perf_y: float, logger) -> list[dict]
             .where(
                 col("market_cap_basic").between(2_000_000_000, 500_000_000_000),
                 col("gross_profit_margin_fy") > 45,
-                col("total_revenue_yoy_growth_ttm").between(20, 500),
+                col("total_revenue_yoy_growth_ttm").between(25, 500),
                 col("total_revenue_ttm") > 200_000_000,
                 col("price_revenue_ttm") < 15,
                 col("recommendation_mark") <= 1.8,
+                col("sector").not_in(["Finance", "Utilities", "Non-Energy Minerals"]),
             )
             .limit(5000)
             .get_scanner_data()
