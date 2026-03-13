@@ -17,7 +17,6 @@ and Google Sheets as the primary data store/UI.
 06:00 UTC  update_ai_narratives.py   Gemini refresh of stale narratives (90+ days)
 06:30 UTC  nightly_current_update.py TradingView screen → enrich → write CURRENT
 Sunday     price_sales_updater.py    Weekly P/S ratio tracking + 52w history
-Manual     rebuild_current_sheet.py  One-time CURRENT sheet structure rebuild
 ```
 
 ## Scripts
@@ -50,10 +49,6 @@ Supports `--tickers` and `--force` flags.
 
 ### sync_companies.py (04:30 UTC daily)
 Adds new tickers from CURRENT to AI Analysis sheet (ticker, company_name, exchange).
-
-### rebuild_current_sheet.py (manual)
-Rebuilds CURRENT sheet structure with proper headers, formatting, merges.
-Post-rebuild validation via `scripts/recalc.py`.
 
 ## Google Sheet Tabs
 
@@ -128,7 +123,6 @@ python update_ai_narratives.py
 python price_sales_updater.py
 python price_sales_updater.py --tickers NVDA,AAPL --force
 python sync_companies.py
-python rebuild_current_sheet.py
 python scripts/recalc.py                 # validate CURRENT structure
 ```
 
