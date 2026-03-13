@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """
-Nightly CURRENT Sheet Update.
+Nightly CURRENT_V2 Sheet Update.
 
 Three steps in sequence:
 1. Screen — Query TradingView for qualifying equities
-2. Enrich — Look up pre-existing data from AI Analysis and Price-Sales tabs
-3. Write  — Upsert fully constructed rows into the CURRENT tab
+2. Enrich — Look up pre-existing data from AI Analysis, Price-Sales, and CURRENT tabs
+3. Write  — Upsert fully constructed rows into the CURRENT_V2 tab
 
 Runs nightly via GitHub Actions. Writes directly to Google Sheets.
 """
 
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -29,112 +30,96 @@ from tradingview_screener import Query, col
 # Configuration
 # ---------------------------------------------------------------------------
 
-SPREADSHEET_ID = os.environ.get(
-    "SPREADSHEET_ID", "1js3dUTJtKhY1dUcwzYUGBOdKDZXBurLtRGgcIV8msYk"
-)
-CURRENT_SHEET = "CURRENT"
+SPREADSHEET_ID = "1js3dUTJtKhY1dUcwzYUGBOdKDZXBurLtRGgcIV8msYk"
+TARGET_SHEET = "CURRENT"
+FIRST_SEEN_SHEETS = ["CURRENT_old", "current_old2"]  # Fallback sheets for first_seen
 AI_ANALYSIS_SHEET = "AI Analysis"
 PRICE_SALES_SHEET = "Price-Sales"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-# Column layout for CURRENT tab (A=0 .. AF=31)
-CURRENT_HEADERS = [
-    "ticker",               # A   0
-    "exchange",             # B   1
-    "company_name",         # C   2
-    "country",              # D   3
-    "sector",               # E   4
-    "price",                # F   5
-    "market_cap",           # G   6
-    "ps_ratio_ttm",         # H   7
-    "entry_ps_ttm",         # I   8
-    "ps_discount",          # J   9
-    "total_revenue_ttm",    # K  10
-    "rev_growth_ttm%",      # L  11
-    "gross_margin_%",       # M  12
-    "net_margin_ttm",       # N  13
-    "net_margin_direction", # O  14
-    "net_margin_annual",    # P  15
-    "net_margin_qoq",       # Q  16
-    "fcf_margin_ttm",       # R  17
-    "perf_52w_vs_spy",      # S  18
-    "rating",               # T  19
-    "status",               # U  20
-    "description",          # V  21
-    "fundamentals",         # W  22
-    "short_outlook",        # X  23
-    "signal",               # Y  24
-    "outlook",              # Z  25
-    "ai_analysis_date",     # AA 26
-    "net_income_ttm",       # AB 27
-    "first_seen",           # AC 28
-    "days_on_list",         # AD 29
-    "chart_data",           # AE 30
-    "chart_data_date",      # AF 31
+# ---------------------------------------------------------------------------
+# CURRENT_V2 column layout (A=0 .. T=19)
+# ---------------------------------------------------------------------------
+
+V2_HEADERS = [
+    "deep_dive",            # A   0  — Manual only (checkbox)
+    "status",               # B   1
+    "conviction_tier",      # C   2  — Manual only
+    "ticker",               # D   3  — HYPERLINK to Google Finance
+    "company_name",         # E   4  — Plain text
+    "exchange",             # F   5
+    "country",              # G   6
+    "sector",               # H   7
+    "description",          # I   8  — From AI Analysis
+    "fundamentals_snapshot",# J   9  — HYPERLINK to AI Analysis row
+    "short_outlook",        # K  10  — From AI Analysis
+    "price",                # L  11
+    "ps_now",               # M  12  — HYPERLINK to Price-Sales row
+    "price_%_of_52w_high",  # N  13  — P/S Now / 52w High
+    "r40_score",            # O  14  — From AI Analysis
+    "perf_52w_vs_spy",      # P  15
+    "rating",               # Q  16
+    "next_earnings",        # R  17  — Manual only
+    "days_on_list",         # S  18  — From CURRENT first_seen
+    "composite_score",      # T  19
 ]
-NUM_COLS = len(CURRENT_HEADERS)  # 32
-COL_INDEX = {name: i for i, name in enumerate(CURRENT_HEADERS)}
+NUM_COLS = len(V2_HEADERS)  # 20
+COL_INDEX = {name: i for i, name in enumerate(V2_HEADERS)}
+
+# Columns that must NEVER be written by any script
+MANUAL_ONLY_COLS = {"deep_dive", "conviction_tier", "next_earnings"}
 
 # Statuses that are human-managed and must not be overwritten
 PROTECTED_STATUSES = {"🟢", "🟡", "⚫", "❌"}
 
 # Status priority for sorting
 STATUS_PRIORITY = {
-    "🟢 Eligible": 1,
-    "🟢": 1,
-    "🆕 New": 2,
-    "🆕": 2,
-    "🟡 Watching": 3,
-    "🟡": 3,
-    "⚫ On Hold": 4,
-    "⚫": 4,
-    "🔴 Pending": 5,
-    "🔴": 5,
-    "❌ Exiting": 6,
-    "❌": 6,
+    "🟢 Eligible": 1, "🟢": 1,
+    "🆕 New": 2, "🆕": 2,
+    "🟡 Watching": 3, "🟡": 3,
+    "⚫ On Hold": 4, "⚫": 4,
+    "🔴 Pending": 5, "🔴": 5,
+    "❌ Exiting": 6, "❌": 6,
 }
+
+# Row 1 category merges for CURRENT_V2
+CATEGORY_MERGES = [
+    ("A1:C1", "STATUS"),
+    ("D1:H1", "IDENTITY"),
+    ("I1:K1", "NARRATIVE"),
+    ("L1:N1", "VALUATION"),
+    ("O1:P1", "FUNDAMENTALS"),
+    ("Q1", "MARKET"),
+    ("R1:T1", "TRACKING"),
+]
 
 # TradingView screener fields
 TV_SELECT_FIELDS = [
-    "name",
-    "exchange",
-    "description",
-    "country",
-    "sector",
-    "close",
-    "market_cap_basic",
-    "price_revenue_ttm",
-    "total_revenue_ttm",
-    "total_revenue_yoy_growth_ttm",
-    "gross_profit_margin_fy",
-    "after_tax_margin",
-    "free_cash_flow_margin_ttm",
-    "Perf.Y",
+    "name", "exchange", "description", "country", "sector",
+    "close", "market_cap_basic", "price_revenue_ttm",
+    "total_revenue_ttm", "total_revenue_yoy_growth_ttm",
+    "gross_profit_margin_fy", "after_tax_margin",
+    "free_cash_flow_margin_ttm", "Perf.Y",
     "recommendation_mark",
-    "recommend_all_count",
     "net_income_ttm",
 ]
 
 # Countries to exclude
 EXCLUDED_COUNTRIES = {"China", "Hong Kong", "Taiwan"}
 
-# Sectors to exclude (REITs / real estate)
-EXCLUDED_SECTORS = {
-    "Real Estate",
-    "REIT",
-    "Real Estate Investment Trusts",
+# Sectors to exclude
+EXCLUDED_SECTORS = {"Real Estate", "REIT", "Real Estate Investment Trusts", "Non-Energy Minerals"}
+
+# Google Finance exchange mapping
+GF_EXCHANGE_MAP = {
+    "NASDAQ": "NASDAQ", "NYSE": "NYSE", "AMEX": "NYSEAMERICAN",
+    "OTC": "OTCMKTS", "TSX": "TSE", "LSE": "LON", "ASX": "ASX",
+    "NSE": "NSE", "BSE": "BOM", "XETRA": "ETR", "FRA": "FRA",
+    "EPA": "EPA", "AMS": "AMS", "SWX": "SWX", "BIT": "BIT",
+    "BME": "BME", "TSE": "TYO", "KRX": "KRX", "SGX": "SGX",
+    "NZX": "NZE", "JSE": "JSE", "SAU": "TADAWUL",
 }
 
-# Markets to scan (broad global coverage)
-TV_MARKETS = [
-    "america", "australia", "canada", "uk", "germany", "france",
-    "spain", "italy", "netherlands", "switzerland", "sweden", "norway",
-    "denmark", "finland", "belgium", "austria", "portugal", "ireland",
-    "israel", "india", "japan", "south_korea", "singapore", "new_zealand",
-    "brazil", "mexico", "south_africa", "saudi_arabia", "uae",
-    "indonesia", "thailand", "malaysia", "philippines", "vietnam",
-    "poland", "greece", "turkey",
-]
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -195,14 +180,14 @@ def _col_letter(idx: int) -> str:
     return result
 
 
-def read_sheet(service, sheet_name: str, value_render="FORMATTED_VALUE"):
-    """Read all rows from a sheet tab."""
+def read_sheet(service, sheet_name: str, end_col: str = "T", value_render="FORMATTED_VALUE"):
+    """Read all rows from a sheet tab with a bounded column range."""
     result = (
         service.spreadsheets()
         .values()
         .get(
             spreadsheetId=SPREADSHEET_ID,
-            range=f"'{sheet_name}'!A1:ZZ",
+            range=f"'{sheet_name}'!A1:{end_col}",
             valueRenderOption=value_render,
         )
         .execute()
@@ -210,49 +195,43 @@ def read_sheet(service, sheet_name: str, value_render="FORMATTED_VALUE"):
     return result.get("values", [])
 
 
-def find_column(headers, *names):
-    """Find column index by trying multiple header names (case-insensitive)."""
-    for idx, h in enumerate(headers):
-        norm = h.strip().lower()
-        for name in names:
-            if norm == name.lower():
-                return idx
-    return None
+def get_sheet_gids(service) -> dict:
+    """Return {sheet_title: gid} for all sheets in the spreadsheet."""
+    meta = (
+        service.spreadsheets()
+        .get(spreadsheetId=SPREADSHEET_ID, fields="sheets.properties")
+        .execute()
+    )
+    return {
+        s["properties"]["title"]: s["properties"]["sheetId"]
+        for s in meta.get("sheets", [])
+    }
 
 
-def round_int_0dp(val):
-    """Round a numeric value to integer with 0 decimal places."""
+def sanitize_value(val):
+    """Sanitize a value for Google Sheets JSON payload (no NaN/Inf)."""
     if val is None:
-        return None
-    try:
-        return round(float(val))
-    except (ValueError, TypeError):
-        return None
+        return ""
+    if isinstance(val, float):
+        if math.isnan(val) or math.isinf(val):
+            return ""
+    return val
+
+
+def sanitize_row(row: list) -> list:
+    """Sanitize all values in a row for safe JSON serialization."""
+    return [sanitize_value(v) for v in row]
 
 
 def clean_ticker(raw_name: str) -> str:
     """Clean ticker from TradingView name field."""
-    # Remove leading digit followed by non-digit (TradingView quirk)
     return re.sub(r"^\d(?=\D)", "", raw_name)
 
 
-def gf_url(ticker: str, exchange: str) -> str:
-    """Build a GuruFocus URL for a ticker."""
-    exchange_map = {
-        "NASDAQ": "NAS",
-        "NYSE": "NYSE",
-        "AMEX": "NYSE",
-        "OTC": "OTC",
-        "TSX": "TSX",
-        "LSE": "LSE",
-        "ASX": "ASX",
-        "NSE": "NSE",
-        "BSE": "BSE",
-        "XETRA": "FRA",
-        "FRA": "FRA",
-    }
-    gf_exchange = exchange_map.get(exchange, exchange)
-    return f"https://www.gurufocus.com/stock/{gf_exchange}:{ticker}/summary"
+def google_finance_url(ticker: str, exchange: str) -> str:
+    """Build a Google Finance URL for a ticker."""
+    gf_exchange = GF_EXCHANGE_MAP.get(exchange, exchange)
+    return f"https://www.google.com/finance/quote/{ticker}:{gf_exchange}"
 
 
 def safe_divide_100(val):
@@ -263,12 +242,22 @@ def safe_divide_100(val):
         v = float(val)
     except (ValueError, TypeError):
         return None
-    # TradingView returns some fields as percentages (e.g. 34.5 meaning 34.5%)
-    # and some as decimals (e.g. 0.345 meaning 34.5%).
-    # Fields > 1 or < -1 are likely whole-number percentages.
     if abs(v) > 1.0:
         return v / 100.0
     return v
+
+
+def _safe_float(val):
+    """Try to convert a value to float, return None on failure."""
+    if val is None or val == "" or val == "—":
+        return None
+    try:
+        f = float(val)
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return f
+    except (ValueError, TypeError):
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -285,21 +274,17 @@ def run_tradingview_screen(logger) -> list[dict]:
     logger.info("Step 1: TradingView Screening")
     logger.info("=" * 60)
 
-    # First, get SPY's Perf.Y for relative performance calculation
     spy_perf_y = _get_spy_perf_y(logger)
 
-    all_results = {}  # ticker -> dict, for deduplication
+    all_results = {}
 
-    # Pass 1: Americas
     pass1_markets = ["america", "canada", "brazil", "mexico"]
-    # Pass 2: Europe / Middle East / Africa
     pass2_markets = [
         "uk", "germany", "france", "spain", "italy", "netherlands",
         "switzerland", "sweden", "norway", "denmark", "finland", "belgium",
         "austria", "portugal", "ireland", "israel", "south_africa",
         "saudi_arabia", "uae", "poland", "greece", "turkey",
     ]
-    # Pass 3: Asia-Pacific
     pass3_markets = [
         "australia", "india", "japan", "south_korea", "singapore",
         "new_zealand", "indonesia", "thailand", "malaysia", "philippines",
@@ -347,7 +332,7 @@ def _get_spy_perf_y(logger) -> float:
 def _screen_markets(markets: list[str], spy_perf_y: float, logger) -> list[dict]:
     """Run TradingView screener for a set of markets and return equity dicts."""
     try:
-        query = (
+        total_count, df = (
             Query()
             .set_markets(*markets)
             .select(*TV_SELECT_FIELDS)
@@ -355,18 +340,21 @@ def _screen_markets(markets: list[str], spy_perf_y: float, logger) -> list[dict]
                 col("market_cap_basic").between(2_000_000_000, 500_000_000_000),
                 col("gross_profit_margin_fy") > 45,
                 col("total_revenue_yoy_growth_ttm").between(20, 500),
-                col("total_revenue_ttm") > 100_000_000,
+                col("total_revenue_ttm") > 200_000_000,
                 col("price_revenue_ttm") < 15,
-                col("recommendation_mark") <= 2.5,
+                col("recommendation_mark") <= 1.8,
             )
             .limit(5000)
             .get_scanner_data()
         )
-        total_count, df = query
         logger.info("Screener returned %d results (total available: %d)", len(df), total_count)
     except Exception as e:
         logger.error("TradingView screener error: %s", e)
         return []
+
+    # Log unique sector values for debugging
+    unique_sectors = df["sector"].dropna().unique() if "sector" in df.columns else []
+    logger.info("Unique sectors in results (%d): %s", len(unique_sectors), sorted(unique_sectors))
 
     equities = []
     for _, row in df.iterrows():
@@ -378,61 +366,42 @@ def _screen_markets(markets: list[str], spy_perf_y: float, logger) -> list[dict]
         country = str(row.get("country", ""))
         sector = str(row.get("sector", ""))
 
-        # Exclude countries
         if country in EXCLUDED_COUNTRIES:
             continue
-
-        # Exclude real estate / REITs
         if sector in EXCLUDED_SECTORS:
             continue
 
         exchange = str(row.get("exchange", ""))
         company_name = str(row.get("description", ""))
-        url = gf_url(ticker, exchange)
-        hyperlink = f'=HYPERLINK("{url}", "{company_name}")'
 
         price = row.get("close")
-        market_cap = round_int_0dp(row.get("market_cap_basic"))
-        ps_ratio = row.get("price_revenue_ttm")
-        total_revenue = row.get("total_revenue_ttm")
-        rev_growth = safe_divide_100(row.get("total_revenue_yoy_growth_ttm"))
-        gross_margin = safe_divide_100(row.get("gross_profit_margin_fy"))
-        net_margin = safe_divide_100(row.get("after_tax_margin"))
-        fcf_margin = safe_divide_100(row.get("free_cash_flow_margin_ttm"))
-        net_income = row.get("net_income_ttm")
 
         # Relative performance vs SPY
         perf_y = row.get("Perf.Y")
-        if perf_y is not None and spy_perf_y is not None:
+        if perf_y is not None:
             perf_52w_vs_spy = safe_divide_100(perf_y) - safe_divide_100(spy_perf_y)
         else:
             perf_52w_vs_spy = None
 
-        # Rating string
+        # Rating: recommendation_mark score (1-5 scale, 1 decimal place)
         rec_mark = row.get("recommendation_mark")
-        rec_count = row.get("recommend_all_count")
-        if rec_mark is not None and rec_count is not None:
-            rating = f"{float(rec_mark):.1f} ({int(rec_count)})"
-        else:
-            rating = ""
+        try:
+            mark_f = float(rec_mark) if rec_mark is not None else None
+            if mark_f is not None and math.isnan(mark_f):
+                mark_f = None
+        except (ValueError, TypeError):
+            mark_f = None
+        rating = f"{mark_f:.1f}" if mark_f is not None else ""
 
         equities.append({
             "ticker": ticker,
             "exchange": exchange,
-            "company_name": hyperlink,
+            "company_name": company_name,
             "country": country,
             "sector": sector,
             "price": price,
-            "market_cap": market_cap,
-            "ps_ratio_ttm": ps_ratio,
-            "total_revenue_ttm": total_revenue,
-            "rev_growth_ttm%": rev_growth,
-            "gross_margin_%": gross_margin,
-            "net_margin_ttm": net_margin,
-            "fcf_margin_ttm": fcf_margin,
             "perf_52w_vs_spy": perf_52w_vs_spy,
             "rating": rating,
-            "net_income_ttm": net_income,
         })
 
     return equities
@@ -443,19 +412,21 @@ def _screen_markets(markets: list[str], spy_perf_y: float, logger) -> list[dict]
 # ---------------------------------------------------------------------------
 
 
-def load_ai_analysis(service, logger) -> dict:
-    """Load AI Analysis tab into a dict keyed by ticker."""
+def load_ai_analysis(service, logger) -> tuple[dict, dict]:
+    """
+    Load AI Analysis tab into a dict keyed by ticker.
+    Also returns {ticker: row_number} for deep linking.
+    """
     logger.info("Loading AI Analysis tab...")
-    rows = read_sheet(service, AI_ANALYSIS_SHEET)
+    rows = read_sheet(service, AI_ANALYSIS_SHEET, end_col="AD")
     if len(rows) < 3:
         logger.warning("AI Analysis tab has fewer than 3 rows")
-        return {}
+        return {}, {}
 
     # Row 1 = category headers, Row 2 = column titles, Row 3+ = data
     headers = [str(h).strip().lower() for h in rows[1]]
     data_rows = rows[2:]
 
-    # Find column indices
     col_map = {}
     for idx, h in enumerate(headers):
         col_map[h] = idx
@@ -463,10 +434,11 @@ def load_ai_analysis(service, logger) -> dict:
     ticker_idx = col_map.get("ticker")
     if ticker_idx is None:
         logger.error("Cannot find 'ticker' column in AI Analysis headers: %s", headers)
-        return {}
+        return {}, {}
 
     ai_data = {}
-    for row in data_rows:
+    ai_row_map = {}  # ticker -> 1-indexed sheet row number
+    for row_idx, row in enumerate(data_rows):
         padded = row + [""] * (max(col_map.values()) + 1 - len(row))
         ticker = padded[ticker_idx].strip().upper()
         if not ticker:
@@ -489,99 +461,175 @@ def load_ai_analysis(service, logger) -> dict:
             "data": get_val("data"),
             "r40_score": get_val("r40_score"),
         }
+        ai_row_map[ticker] = row_idx + 3  # data starts at row 3
 
     logger.info("Loaded %d tickers from AI Analysis", len(ai_data))
-    return ai_data
+    return ai_data, ai_row_map
 
 
-def load_price_sales(service, logger) -> dict:
-    """Load Price-Sales tab into a dict keyed by ticker."""
+def load_price_sales(service, logger) -> tuple[dict, dict]:
+    """
+    Load Price-Sales tab into a dict keyed by ticker.
+    Also returns {ticker: row_number} for deep linking.
+    """
     logger.info("Loading Price-Sales tab...")
-    rows = read_sheet(service, PRICE_SALES_SHEET)
+    rows = read_sheet(service, PRICE_SALES_SHEET, end_col="K")
     if len(rows) < 2:
         logger.warning("Price-Sales tab has fewer than 2 rows")
-        return {}
+        return {}, {}
 
-    # Row 1 = headers, Row 2+ = data
-    headers = [str(h).strip().lower() for h in rows[0]]
-    data_rows = rows[1:]
+    # Detect header row
+    row1_lower = [str(h).strip().lower() for h in rows[0]]
+    if "ticker" in row1_lower:
+        headers = row1_lower
+        data_rows = rows[1:]
+        data_start_row = 2  # 1-indexed
+    elif len(rows) >= 3:
+        headers = [str(h).strip().lower() for h in rows[1]]
+        data_rows = rows[2:]
+        data_start_row = 3
+    else:
+        logger.warning("Price-Sales tab: cannot find column titles")
+        return {}, {}
 
     col_map = {h: i for i, h in enumerate(headers)}
 
     ticker_idx = col_map.get("ticker")
     ps_now_idx = col_map.get("ps_now")
+    high_52w_idx = col_map.get("52w_high")
 
     if ticker_idx is None:
         logger.error("Cannot find 'ticker' column in Price-Sales headers: %s", headers)
-        return {}
+        return {}, {}
     if ps_now_idx is None:
         logger.error("Cannot find 'ps_now' column in Price-Sales headers: %s", headers)
-        return {}
+        return {}, {}
 
     ps_data = {}
-    for row in data_rows:
-        padded = row + [""] * (max(ticker_idx, ps_now_idx) + 1 - len(row))
+    ps_row_map = {}  # ticker -> 1-indexed sheet row number
+    max_idx = max(c for c in [ticker_idx, ps_now_idx, high_52w_idx] if c is not None)
+    for row_idx, row in enumerate(data_rows):
+        padded = row + [""] * (max_idx + 1 - len(row))
         ticker = padded[ticker_idx].strip().upper()
         if not ticker:
             continue
-        ps_now_raw = padded[ps_now_idx].strip()
-        try:
-            ps_now = float(ps_now_raw)
-        except (ValueError, TypeError):
-            ps_now = None
-        ps_data[ticker] = {"ps_now": ps_now}
+
+        ps_now = _safe_float(padded[ps_now_idx])
+        high_52w = _safe_float(padded[high_52w_idx]) if high_52w_idx is not None else None
+
+        ps_data[ticker] = {"ps_now": ps_now, "52w_high": high_52w}
+        ps_row_map[ticker] = data_start_row + row_idx
 
     logger.info("Loaded %d tickers from Price-Sales", len(ps_data))
-    return ps_data
+    return ps_data, ps_row_map
 
 
-def derive_direction(net_margin_pct, net_margin_yoy_pct):
-    """Derive net margin direction arrow from margin values."""
-    if net_margin_yoy_pct is None or net_margin_pct is None:
-        return None
+def load_first_seen_data(service, logger) -> dict:
+    """
+    Try to load first_seen dates from old CURRENT sheets that have the column.
+    Also extracts days_on_list from the current TARGET_SHEET if available.
+    Returns {ticker: days_on_list_int_or_None}.
+    """
+    days_map = {}
+
+    # First, try to get days_on_list from the existing CURRENT (TARGET_SHEET)
+    # which already has the V2 layout with days_on_list column
+    logger.info("Loading existing days_on_list from %s...", TARGET_SHEET)
     try:
-        yoy = float(net_margin_yoy_pct)
-    except (ValueError, TypeError):
-        return None
-    if yoy > 0.01:
-        return "↑"
-    elif yoy < -0.01:
-        return "↓"
-    else:
-        return "→"
+        rows = read_sheet(service, TARGET_SHEET, end_col="T")
+        if len(rows) >= 3:
+            headers = [str(h).strip().lower() for h in rows[1]]
+            ticker_idx = None
+            days_idx = None
+            for idx, h in enumerate(headers):
+                if h == "ticker":
+                    ticker_idx = idx
+                if h == "days_on_list":
+                    days_idx = idx
+            if ticker_idx is not None and days_idx is not None:
+                for row in rows[2:]:
+                    padded = row + [""] * (max(ticker_idx, days_idx) + 1 - len(row))
+                    raw_ticker = padded[ticker_idx]
+                    ticker = _extract_ticker_from_hyperlink(raw_ticker)
+                    if not ticker:
+                        continue
+                    days_val = _safe_float(padded[days_idx])
+                    if days_val is not None:
+                        days_map[ticker] = int(days_val) + 1  # Increment by 1 for today
+                logger.info("Loaded %d days_on_list values from %s", len(days_map), TARGET_SHEET)
+    except Exception as e:
+        logger.warning("Failed to read %s for days_on_list: %s", TARGET_SHEET, e)
 
+    # Then try old sheets for first_seen dates (for tickers not yet in days_map)
+    for old_sheet in FIRST_SEEN_SHEETS:
+        logger.info("Checking '%s' for first_seen data...", old_sheet)
+        try:
+            rows = read_sheet(service, old_sheet, end_col="AF")
+        except Exception as e:
+            logger.info("Sheet '%s' not readable: %s", old_sheet, e)
+            continue
 
-def parse_net_margin_value(val):
-    """Parse a net margin string value to a float."""
-    if val is None:
-        return None
-    try:
-        v = float(str(val).replace("%", "").strip())
-        # If it looks like a whole percentage, convert
-        if abs(v) > 1.0:
-            return v / 100.0
-        return v
-    except (ValueError, TypeError):
-        return None
+        if len(rows) < 2:
+            continue
+
+        # Try both single-row and 2-row header detection
+        row1 = [str(h).strip().lower() for h in rows[0]]
+        if "ticker" in row1 and "first_seen" in row1:
+            headers = row1
+            data_rows = rows[1:]
+        elif len(rows) >= 3:
+            headers = [str(h).strip().lower() for h in rows[1]]
+            data_rows = rows[2:]
+        else:
+            continue
+
+        ticker_idx = None
+        first_seen_idx = None
+        for idx, h in enumerate(headers):
+            if h == "ticker":
+                ticker_idx = idx
+            if h == "first_seen":
+                first_seen_idx = idx
+
+        if ticker_idx is None or first_seen_idx is None:
+            logger.info("Sheet '%s' missing ticker/first_seen columns", old_sheet)
+            continue
+
+        count = 0
+        for row in data_rows:
+            padded = row + [""] * (max(ticker_idx, first_seen_idx) + 1 - len(row))
+            ticker = padded[ticker_idx].strip().upper()
+            fs = padded[first_seen_idx].strip()
+            if ticker and fs and ticker not in days_map:
+                try:
+                    from datetime import datetime
+                    fs_parsed = datetime.strptime(fs, "%Y-%m-%d").date()
+                    days_map[ticker] = (date.today() - fs_parsed).days
+                    count += 1
+                except (ValueError, TypeError):
+                    pass
+        logger.info("Loaded %d first_seen dates from '%s'", count, old_sheet)
+
+    logger.info("Total days_on_list data: %d tickers", len(days_map))
+    return days_map
 
 
 # ---------------------------------------------------------------------------
-# Step 3 — Upsert into CURRENT
+# Step 3 — Upsert into CURRENT_V2
 # ---------------------------------------------------------------------------
 
 
-def load_current_data(service, logger) -> dict:
+def load_v2_data(service, logger) -> dict:
     """
-    Read existing CURRENT sheet data rows into a dict keyed by ticker.
-    Returns {ticker: {col_name: value, ...}, ...} and the raw rows for formula reads.
+    Read existing CURRENT_V2 data rows into a dict keyed by ticker.
+    Ticker is in col D (index 3). Uses FORMULA render to preserve hyperlinks.
     """
-    logger.info("Loading existing CURRENT data...")
-    rows = read_sheet(service, CURRENT_SHEET, value_render="FORMULA")
+    logger.info("Loading existing CURRENT_V2 data...")
+    rows = read_sheet(service, TARGET_SHEET, end_col="T", value_render="FORMULA")
     if len(rows) < 3:
-        logger.warning("CURRENT tab has fewer than 3 rows (headers + data)")
+        logger.warning("CURRENT_V2 tab has fewer than 3 rows (headers + data)")
         return {}
 
-    # Row 1 = category, Row 2 = column titles, Row 3+ = data
     headers = [str(h).strip().lower() for h in rows[1]]
     data_rows = rows[2:]
 
@@ -591,23 +639,36 @@ def load_current_data(service, logger) -> dict:
             ticker_idx = idx
             break
     if ticker_idx is None:
-        logger.error("Cannot find 'ticker' in CURRENT headers: %s", headers)
+        logger.error("Cannot find 'ticker' in CURRENT_V2 headers: %s", headers)
         return {}
 
     existing = {}
-    for row_idx, row in enumerate(data_rows):
+    for row in data_rows:
         padded = row + [""] * (NUM_COLS - len(row))
-        ticker = padded[ticker_idx].strip().upper()
+        # ticker col may be a HYPERLINK formula — extract the display text
+        raw_ticker = padded[ticker_idx]
+        ticker = _extract_ticker_from_hyperlink(raw_ticker)
         if not ticker:
             continue
         row_data = {}
-        for i, header_name in enumerate(CURRENT_HEADERS):
+        for i, header_name in enumerate(V2_HEADERS):
             row_data[header_name] = padded[i] if i < len(padded) else ""
-        row_data["_sheet_row"] = row_idx + 3  # 1-indexed sheet row
         existing[ticker] = row_data
 
-    logger.info("Loaded %d existing tickers from CURRENT", len(existing))
+    logger.info("Loaded %d existing tickers from CURRENT_V2", len(existing))
     return existing
+
+
+def _extract_ticker_from_hyperlink(val):
+    """Extract ticker from a HYPERLINK formula or plain text."""
+    val = str(val).strip()
+    if not val:
+        return ""
+    # Match =HYPERLINK("...", "TICKER")
+    match = re.search(r'=HYPERLINK\([^,]+,\s*"([^"]+)"\)', val)
+    if match:
+        return match.group(1).strip().upper()
+    return val.strip().upper()
 
 
 def parse_r40_score(r40_str):
@@ -630,6 +691,16 @@ def parse_rating_numeric(rating_str):
     return None
 
 
+def _status_base(status_str):
+    """Extract the emoji prefix from a status string."""
+    if not status_str:
+        return ""
+    for emoji in PROTECTED_STATUSES:
+        if status_str.startswith(emoji):
+            return emoji
+    return status_str
+
+
 def compute_composite_score(row_data, all_rows):
     """Calculate composite score for sorting."""
     def pct(values, v, invert=False):
@@ -638,52 +709,37 @@ def compute_composite_score(row_data, all_rows):
         p = percentileofscore(values, v, kind="mean") / 100
         return (1 - p) if invert else p
 
-    all_ps = [r["ps_ratio_ttm"] for r in all_rows if r.get("ps_ratio_ttm") is not None]
-    all_perf = [r["perf_52w_vs_spy"] for r in all_rows if r.get("perf_52w_vs_spy") is not None]
-    all_r40 = [r["r40_numeric"] for r in all_rows if r.get("r40_numeric") is not None]
-    all_rtg = [r["rating_numeric"] for r in all_rows if r.get("rating_numeric") is not None]
+    all_ps = [r["_ps_now_f"] for r in all_rows if r.get("_ps_now_f") is not None]
+    all_perf = [r["_perf_f"] for r in all_rows if r.get("_perf_f") is not None]
+    all_r40 = [r["_r40_f"] for r in all_rows if r.get("_r40_f") is not None]
+    all_rtg = [r["_rating_f"] for r in all_rows if r.get("_rating_f") is not None]
 
     return (
-        pct(all_r40, row_data.get("r40_numeric")) * 40
-        + pct(all_ps, row_data.get("ps_ratio_ttm"), invert=True) * 25
-        + pct(all_perf, row_data.get("perf_52w_vs_spy")) * 20
-        + pct(all_rtg, row_data.get("rating_numeric"), invert=True) * 15
+        pct(all_r40, row_data.get("_r40_f")) * 40
+        + pct(all_ps, row_data.get("_ps_now_f"), invert=True) * 25
+        + pct(all_perf, row_data.get("_perf_f")) * 20
+        + pct(all_rtg, row_data.get("_rating_f"), invert=True) * 15
     )
 
 
-def _safe_float(val):
-    """Try to convert a value to float, return None on failure."""
-    if val is None or val == "" or val == "—":
-        return None
-    try:
-        return float(val)
-    except (ValueError, TypeError):
-        return None
-
-
-def _status_base(status_str):
-    """Extract the emoji prefix from a status string for comparison."""
-    if not status_str:
-        return ""
-    # Get the first character cluster (emoji)
-    for emoji in PROTECTED_STATUSES:
-        if status_str.startswith(emoji):
-            return emoji
-    return status_str
-
-
-def upsert_current(
+def upsert_v2(
     screened: list[dict],
     ai_data: dict,
+    ai_row_map: dict,
     ps_data: dict,
+    ps_row_map: dict,
+    days_map: dict,
     existing: dict,
+    sheet_gids: dict,
     logger,
 ) -> list[list]:
     """
     Build the full data rows for CURRENT tab after upserting screened equities.
-    Returns list of row-lists ready for batch_update.
+    Returns list of row-lists ready for batch write.
     """
     today_str = date.today().isoformat()
+    ai_gid = sheet_gids.get(AI_ANALYSIS_SHEET, 0)
+    ps_gid = sheet_gids.get(PRICE_SALES_SHEET, 0)
 
     # Start with all existing tickers (we never delete rows)
     merged = dict(existing)
@@ -693,136 +749,146 @@ def upsert_current(
         is_new = ticker not in merged
 
         if is_new:
-            row = {h: "" for h in CURRENT_HEADERS}
+            row = {h: "" for h in V2_HEADERS}
         else:
             row = dict(merged[ticker])
 
-        # -- TradingView columns (always update) --
-        row["ticker"] = eq["ticker"]
-        row["exchange"] = eq["exchange"]
+        # -- IDENTITY columns (always update) --
+        gf_link = google_finance_url(ticker, eq["exchange"])
+        row["ticker"] = f'=HYPERLINK("{gf_link}", "{eq["ticker"]}")'
         row["company_name"] = eq["company_name"]
+        row["exchange"] = eq["exchange"]
         row["country"] = eq["country"]
         row["sector"] = eq["sector"]
+
+        # -- VALUATION --
         row["price"] = eq.get("price", "")
-        row["market_cap"] = eq.get("market_cap", "")
-        row["ps_ratio_ttm"] = eq.get("ps_ratio_ttm", "")
-        row["total_revenue_ttm"] = eq.get("total_revenue_ttm", "")
-        row["rev_growth_ttm%"] = eq.get("rev_growth_ttm%", "")
-        row["gross_margin_%"] = eq.get("gross_margin_%", "")
-        row["net_margin_ttm"] = eq.get("net_margin_ttm", "")
-        row["fcf_margin_ttm"] = eq.get("fcf_margin_ttm", "")
+
+        # -- MARKET --
         row["perf_52w_vs_spy"] = eq.get("perf_52w_vs_spy", "")
         row["rating"] = eq.get("rating", "")
-        row["net_income_ttm"] = eq.get("net_income_ttm", "")
-
-        # -- Price-Sales override for ps_ratio_ttm (col H) --
-        ai_row = ai_data.get(ticker, {})
-        ps_row = ps_data.get(ticker, {})
-        if ps_row.get("ps_now") is not None:
-            row["ps_ratio_ttm"] = ps_row["ps_now"]
 
         # -- AI Analysis enrichment --
+        ai_row = ai_data.get(ticker, {})
         if ai_row:
-            if ai_row.get("net_margin%"):
-                row["net_margin_annual"] = ai_row["net_margin%"]
-            if ai_row.get("net_margin_yoy%"):
-                row["net_margin_qoq"] = ai_row["net_margin_yoy%"]
             if ai_row.get("description"):
                 row["description"] = ai_row["description"]
-            if ai_row.get("fundamentals_snapshot"):
-                row["fundamentals"] = ai_row["fundamentals_snapshot"]
             if ai_row.get("short_outlook"):
                 row["short_outlook"] = ai_row["short_outlook"]
-            if ai_row.get("full_outlook"):
-                row["outlook"] = ai_row["full_outlook"]
-            if ai_row.get("data"):
-                row["ai_analysis_date"] = ai_row["data"]
+            if ai_row.get("r40_score"):
+                row["r40_score"] = ai_row["r40_score"]
 
-        # -- Derive net_margin_direction (col O) --
-        nm_pct = parse_net_margin_value(ai_row.get("net_margin%"))
-        nm_yoy = parse_net_margin_value(ai_row.get("net_margin_yoy%"))
-        direction = derive_direction(nm_pct, nm_yoy)
-        if direction is not None:
-            row["net_margin_direction"] = direction
+            # fundamentals_snapshot as HYPERLINK to AI Analysis row
+            fs_text = ai_row.get("fundamentals_snapshot", "")
+            if fs_text and ticker in ai_row_map:
+                ai_sheet_row = ai_row_map[ticker]
+                # Escape double quotes in display text
+                safe_text = str(fs_text).replace('"', '""')
+                row["fundamentals_snapshot"] = (
+                    f'=HYPERLINK("#gid={ai_gid}&range=A{ai_sheet_row}", "{safe_text}")'
+                )
+            elif fs_text:
+                row["fundamentals_snapshot"] = fs_text
 
-        # -- Signal: leave as-is if already populated and AI has no value --
+        # -- Price-Sales enrichment --
+        ps_row = ps_data.get(ticker, {})
+        ps_now_val = ps_row.get("ps_now")
+        if ps_now_val is not None and ticker in ps_row_map:
+            ps_sheet_row = ps_row_map[ticker]
+            row["ps_now"] = (
+                f'=HYPERLINK("#gid={ps_gid}&range=A{ps_sheet_row}", "{ps_now_val:.2f}")'
+            )
+        elif ps_now_val is not None:
+            row["ps_now"] = ps_now_val
+
+        # price_%_of_52w_high = P/S Now / 52w High
+        high_52w = ps_row.get("52w_high")
+        if ps_now_val is not None and high_52w is not None and high_52w > 0:
+            row["price_%_of_52w_high"] = ps_now_val / high_52w
+        else:
+            row["price_%_of_52w_high"] = ""
+
+        # -- days_on_list --
+        if ticker in days_map:
+            row["days_on_list"] = days_map[ticker]
+        elif is_new:
+            row["days_on_list"] = 0
+        # else keep existing value
+
+        # -- Status logic --
         if is_new:
-            row["signal"] = ""
-
-        # -- Never-overwrite columns on existing rows --
-        if is_new:
-            row["entry_ps_ttm"] = row["ps_ratio_ttm"]
-            row["first_seen"] = today_str
             row["status"] = "🆕 New"
         else:
-            # Preserve entry_ps_ttm and first_seen (never overwrite)
-            pass
-
-        # -- Status auto-logic --
-        if not is_new:
             current_status = str(row.get("status", "")).strip()
             status_emoji = _status_base(current_status)
-
             if status_emoji in PROTECTED_STATUSES:
                 pass  # Leave unchanged
             elif ai_row and ai_row.get("short_outlook"):
                 row["status"] = "🟡 Watching"
-            elif not ai_row or not ai_row.get("short_outlook"):
+            else:
                 row["status"] = "🔴 Pending"
 
-        # -- chart_data and chart_data_date: never touch --
-        # (they remain as-is from existing data or empty for new rows)
+        # -- Manual-only cols: preserve existing values --
+        if not is_new:
+            for manual_col in MANUAL_ONLY_COLS:
+                # Already in row from existing data, don't touch
+                pass
+        # For new rows, manual cols stay as empty string (already set above)
 
         merged[ticker] = row
 
-    # Now also enrich existing tickers that weren't in today's screen
-    # but have AI/PS data
+    # Also enrich existing tickers not in today's screen
+    screened_tickers = {eq["ticker"].upper() for eq in screened}
     for ticker, row in merged.items():
-        if ticker in {eq["ticker"].upper() for eq in screened}:
-            continue  # Already processed above
+        if ticker in screened_tickers:
+            continue
 
         ai_row = ai_data.get(ticker, {})
-        ps_row = ps_data.get(ticker, {})
-
-        # Update AI Analysis columns if data found
         if ai_row:
-            if ai_row.get("net_margin%"):
-                row["net_margin_annual"] = ai_row["net_margin%"]
-            if ai_row.get("net_margin_yoy%"):
-                row["net_margin_qoq"] = ai_row["net_margin_yoy%"]
             if ai_row.get("description"):
                 row["description"] = ai_row["description"]
-            if ai_row.get("fundamentals_snapshot"):
-                row["fundamentals"] = ai_row["fundamentals_snapshot"]
             if ai_row.get("short_outlook"):
                 row["short_outlook"] = ai_row["short_outlook"]
-            if ai_row.get("full_outlook"):
-                row["outlook"] = ai_row["full_outlook"]
-            if ai_row.get("data"):
-                row["ai_analysis_date"] = ai_row["data"]
+            if ai_row.get("r40_score"):
+                row["r40_score"] = ai_row["r40_score"]
+            fs_text = ai_row.get("fundamentals_snapshot", "")
+            if fs_text and ticker in ai_row_map:
+                ai_sheet_row = ai_row_map[ticker]
+                safe_text = str(fs_text).replace('"', '""')
+                row["fundamentals_snapshot"] = (
+                    f'=HYPERLINK("#gid={ai_gid}&range=A{ai_sheet_row}", "{safe_text}")'
+                )
 
-            nm_pct = parse_net_margin_value(ai_row.get("net_margin%"))
-            nm_yoy = parse_net_margin_value(ai_row.get("net_margin_yoy%"))
-            direction = derive_direction(nm_pct, nm_yoy)
-            if direction is not None:
-                row["net_margin_direction"] = direction
+        ps_row = ps_data.get(ticker, {})
+        ps_now_val = ps_row.get("ps_now")
+        if ps_now_val is not None and ticker in ps_row_map:
+            ps_sheet_row = ps_row_map[ticker]
+            row["ps_now"] = (
+                f'=HYPERLINK("#gid={ps_gid}&range=A{ps_sheet_row}", "{ps_now_val:.2f}")'
+            )
+        high_52w = ps_row.get("52w_high")
+        if ps_now_val is not None and high_52w is not None and high_52w > 0:
+            row["price_%_of_52w_high"] = ps_now_val / high_52w
 
-        # Update P/S from Price-Sales if found
-        if ps_row.get("ps_now") is not None:
-            row["ps_ratio_ttm"] = ps_row["ps_now"]
+        if ticker in days_map:
+            row["days_on_list"] = days_map[ticker]
 
-    # -- Build scoring data for sorting --
+    # -- Build scoring data --
     scoring_rows = []
     for ticker, row in merged.items():
-        score_data = dict(row)
-        score_data["ps_ratio_ttm"] = _safe_float(row.get("ps_ratio_ttm"))
-        score_data["perf_52w_vs_spy"] = _safe_float(row.get("perf_52w_vs_spy"))
-        score_data["r40_numeric"] = parse_r40_score(
-            ai_data.get(ticker, {}).get("r40_score")
-        )
-        score_data["rating_numeric"] = parse_rating_numeric(row.get("rating"))
-        score_data["_ticker"] = ticker
-        scoring_rows.append(score_data)
+        sr = dict(row)
+        sr["_ticker"] = ticker
+        # Extract numeric P/S from hyperlink or plain value
+        ps_raw = row.get("ps_now", "")
+        if isinstance(ps_raw, str) and "HYPERLINK" in ps_raw:
+            match = re.search(r'"([\d.]+)"[)\s]*$', ps_raw)
+            sr["_ps_now_f"] = float(match.group(1)) if match else None
+        else:
+            sr["_ps_now_f"] = _safe_float(ps_raw)
+        sr["_perf_f"] = _safe_float(row.get("perf_52w_vs_spy"))
+        sr["_r40_f"] = parse_r40_score(row.get("r40_score"))
+        sr["_rating_f"] = parse_rating_numeric(row.get("rating"))
+        scoring_rows.append(sr)
 
     # Compute composite scores
     for sr in scoring_rows:
@@ -832,7 +898,6 @@ def upsert_current(
     def sort_key(sr):
         status = str(sr.get("status", "")).strip()
         priority = STATUS_PRIORITY.get(status, 99)
-        # Also try matching just the emoji
         if priority == 99:
             emoji = _status_base(status)
             for k, v in STATUS_PRIORITY.items():
@@ -842,33 +907,19 @@ def upsert_current(
         return (priority, -sr.get("_composite_score", 0))
 
     scoring_rows.sort(key=sort_key)
-
     logger.info("Sorted %d rows by status priority + composite score", len(scoring_rows))
 
     # Build final row-lists
     final_rows = []
-    for idx, sr in enumerate(scoring_rows):
+    for sr in scoring_rows:
         ticker = sr["_ticker"]
         row = merged[ticker]
-        sheet_row = idx + 3  # data starts at row 3
+        # Write composite_score to col T
+        row["composite_score"] = round(sr["_composite_score"], 1)
 
-        # Build the row as a list matching CURRENT_HEADERS
         row_list = []
-        for col_name in CURRENT_HEADERS:
+        for col_name in V2_HEADERS:
             val = row.get(col_name, "")
-
-            # Formula columns: ps_discount and days_on_list
-            if col_name == "ps_discount":
-                i_col = _col_letter(COL_INDEX["entry_ps_ttm"])
-                h_col = _col_letter(COL_INDEX["ps_ratio_ttm"])
-                val = f'=IFERROR(({i_col}{sheet_row}-{h_col}{sheet_row})/{i_col}{sheet_row},"")'
-            elif col_name == "days_on_list":
-                ac_col = _col_letter(COL_INDEX["first_seen"])
-                val = f'=IFERROR(TODAY()-{ac_col}{sheet_row},"")'
-            elif col_name in ("chart_data", "chart_data_date"):
-                # Never touch these — keep existing value or empty
-                val = row.get(col_name, "")
-
             if val is None:
                 val = ""
             row_list.append(val)
@@ -878,38 +929,45 @@ def upsert_current(
     return final_rows
 
 
-def write_current(service, final_rows: list[list], logger):
-    """Write all data rows to CURRENT tab via batch update."""
+def write_v2(service, final_rows: list[list], logger):
+    """Write all data rows to CURRENT_V2 tab via batch update."""
     logger.info("=" * 60)
-    logger.info("Step 3: Writing to CURRENT tab")
+    logger.info("Step 3: Writing to CURRENT_V2 tab")
     logger.info("=" * 60)
 
     if not final_rows:
         logger.warning("No data rows to write!")
         return
 
-    # Read existing category row and header row to preserve them
-    existing_headers = read_sheet(service, CURRENT_SHEET, value_render="FORMULA")
+    # Read existing header rows to preserve them
+    existing_headers = read_sheet(service, TARGET_SHEET, end_col="T", value_render="FORMULA")
     if len(existing_headers) >= 2:
         cat_row = existing_headers[0]
         header_row = existing_headers[1]
-        # Pad to NUM_COLS
         cat_row = (cat_row + [""] * NUM_COLS)[:NUM_COLS]
         header_row = (header_row + [""] * NUM_COLS)[:NUM_COLS]
     else:
-        # Rebuild from scratch
+        # Build category row from spec
         cat_row = [""] * NUM_COLS
-        header_row = list(CURRENT_HEADERS)
+        cat_row[0] = "STATUS"    # A (STATUS covers A-C)
+        cat_row[3] = "IDENTITY"  # D (IDENTITY covers D-H)
+        cat_row[8] = "NARRATIVE" # I (NARRATIVE covers I-K)
+        cat_row[11] = "VALUATION"  # L (VALUATION covers L-N)
+        cat_row[14] = "FUNDAMENTALS"  # O (FUNDAMENTALS covers O-P)
+        cat_row[16] = "MARKET"   # Q
+        cat_row[17] = "TRACKING" # R (TRACKING covers R-T)
+        header_row = list(V2_HEADERS)
 
-    all_rows = [cat_row, header_row] + final_rows
+    sanitized_rows = [sanitize_row(r) for r in final_rows]
+    all_rows = [cat_row, header_row] + sanitized_rows
     end_col = _col_letter(NUM_COLS - 1)
     end_row = len(all_rows)
-    write_range = f"'{CURRENT_SHEET}'!A1:{end_col}{end_row}"
+    write_range = f"'{TARGET_SHEET}'!A1:{end_col}{end_row}"
 
-    # Clear data area first (preserve headers by overwriting everything)
+    # Clear data area first
     service.spreadsheets().values().clear(
         spreadsheetId=SPREADSHEET_ID,
-        range=f"'{CURRENT_SHEET}'!A3:ZZ",
+        range=f"'{TARGET_SHEET}'!A3:{end_col}",
     ).execute()
 
     # Write all rows
@@ -920,9 +978,7 @@ def write_current(service, final_rows: list[list], logger):
         body={"values": all_rows},
     ).execute()
 
-    logger.info(
-        "Wrote %d data rows to CURRENT tab (%s)", len(final_rows), write_range
-    )
+    logger.info("Wrote %d data rows to CURRENT_V2 (%s)", len(final_rows), write_range)
 
 
 # ---------------------------------------------------------------------------
@@ -935,7 +991,7 @@ def main():
     logger = setup_logging()
 
     logger.info("=" * 60)
-    logger.info("Nightly CURRENT Sheet Update — starting")
+    logger.info("Nightly CURRENT_V2 Sheet Update — starting")
     logger.info("=" * 60)
 
     # Step 1: TradingView Screen
@@ -945,25 +1001,31 @@ def main():
     # Connect to Google Sheets
     service = get_sheets_service()
 
-    # Step 2: Enrich from Google Sheet tabs
+    # Step 2: Enrich
     logger.info("=" * 60)
     logger.info("Step 2: Enriching from Google Sheet tabs")
     logger.info("=" * 60)
 
-    ai_data = load_ai_analysis(service, logger)
-    ps_data = load_price_sales(service, logger)
+    sheet_gids = get_sheet_gids(service)
+    logger.info("Sheet GIDs: %s", sheet_gids)
+
+    ai_data, ai_row_map = load_ai_analysis(service, logger)
+    ps_data, ps_row_map = load_price_sales(service, logger)
+    days_map = load_first_seen_data(service, logger)
 
     # Load existing CURRENT data
-    existing = load_current_data(service, logger)
+    existing = load_v2_data(service, logger)
 
     # Step 3: Upsert
-    final_rows = upsert_current(screened, ai_data, ps_data, existing, logger)
+    final_rows = upsert_v2(
+        screened, ai_data, ai_row_map, ps_data, ps_row_map,
+        days_map, existing, sheet_gids, logger,
+    )
 
-    # Write to sheet
-    write_current(service, final_rows, logger)
+    write_v2(service, final_rows, logger)
 
     logger.info("=" * 60)
-    logger.info("Nightly CURRENT Sheet Update — complete (%d rows)", len(final_rows))
+    logger.info("Nightly CURRENT_V2 Sheet Update — complete (%d rows)", len(final_rows))
     logger.info("=" * 60)
 
 
