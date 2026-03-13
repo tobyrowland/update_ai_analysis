@@ -36,7 +36,7 @@ GEMINI_MODEL = "gemini-2.5-flash"
 DELAY_BETWEEN_TICKERS = 3  # seconds between tickers
 DELAY_BETWEEN_SEARCHES = 1  # seconds between SerpAPI calls
 DELAY_AFTER_GEMINI = 2  # seconds after Gemini call
-MAX_RETRIES = 2
+MAX_RETRIES = 3
 RETRY_DELAY = 10
 
 # Column indices (0-based) matching the sheet structure
@@ -313,12 +313,26 @@ def call_gemini(
     for attempt in range(MAX_RETRIES):
         try:
             raw = _call_gemini_subprocess(prompt, api_key, GEMINI_MODEL)
+
+            if not raw or not raw.strip():
+                raise Exception("Empty response from Gemini API")
+
             data = json.loads(raw)
 
             if "error" in data:
                 raise Exception(f"{data['error'].get('code')} {data['error'].get('message', '')}")
 
-            text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            # Handle safety filter blocks (no candidates returned)
+            candidates = data.get("candidates", [])
+            if not candidates:
+                block_reason = data.get("promptFeedback", {}).get("blockReason", "unknown")
+                raise Exception(f"No candidates returned (blockReason={block_reason})")
+
+            finish_reason = candidates[0].get("finishReason", "")
+            if finish_reason == "SAFETY":
+                raise Exception("Response blocked by safety filter")
+
+            text = candidates[0]["content"]["parts"][0]["text"].strip()
 
             # Strip markdown fences if present
             if text.startswith("```"):
@@ -331,14 +345,12 @@ def call_gemini(
             try:
                 result = json.loads(text)
             except json.JSONDecodeError:
-                logger.error("Gemini returned invalid JSON for %s: %s", ticker, text[:300])
-                return None
+                raise Exception(f"Invalid JSON in Gemini response: {text[:300]}")
 
             required_keys = {"description", "short_outlook", "full_outlook", "key_risks"}
             missing = required_keys - set(result.keys())
             if missing:
-                logger.error("Gemini response missing keys for %s: %s", ticker, missing)
-                return None
+                raise Exception(f"Gemini response missing keys: {missing}")
 
             return result
 
@@ -347,13 +359,13 @@ def call_gemini(
             if attempt < MAX_RETRIES - 1:
                 delay = RETRY_DELAY if "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str else 5
                 logger.warning(
-                    "Gemini call failed (attempt %d/%d), retrying in %ds: %s",
-                    attempt + 1, MAX_RETRIES, delay, exc,
+                    "Gemini call failed for %s (attempt %d/%d), retrying in %ds: %s",
+                    ticker, attempt + 1, MAX_RETRIES, delay, exc,
                 )
                 time.sleep(delay)
             else:
-                logger.error("Gemini call failed (attempt %d/%d), skipping: %s",
-                             attempt + 1, MAX_RETRIES, exc)
+                logger.error("Gemini call failed for %s (attempt %d/%d), skipping: %s",
+                             ticker, attempt + 1, MAX_RETRIES, exc)
                 return None
 
     return None
