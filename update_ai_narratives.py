@@ -255,9 +255,14 @@ def serpapi_search(query: str, api_key: str, logger: logging.Logger) -> str:
 
 
 def gather_web_context(
-    company: str, ticker: str, api_key: str, logger: logging.Logger
+    company: str, ticker: str, api_key: str, logger: logging.Logger,
+    one_time_event: str = "",
 ) -> str:
-    """Run two SerpAPI searches and merge results."""
+    """Run SerpAPI searches and merge results.
+
+    When a one_time_event flag is provided, runs an additional targeted search
+    to find context about the specific event (write-down, settlement, etc.).
+    """
     current_year = date.today().year
     prev_year = current_year - 1
 
@@ -273,6 +278,17 @@ def gather_web_context(
         parts.append(f"EARNINGS SEARCH:\n{s1}")
     if s2:
         parts.append(f"OUTLOOK SEARCH:\n{s2}")
+
+    # Targeted search for the one-time event to give the model real context
+    if one_time_event:
+        # Extract key financial terms from the flag for a focused query
+        event_keywords = one_time_event[:120].replace('"', '')
+        q3 = f"{company} {ticker} {event_keywords} {prev_year} {current_year}"
+        time.sleep(1)
+        s3 = serpapi_search(q3, api_key, logger)
+        if s3:
+            parts.append(f"ONE-TIME EVENT SEARCH:\n{s3}")
+            logger.info("  Found web context for one-time event on %s", ticker)
 
     return "\n\n".join(parts)
 
@@ -355,9 +371,10 @@ The analyst has flagged the one-time event above. Your job is to ADD VALUE beyon
 what the flag already says. Do NOT just restate or paraphrase the event — the reader
 can already see it. Instead:
 
-1. USE THE WEB SEARCH RESULTS to identify what actually caused this event (e.g. an
-   acquisition write-down, a legal settlement, a one-off IP sale, a restructuring
-   programme, an asset impairment, etc.). Name the specific real-world cause.
+1. USE THE WEB SEARCH RESULTS (especially the "ONE-TIME EVENT SEARCH" section) to
+   identify what actually caused this event (e.g. an acquisition write-down, a legal
+   settlement, a one-off IP sale, a restructuring programme, an asset impairment,
+   etc.). Name the specific real-world cause.
 2. ASSESS the impact: does it FLATTER (make reported numbers look better than the
    underlying business), UNDERSTATE (make them look worse), or is it NEUTRAL/MIXED?
 3. QUANTIFY where possible using the financial data provided (e.g. normalised margin
@@ -519,24 +536,27 @@ def process_company(
 
     logger.info("Processing %s (%s) — row %d", ticker, company, row_number)
 
-    # Web search
-    web_context = ""
-    if serpapi_key:
-        web_context = gather_web_context(company, ticker, serpapi_key, logger)
-
-    web_section = ""
-    if web_context:
-        web_section = f"RECENT WEB SEARCH RESULTS:\n{web_context}"
-    else:
-        web_section = "(No recent web search results available — rely on financial data.)"
-
-    # Check for one-time events
+    # Check for one-time events (before web search so we can target the search)
     one_time_events_idx = col_map.get(HEADER_ONE_TIME_EVENTS)
     one_time_event_text = ""
     if one_time_events_idx is not None and one_time_events_idx < len(padded):
         one_time_event_text = padded[one_time_events_idx].strip()
         if one_time_event_text == NULL_VALUE:
             one_time_event_text = ""
+
+    # Web search (includes targeted event search when one_time_event is present)
+    web_context = ""
+    if serpapi_key:
+        web_context = gather_web_context(
+            company, ticker, serpapi_key, logger,
+            one_time_event=one_time_event_text,
+        )
+
+    web_section = ""
+    if web_context:
+        web_section = f"RECENT WEB SEARCH RESULTS:\n{web_context}"
+    else:
+        web_section = "(No recent web search results available — rely on financial data.)"
 
     # Build prompt
     fin_summary = build_financial_summary(row, col_map)
