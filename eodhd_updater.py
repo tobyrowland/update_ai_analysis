@@ -11,6 +11,7 @@ import argparse
 import json
 import logging
 import os
+import statistics as _stats
 import sys
 import time
 from datetime import date, datetime, timedelta
@@ -1136,13 +1137,52 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
         result["eps_yoy"] = None
 
     # ── One-Time Events Detection ──────────────────────────────────────
-    # Look for non-recurring / extraordinary items and large OI→NI gaps
-    # in the most recent 4 quarters (TTM window).
-    # Each flag is stored as (signed_pct, description) so we can determine
-    # net direction: ⬆ = gain flatters results, ⬇ = charge depresses results,
-    # ⬆⬇ = mixed.
-    one_time_items = []  # list of (signed_pct_of_rev, description)
-    if quarterly:
+    # Compare recent 4 quarters against a baseline (Q-4 to Q-11) to detect
+    # anomalous items.  Only flag when a metric is BOTH >2× the company's
+    # own historical norm AND exceeds an absolute floor (15% of revenue or
+    # 15pp margin deviation).  This avoids false positives on large caps
+    # with structurally high investment income (GOOG, MSFT) and companies
+    # with consistent margin trends (PLTR transitioning to profit).
+    #
+    # Direction: ⬆ = gain flatters results, ⬇ = charge depresses, ⬆⬇ = mixed.
+    one_time_items = []  # list of (signed_pct, description)
+
+    if len(quarterly) >= 5:
+        # Build baseline from quarters 4–11 (prior 2 years)
+        bl_oi_ni_gaps = []
+        bl_toi_pcts = []
+        bl_margins = []
+        for _, entry in quarterly[4:12]:
+            rev = safe_float(entry.get("totalRevenue"))
+            oi = safe_float(entry.get("operatingIncome"))
+            ni = safe_float(entry.get("netIncome"))
+            toi = safe_float(entry.get("totalOtherIncomeExpenseNet"))
+            if rev and rev > 0:
+                if oi is not None and ni is not None:
+                    bl_oi_ni_gaps.append(abs(ni - oi) / rev * 100)
+                if toi is not None:
+                    bl_toi_pcts.append(abs(toi) / rev * 100)
+                if ni is not None:
+                    bl_margins.append(ni / rev * 100)
+
+        avg_gap = _stats.mean(bl_oi_ni_gaps) if bl_oi_ni_gaps else 0
+        avg_toi = _stats.mean(bl_toi_pcts) if bl_toi_pcts else 0
+        avg_margin = _stats.mean(bl_margins) if bl_margins else 0
+        std_margin = (_stats.stdev(bl_margins)
+                      if len(bl_margins) >= 2 else 0)
+
+        # Detect consistent margin trend (all recent quarters deviate in
+        # the same direction) — this is growth/decline, not one-time.
+        margin_devs = []
+        for q_date, entry in quarterly[:4]:
+            rev = safe_float(entry.get("totalRevenue"))
+            ni = safe_float(entry.get("netIncome"))
+            if rev and rev > 0 and ni is not None:
+                margin_devs.append(ni / rev * 100 - avg_margin)
+        is_margin_trend = (len(margin_devs) >= 3
+                           and (all(d > 0 for d in margin_devs)
+                                or all(d < 0 for d in margin_devs)))
+
         for i, (q_date, entry) in enumerate(quarterly[:4]):
             rev = safe_float(entry.get("totalRevenue"))
             oi = safe_float(entry.get("operatingIncome"))
@@ -1151,64 +1191,62 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
             ei = safe_float(entry.get("extraordinaryItems"))
             dc = safe_float(entry.get("discontinuedOperations"))
             toi = safe_float(entry.get("totalOtherIncomeExpenseNet"))
+            if not rev or rev <= 0:
+                continue
             q_label = q_date[:7]  # YYYY-MM
 
-            # Flag explicit non-recurring items (>5% of revenue)
-            if nr and rev and rev > 0 and abs(nr) / rev > 0.05:
+            # Explicit non-recurring items (>5% of revenue — always flag)
+            if nr and abs(nr) / rev > 0.05:
                 pct = nr / rev * 100
                 sign = "+" if pct > 0 else ""
                 one_time_items.append(
                     (pct, f"nonRecurring {sign}{pct:.0f}% of rev ({q_label})"))
 
-            # Flag extraordinary items (>3% of revenue — skip immaterial amounts)
-            if ei and rev and rev > 0 and abs(ei) / rev > 0.03:
+            # Extraordinary items (>3% of revenue — always flag)
+            if ei and abs(ei) / rev > 0.03:
                 pct = ei / rev * 100
                 sign = "+" if pct > 0 else ""
                 one_time_items.append(
                     (pct, f"extraordinary {sign}{pct:.0f}% of rev ({q_label})"))
 
-            # Flag discontinued operations (>3% of revenue)
-            if dc and dc != 0 and rev and rev > 0 and abs(dc) / rev > 0.03:
+            # Discontinued operations (>3% of revenue — always flag)
+            if dc and abs(dc) / rev > 0.03:
                 pct = dc / rev * 100
                 sign = "+" if pct > 0 else ""
                 one_time_items.append(
                     (pct, f"discontinued ops {sign}{pct:.0f}% of rev ({q_label})"))
 
-            # Flag large OI→NI gap (>15% of revenue) suggesting below-the-line items
-            if oi is not None and ni is not None and rev and rev > 0:
+            # OI→NI gap: >2× baseline AND >15% absolute
+            if oi is not None and ni is not None:
                 gap_pct = (ni - oi) / rev * 100
-                if abs(gap_pct) > 15:
+                if abs(gap_pct) > 15 and (avg_gap == 0
+                                           or abs(gap_pct) > avg_gap * 2):
                     sign = "+" if gap_pct > 0 else ""
                     one_time_items.append(
-                        (gap_pct, f"OI\u2192NI gap {sign}{gap_pct:.0f}% of rev ({q_label})"))
+                        (gap_pct,
+                         f"OI\u2192NI gap {sign}{gap_pct:.0f}% of rev ({q_label})"))
 
-            # Flag large totalOtherIncomeExpenseNet (>10% of revenue)
-            if toi and rev and rev > 0 and abs(toi) / rev > 0.10:
-                pct = toi / rev * 100
-                sign = "+" if pct > 0 else ""
-                one_time_items.append(
-                    (pct, f"other inc/exp {sign}{pct:.0f}% of rev ({q_label})"))
+            # Other inc/exp: >2× baseline AND >15% absolute
+            if toi:
+                toi_pct = toi / rev * 100
+                if (abs(toi_pct) > 15
+                        and (avg_toi == 0 or abs(toi_pct) > avg_toi * 2)):
+                    sign = "+" if toi_pct > 0 else ""
+                    one_time_items.append(
+                        (toi_pct,
+                         f"other inc/exp {sign}{toi_pct:.0f}% of rev ({q_label})"))
 
-        # Also detect quarter-over-quarter net margin spikes (>20pp swing)
-        if len(quarterly) >= 2:
-            for i in range(min(3, len(quarterly) - 1)):
-                rev_c = safe_float(quarterly[i][1].get("totalRevenue"))
-                ni_c = safe_float(quarterly[i][1].get("netIncome"))
-                rev_p = safe_float(quarterly[i + 1][1].get("totalRevenue"))
-                ni_p = safe_float(quarterly[i + 1][1].get("netIncome"))
-                if (rev_c and rev_c > 0 and ni_c is not None
-                        and rev_p and rev_p > 0 and ni_p is not None):
-                    margin_c = ni_c / rev_c * 100
-                    margin_p = ni_p / rev_p * 100
-                    swing = margin_c - margin_p
-                    if abs(swing) > 20:
-                        sign = "+" if swing > 0 else ""
-                        q_label = quarterly[i][0][:7]
-                        one_time_items.append(
-                            (swing, f"margin swing {sign}{swing:.0f}pp QoQ ({q_label})"))
+            # Margin swing: >2× stdev AND >15pp — skip if consistent trend
+            if ni is not None and std_margin > 0 and not is_margin_trend:
+                margin = ni / rev * 100
+                margin_dev = margin - avg_margin
+                if abs(margin_dev) > max(std_margin * 2, 15):
+                    sign = "+" if margin_dev > 0 else ""
+                    one_time_items.append(
+                        (margin_dev,
+                         f"margin swing {sign}{margin_dev:.0f}pp vs norm ({q_label})"))
 
     if one_time_items:
-        # Determine net direction from signed values
         has_gain = any(v > 0 for v, _ in one_time_items)
         has_charge = any(v < 0 for v, _ in one_time_items)
         if has_gain and has_charge:
