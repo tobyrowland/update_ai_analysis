@@ -347,21 +347,28 @@ Respond ONLY with a JSON object in this exact format, no markdown, no preamble:
 
 EVENT_IMPACT_SECTION = """\
 
-ONE-TIME EVENT FLAGGED:
+ONE-TIME EVENT FLAGGED BY ANALYST:
 {one_time_event}
 
 ADDITIONAL TASK — EVENT IMPACT ANALYSIS:
-Analyse the one-time event above and assess its impact on reported metrics.
-Determine whether it FLATTERS (makes numbers look better than underlying reality),
-UNDERSTATES (makes numbers look worse than underlying reality), or is NEUTRAL/MIXED.
+Analyse ONLY the specific one-time event described above. Do NOT invent, infer, or
+speculate about any other one-time events. Your analysis must be grounded entirely
+in the event text provided and the financial data in this prompt.
+
+Assess whether this specific event FLATTERS (makes reported numbers look better than
+the underlying business reality), UNDERSTATES (makes reported numbers look worse than
+the underlying business reality), or is NEUTRAL/MIXED.
+
+If you cannot determine the impact from the information provided, say so — do NOT guess.
 
 EVENT IMPACT RULES:
 - Start with 🔴 if it flatters (inflates) metrics — this is a warning
 - Start with 🟢 if it understates (depresses) metrics — hidden upside
 - Start with 🟡 if neutral or mixed impact
-- Follow with a brief explanation (1-2 sentences max)
-- Quantify the impact where possible (e.g. "margin boost ~3pp", "EPS impact ~$0.15")
+- Follow with a brief explanation (1-2 sentences max) referencing the specific event
+- Quantify the impact where possible using the financial data provided (e.g. "margin boost ~3pp", "EPS impact ~$0.15")
 - Note whether the effect is already lapsed or still in upcoming numbers
+- If impact cannot be quantified from available data, state the directional effect only
 
 Example outputs:
   "🔴 Flatters margins +4pp — $120M one-time licensing fee in Q3. Normalised GM ~48% vs reported 52%."
