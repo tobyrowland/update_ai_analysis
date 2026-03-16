@@ -1680,7 +1680,9 @@ def main():
                     dot = evaluate_criteria(val, key, criteria)
                     values[col_letter] = f"{dot} {formatted}" if dot else formatted
                 elif key in DOLLAR_COLS and isinstance(val, (int, float)):
-                    values[col_letter] = f"${val:.2f}"
+                    formatted = f"${val:.2f}"
+                    dot = evaluate_criteria(val, key, criteria)
+                    values[col_letter] = f"{dot} {formatted}" if dot else formatted
                 else:
                     formatted = str(val)
                     # For string values like "8/10", try to extract numeric
