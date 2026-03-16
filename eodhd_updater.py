@@ -65,6 +65,9 @@ GROUPS = [
     ("EARNINGS", "1B3A4B", [
         "eps_only", "eps_yoy",
     ]),
+    ("DATA QUALITY", "5B3A1B", [
+        "one_time_events",
+    ]),
     ("AI NARRATIVE", "2E4057", [
         "full_outlook", "key_risks",
     ]),
@@ -103,6 +106,7 @@ DISPLAY_NAMES = {
     "short_outlook":        "short_outlook",
     "full_outlook":         "full_outlook",
     "key_risks":            "key_risks",
+    "one_time_events":      "one_time_events",
     "ai":                   "ai",
     "data":                 "data",
 }
@@ -142,6 +146,8 @@ HEADER_ALIASES = {
     "Analyzed":             "ai",
     "AI Analyzed":          "ai",
     "Data":                 "data",
+    "One-Time Events":      "one_time_events",
+    "One Time Events":      "one_time_events",
     "Data As Of":           "data",
     "Fundamentals Date":    "data",
 }
@@ -174,6 +180,7 @@ COL_WIDTHS = {
     "short_outlook": 50,
     "full_outlook": 80,
     "key_risks": 50,
+    "one_time_events": 50,
     "ai": 16,
     "data": 16,
 }
@@ -205,6 +212,7 @@ EODHD_COLUMNS = [
     "opex_pct_revenue", "sm_rd_pct_revenue",
     "rule_of_40", "qrtrs_to_profitability",
     "eps_only", "eps_yoy",
+    "one_time_events",
     "r40_score", "fundamentals_snapshot", "data",
 ]
 
@@ -1126,6 +1134,80 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
             result["eps_yoy"] = None
     else:
         result["eps_yoy"] = None
+
+    # ── One-Time Events Detection ──────────────────────────────────────
+    # Look for non-recurring / extraordinary items and large OI→NI gaps
+    # in the most recent 4 quarters (TTM window).
+    one_time_flags = []
+    if quarterly:
+        for i, (q_date, entry) in enumerate(quarterly[:4]):
+            rev = safe_float(entry.get("totalRevenue"))
+            oi = safe_float(entry.get("operatingIncome"))
+            ni = safe_float(entry.get("netIncome"))
+            nr = safe_float(entry.get("nonRecurring"))
+            ei = safe_float(entry.get("extraordinaryItems"))
+            dc = safe_float(entry.get("discontinuedOperations"))
+            toi = safe_float(entry.get("totalOtherIncomeExpenseNet"))
+            q_label = q_date[:7]  # YYYY-MM
+
+            # Flag explicit non-recurring items (>5% of revenue)
+            if nr and rev and rev > 0 and abs(nr) / rev > 0.05:
+                pct = nr / rev * 100
+                sign = "+" if pct > 0 else ""
+                one_time_flags.append(f"nonRecurring {sign}{pct:.0f}% of rev ({q_label})")
+
+            # Flag extraordinary items (any non-zero value)
+            if ei and ei != 0 and rev and rev > 0:
+                pct = ei / rev * 100
+                sign = "+" if pct > 0 else ""
+                one_time_flags.append(f"extraordinary {sign}{pct:.0f}% of rev ({q_label})")
+
+            # Flag discontinued operations (any non-zero value)
+            if dc and dc != 0 and rev and rev > 0 and abs(dc) / rev > 0.03:
+                pct = dc / rev * 100
+                sign = "+" if pct > 0 else ""
+                one_time_flags.append(f"discontinued ops {sign}{pct:.0f}% of rev ({q_label})")
+
+            # Flag large OI→NI gap (>15% of revenue) suggesting below-the-line items
+            if oi is not None and ni is not None and rev and rev > 0:
+                gap_pct = (ni - oi) / rev * 100
+                if abs(gap_pct) > 15:
+                    sign = "+" if gap_pct > 0 else ""
+                    one_time_flags.append(
+                        f"OI→NI gap {sign}{gap_pct:.0f}% of rev ({q_label})"
+                    )
+
+            # Flag large totalOtherIncomeExpenseNet (>10% of revenue)
+            if toi and rev and rev > 0 and abs(toi) / rev > 0.10:
+                pct = toi / rev * 100
+                sign = "+" if pct > 0 else ""
+                one_time_flags.append(
+                    f"other inc/exp {sign}{pct:.0f}% of rev ({q_label})"
+                )
+
+        # Also detect quarter-over-quarter net margin spikes (>20pp swing)
+        if len(quarterly) >= 2:
+            for i in range(min(3, len(quarterly) - 1)):
+                rev_c = safe_float(quarterly[i][1].get("totalRevenue"))
+                ni_c = safe_float(quarterly[i][1].get("netIncome"))
+                rev_p = safe_float(quarterly[i + 1][1].get("totalRevenue"))
+                ni_p = safe_float(quarterly[i + 1][1].get("netIncome"))
+                if (rev_c and rev_c > 0 and ni_c is not None
+                        and rev_p and rev_p > 0 and ni_p is not None):
+                    margin_c = ni_c / rev_c * 100
+                    margin_p = ni_p / rev_p * 100
+                    swing = margin_c - margin_p
+                    if abs(swing) > 20:
+                        sign = "+" if swing > 0 else ""
+                        q_label = quarterly[i][0][:7]
+                        one_time_flags.append(
+                            f"net margin swing {sign}{swing:.0f}pp QoQ ({q_label})"
+                        )
+
+    if one_time_flags:
+        result["one_time_events"] = " | ".join(one_time_flags)
+    else:
+        result["one_time_events"] = None
 
     # ── R40 Score ─────────────────────────────────────────────────────
     # Format: 💎💎 R40: 54 | FCF +27% | ⏳ ~12 qtrs GAAP
