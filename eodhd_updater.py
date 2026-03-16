@@ -11,6 +11,7 @@ import argparse
 import json
 import logging
 import os
+import statistics as _stats
 import sys
 import time
 from datetime import date, datetime, timedelta
@@ -65,6 +66,9 @@ GROUPS = [
     ("EARNINGS", "1B3A4B", [
         "eps_only", "eps_yoy",
     ]),
+    ("DATA QUALITY", "5B3A1B", [
+        "one_time_events",
+    ]),
     ("AI NARRATIVE", "2E4057", [
         "full_outlook", "key_risks",
     ]),
@@ -103,6 +107,7 @@ DISPLAY_NAMES = {
     "short_outlook":        "short_outlook",
     "full_outlook":         "full_outlook",
     "key_risks":            "key_risks",
+    "one_time_events":      "one_time_events",
     "ai":                   "ai",
     "data":                 "data",
 }
@@ -142,6 +147,8 @@ HEADER_ALIASES = {
     "Analyzed":             "ai",
     "AI Analyzed":          "ai",
     "Data":                 "data",
+    "One-Time Events":      "one_time_events",
+    "One Time Events":      "one_time_events",
     "Data As Of":           "data",
     "Fundamentals Date":    "data",
 }
@@ -174,6 +181,7 @@ COL_WIDTHS = {
     "short_outlook": 50,
     "full_outlook": 80,
     "key_risks": 50,
+    "one_time_events": 50,
     "ai": 16,
     "data": 16,
 }
@@ -205,6 +213,7 @@ EODHD_COLUMNS = [
     "opex_pct_revenue", "sm_rd_pct_revenue",
     "rule_of_40", "qrtrs_to_profitability",
     "eps_only", "eps_yoy",
+    "one_time_events",
     "r40_score", "fundamentals_snapshot", "data",
 ]
 
@@ -948,8 +957,8 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
     result["gross_margin"] = round(gross_margin_val, 1) if gross_margin_val is not None else None
 
     # ── GM Trend (Qtly) ──────────────────────────────────────────────
-    # Shows per-quarter gross margins (newest→oldest) plus the overall
-    # pp change with a directional arrow, e.g. "52%→49%→47%→45% ↑7pp"
+    # Shows per-quarter gross margins (oldest→newest) plus the overall
+    # pp change with a directional arrow, e.g. "45%→47%→49%→52% ↑7pp"
     gm_trend_val = None
     if len(quarterly) >= 4:
         margins = []
@@ -966,7 +975,7 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
         if len(margins) >= 2:
             gm_trend_val = margins[0] - margins[-1]  # pp change newest vs oldest
             arrow = "↑" if gm_trend_val > 1 else ("↓" if gm_trend_val < -1 else "→")
-            margin_strs = [f"{m:.0f}%" for m in margins]
+            margin_strs = [f"{m:.0f}%" for m in reversed(margins)]
             pp = f"{abs(gm_trend_val):.0f}pp"
             result["gm_trend"] = f"{'→'.join(margin_strs)} {arrow}{pp}"
         else:
@@ -1126,6 +1135,130 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
             result["eps_yoy"] = None
     else:
         result["eps_yoy"] = None
+
+    # ── One-Time Events Detection ──────────────────────────────────────
+    # Compare recent 4 quarters against a baseline (Q-4 to Q-11) to detect
+    # anomalous items.  Only flag when a metric is BOTH >2× the company's
+    # own historical norm AND exceeds an absolute floor (15% of revenue or
+    # 15pp margin deviation).  This avoids false positives on large caps
+    # with structurally high investment income (GOOG, MSFT) and companies
+    # with consistent margin trends (PLTR transitioning to profit).
+    #
+    # Direction: ⬆ = gain flatters results, ⬇ = charge depresses, ⬆⬇ = mixed.
+    one_time_items = []  # list of (signed_pct, description)
+
+    if len(quarterly) >= 5:
+        # Build baseline from quarters 4–11 (prior 2 years)
+        bl_oi_ni_gaps = []
+        bl_toi_pcts = []
+        bl_margins = []
+        for _, entry in quarterly[4:12]:
+            rev = safe_float(entry.get("totalRevenue"))
+            oi = safe_float(entry.get("operatingIncome"))
+            ni = safe_float(entry.get("netIncome"))
+            toi = safe_float(entry.get("totalOtherIncomeExpenseNet"))
+            if rev and rev > 0:
+                if oi is not None and ni is not None:
+                    bl_oi_ni_gaps.append(abs(ni - oi) / rev * 100)
+                if toi is not None:
+                    bl_toi_pcts.append(abs(toi) / rev * 100)
+                if ni is not None:
+                    bl_margins.append(ni / rev * 100)
+
+        avg_gap = _stats.mean(bl_oi_ni_gaps) if bl_oi_ni_gaps else 0
+        avg_toi = _stats.mean(bl_toi_pcts) if bl_toi_pcts else 0
+        avg_margin = _stats.mean(bl_margins) if bl_margins else 0
+        std_margin = (_stats.stdev(bl_margins)
+                      if len(bl_margins) >= 2 else 0)
+
+        # Detect consistent margin trend (all recent quarters deviate in
+        # the same direction) — this is growth/decline, not one-time.
+        margin_devs = []
+        for q_date, entry in quarterly[:4]:
+            rev = safe_float(entry.get("totalRevenue"))
+            ni = safe_float(entry.get("netIncome"))
+            if rev and rev > 0 and ni is not None:
+                margin_devs.append(ni / rev * 100 - avg_margin)
+        is_margin_trend = (len(margin_devs) >= 3
+                           and (all(d > 0 for d in margin_devs)
+                                or all(d < 0 for d in margin_devs)))
+
+        for i, (q_date, entry) in enumerate(quarterly[:4]):
+            rev = safe_float(entry.get("totalRevenue"))
+            oi = safe_float(entry.get("operatingIncome"))
+            ni = safe_float(entry.get("netIncome"))
+            nr = safe_float(entry.get("nonRecurring"))
+            ei = safe_float(entry.get("extraordinaryItems"))
+            dc = safe_float(entry.get("discontinuedOperations"))
+            toi = safe_float(entry.get("totalOtherIncomeExpenseNet"))
+            if not rev or rev <= 0:
+                continue
+            q_label = q_date[:7]  # YYYY-MM
+
+            # Explicit non-recurring items (>5% of revenue — always flag)
+            if nr and abs(nr) / rev > 0.05:
+                pct = nr / rev * 100
+                sign = "+" if pct > 0 else ""
+                one_time_items.append(
+                    (pct, f"nonRecurring {sign}{pct:.0f}% of rev ({q_label})"))
+
+            # Extraordinary items (>3% of revenue — always flag)
+            if ei and abs(ei) / rev > 0.03:
+                pct = ei / rev * 100
+                sign = "+" if pct > 0 else ""
+                one_time_items.append(
+                    (pct, f"extraordinary {sign}{pct:.0f}% of rev ({q_label})"))
+
+            # Discontinued operations (>3% of revenue — always flag)
+            if dc and abs(dc) / rev > 0.03:
+                pct = dc / rev * 100
+                sign = "+" if pct > 0 else ""
+                one_time_items.append(
+                    (pct, f"discontinued ops {sign}{pct:.0f}% of rev ({q_label})"))
+
+            # OI→NI gap: >2× baseline AND >15% absolute
+            if oi is not None and ni is not None:
+                gap_pct = (ni - oi) / rev * 100
+                if abs(gap_pct) > 15 and (avg_gap == 0
+                                           or abs(gap_pct) > avg_gap * 2):
+                    sign = "+" if gap_pct > 0 else ""
+                    one_time_items.append(
+                        (gap_pct,
+                         f"OI\u2192NI gap {sign}{gap_pct:.0f}% of rev ({q_label})"))
+
+            # Other inc/exp: >2× baseline AND >15% absolute
+            if toi:
+                toi_pct = toi / rev * 100
+                if (abs(toi_pct) > 15
+                        and (avg_toi == 0 or abs(toi_pct) > avg_toi * 2)):
+                    sign = "+" if toi_pct > 0 else ""
+                    one_time_items.append(
+                        (toi_pct,
+                         f"other inc/exp {sign}{toi_pct:.0f}% of rev ({q_label})"))
+
+            # Margin swing: >2× stdev AND >15pp — skip if consistent trend
+            if ni is not None and std_margin > 0 and not is_margin_trend:
+                margin = ni / rev * 100
+                margin_dev = margin - avg_margin
+                if abs(margin_dev) > max(std_margin * 2, 15):
+                    sign = "+" if margin_dev > 0 else ""
+                    one_time_items.append(
+                        (margin_dev,
+                         f"margin swing {sign}{margin_dev:.0f}pp vs norm ({q_label})"))
+
+    if one_time_items:
+        has_gain = any(v > 0 for v, _ in one_time_items)
+        has_charge = any(v < 0 for v, _ in one_time_items)
+        if has_gain and has_charge:
+            arrow = "\u2b06\u2b07"  # ⬆⬇
+        elif has_gain:
+            arrow = "\u2b06"        # ⬆
+        else:
+            arrow = "\u2b07"        # ⬇
+        details = " | ".join(desc for _, desc in one_time_items)
+        result["one_time_events"] = f"{arrow} {details}"
+    else:
+        result["one_time_events"] = None
 
     # ── R40 Score ─────────────────────────────────────────────────────
     # Format: 💎💎 R40: 54 | FCF +27% | ⏳ ~12 qtrs GAAP
