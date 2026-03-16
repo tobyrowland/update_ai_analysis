@@ -1138,7 +1138,10 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
     # ── One-Time Events Detection ──────────────────────────────────────
     # Look for non-recurring / extraordinary items and large OI→NI gaps
     # in the most recent 4 quarters (TTM window).
-    one_time_flags = []
+    # Each flag is stored as (signed_pct, description) so we can determine
+    # net direction: ⬆ = gain flatters results, ⬇ = charge depresses results,
+    # ⬆⬇ = mixed.
+    one_time_items = []  # list of (signed_pct_of_rev, description)
     if quarterly:
         for i, (q_date, entry) in enumerate(quarterly[:4]):
             rev = safe_float(entry.get("totalRevenue"))
@@ -1154,36 +1157,37 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
             if nr and rev and rev > 0 and abs(nr) / rev > 0.05:
                 pct = nr / rev * 100
                 sign = "+" if pct > 0 else ""
-                one_time_flags.append(f"nonRecurring {sign}{pct:.0f}% of rev ({q_label})")
+                one_time_items.append(
+                    (pct, f"nonRecurring {sign}{pct:.0f}% of rev ({q_label})"))
 
             # Flag extraordinary items (>3% of revenue — skip immaterial amounts)
             if ei and rev and rev > 0 and abs(ei) / rev > 0.03:
                 pct = ei / rev * 100
                 sign = "+" if pct > 0 else ""
-                one_time_flags.append(f"extraordinary {sign}{pct:.0f}% of rev ({q_label})")
+                one_time_items.append(
+                    (pct, f"extraordinary {sign}{pct:.0f}% of rev ({q_label})"))
 
-            # Flag discontinued operations (any non-zero value)
+            # Flag discontinued operations (>3% of revenue)
             if dc and dc != 0 and rev and rev > 0 and abs(dc) / rev > 0.03:
                 pct = dc / rev * 100
                 sign = "+" if pct > 0 else ""
-                one_time_flags.append(f"discontinued ops {sign}{pct:.0f}% of rev ({q_label})")
+                one_time_items.append(
+                    (pct, f"discontinued ops {sign}{pct:.0f}% of rev ({q_label})"))
 
             # Flag large OI→NI gap (>15% of revenue) suggesting below-the-line items
             if oi is not None and ni is not None and rev and rev > 0:
                 gap_pct = (ni - oi) / rev * 100
                 if abs(gap_pct) > 15:
                     sign = "+" if gap_pct > 0 else ""
-                    one_time_flags.append(
-                        f"OI→NI gap {sign}{gap_pct:.0f}% of rev ({q_label})"
-                    )
+                    one_time_items.append(
+                        (gap_pct, f"OI\u2192NI gap {sign}{gap_pct:.0f}% of rev ({q_label})"))
 
             # Flag large totalOtherIncomeExpenseNet (>10% of revenue)
             if toi and rev and rev > 0 and abs(toi) / rev > 0.10:
                 pct = toi / rev * 100
                 sign = "+" if pct > 0 else ""
-                one_time_flags.append(
-                    f"other inc/exp {sign}{pct:.0f}% of rev ({q_label})"
-                )
+                one_time_items.append(
+                    (pct, f"other inc/exp {sign}{pct:.0f}% of rev ({q_label})"))
 
         # Also detect quarter-over-quarter net margin spikes (>20pp swing)
         if len(quarterly) >= 2:
@@ -1200,12 +1204,21 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
                     if abs(swing) > 20:
                         sign = "+" if swing > 0 else ""
                         q_label = quarterly[i][0][:7]
-                        one_time_flags.append(
-                            f"net margin swing {sign}{swing:.0f}pp QoQ ({q_label})"
-                        )
+                        one_time_items.append(
+                            (swing, f"margin swing {sign}{swing:.0f}pp QoQ ({q_label})"))
 
-    if one_time_flags:
-        result["one_time_events"] = " | ".join(one_time_flags)
+    if one_time_items:
+        # Determine net direction from signed values
+        has_gain = any(v > 0 for v, _ in one_time_items)
+        has_charge = any(v < 0 for v, _ in one_time_items)
+        if has_gain and has_charge:
+            arrow = "\u2b06\u2b07"  # ⬆⬇
+        elif has_gain:
+            arrow = "\u2b06"        # ⬆
+        else:
+            arrow = "\u2b07"        # ⬇
+        details = " | ".join(desc for _, desc in one_time_items)
+        result["one_time_events"] = f"{arrow} {details}"
     else:
         result["one_time_events"] = None
 
