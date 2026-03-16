@@ -278,14 +278,12 @@ def get_sheets_service():
 
 def read_all_rows(service) -> list[list[str]]:
     """Return all rows from the AI Analysis sheet."""
-    # Read enough columns to cover all defined columns
-    end_col = _col_letter(len(ALL_COLUMNS) - 1)
     result = (
         service.spreadsheets()
         .values()
         .get(
             spreadsheetId=SPREADSHEET_ID,
-            range=f"'{SHEET_NAME}'!A1:{end_col}",
+            range=f"'{SHEET_NAME}'",
             valueRenderOption="FORMATTED_VALUE",
         )
         .execute()

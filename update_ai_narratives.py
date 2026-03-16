@@ -149,7 +149,7 @@ def read_all_rows(service) -> list[list[str]]:
         .values()
         .get(
             spreadsheetId=SPREADSHEET_ID,
-            range=f"'{SHEET_NAME}'!A1:AD",
+            range=f"'{SHEET_NAME}'",
             valueRenderOption="FORMATTED_VALUE",
         )
         .execute()
