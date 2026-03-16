@@ -44,6 +44,8 @@ HEADER_SHORT_OUTLOOK = "short_outlook"
 HEADER_OUTLOOK = "full_outlook"
 HEADER_RISKS = "key_risks"
 HEADER_ANALYZED = "ai"
+HEADER_ONE_TIME_EVENTS = "one_time_events"
+HEADER_EVENT_IMPACT = "event_impact"
 
 # Map legacy/alternative sheet headers → current lowercase underscore keys.
 HEADER_ALIASES = {
@@ -60,6 +62,9 @@ HEADER_ALIASES = {
     "Data":                 "data",
     "Data As Of":           "data",
     "Fundamentals Date":    "data",
+    "One Time Events":      "one_time_events",
+    "One-Time Events":      "one_time_events",
+    "Event Impact":         "event_impact",
 }
 
 NULL_VALUE = "—"  # must match eodhd_updater.py
@@ -340,6 +345,35 @@ Respond ONLY with a JSON object in this exact format, no markdown, no preamble:
 }}
 """
 
+EVENT_IMPACT_SECTION = """\
+
+ONE-TIME EVENT FLAGGED:
+{one_time_event}
+
+ADDITIONAL TASK — EVENT IMPACT ANALYSIS:
+Analyse the one-time event above and assess its impact on reported metrics.
+Determine whether it FLATTERS (makes numbers look better than underlying reality),
+UNDERSTATES (makes numbers look worse than underlying reality), or is NEUTRAL/MIXED.
+
+EVENT IMPACT RULES:
+- Start with 🔴 if it flatters (inflates) metrics — this is a warning
+- Start with 🟢 if it understates (depresses) metrics — hidden upside
+- Start with 🟡 if neutral or mixed impact
+- Follow with a brief explanation (1-2 sentences max)
+- Quantify the impact where possible (e.g. "margin boost ~3pp", "EPS impact ~$0.15")
+- Note whether the effect is already lapsed or still in upcoming numbers
+
+Example outputs:
+  "🔴 Flatters margins +4pp — $120M one-time licensing fee in Q3. Normalised GM ~48% vs reported 52%."
+  "🟢 Understates EPS — $45M restructuring charge is non-recurring. Adj. EPS ~$1.20 vs reported $0.85."
+  "🟡 Mixed — acquisition adds revenue but integration costs offset. Net impact ~neutral for next 2 quarters."
+"""
+
+EVENT_IMPACT_JSON_ADDITION = """\
+Include this additional field in your JSON response:
+  "event_impact": "..."
+"""
+
 
 def build_financial_summary(row: list[str], col_map: dict) -> str:
     """Format financial columns into readable text for the prompt."""
@@ -483,6 +517,14 @@ def process_company(
     else:
         web_section = "(No recent web search results available — rely on financial data.)"
 
+    # Check for one-time events
+    one_time_events_idx = col_map.get(HEADER_ONE_TIME_EVENTS)
+    one_time_event_text = ""
+    if one_time_events_idx is not None and one_time_events_idx < len(padded):
+        one_time_event_text = padded[one_time_events_idx].strip()
+        if one_time_event_text == NULL_VALUE:
+            one_time_event_text = ""
+
     # Build prompt
     fin_summary = build_financial_summary(row, col_map)
     prompt = PROMPT_TEMPLATE.format(
@@ -491,6 +533,21 @@ def process_company(
         financial_data_summary=fin_summary,
         web_section=web_section,
     )
+
+    # Inject one-time event analysis if present
+    has_event = bool(one_time_event_text)
+    if has_event:
+        event_section = EVENT_IMPACT_SECTION.format(one_time_event=one_time_event_text)
+        prompt = prompt.replace(
+            'Respond ONLY with a JSON object in this exact format, no markdown, no preamble:',
+            event_section + '\n' + EVENT_IMPACT_JSON_ADDITION + '\nRespond ONLY with a JSON object in this exact format, no markdown, no preamble:',
+        )
+        # Update the JSON template in the prompt to include event_impact
+        prompt = prompt.replace(
+            '  "key_risks": "..."\n}',
+            '  "key_risks": "...",\n  "event_impact": "..."\n}',
+        )
+        logger.info("  One-time event detected for %s: %s", ticker, one_time_event_text[:80])
 
     if dry_run:
         logger.info("[DRY RUN] Prompt for %s:\n%s", ticker, prompt[:500] + "...")
@@ -522,6 +579,15 @@ def process_company(
             values[_col_letter(idx)] = result[field]
         else:
             logger.warning("Column '%s' not found in sheet, skipping field '%s'", header, field)
+
+    # Write event_impact if we requested it and got a response
+    event_impact_idx = col_map.get(HEADER_EVENT_IMPACT)
+    if event_impact_idx is not None:
+        if has_event and result.get("event_impact"):
+            values[_col_letter(event_impact_idx)] = result["event_impact"]
+        elif not has_event:
+            # Clear stale event_impact if one_time_events is now empty
+            values[_col_letter(event_impact_idx)] = ""
 
     # Write the analysis date
     analyzed_idx = col_map.get(HEADER_ANALYZED)
