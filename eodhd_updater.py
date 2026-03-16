@@ -1156,8 +1156,8 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
                 sign = "+" if pct > 0 else ""
                 one_time_flags.append(f"nonRecurring {sign}{pct:.0f}% of rev ({q_label})")
 
-            # Flag extraordinary items (any non-zero value)
-            if ei and ei != 0 and rev and rev > 0:
+            # Flag extraordinary items (>3% of revenue — skip immaterial amounts)
+            if ei and rev and rev > 0 and abs(ei) / rev > 0.03:
                 pct = ei / rev * 100
                 sign = "+" if pct > 0 else ""
                 one_time_flags.append(f"extraordinary {sign}{pct:.0f}% of rev ({q_label})")
