@@ -351,29 +351,35 @@ ONE-TIME EVENT FLAGGED BY ANALYST:
 {one_time_event}
 
 ADDITIONAL TASK — EVENT IMPACT ANALYSIS:
-Analyse ONLY the specific one-time event described above. Do NOT invent, infer, or
-speculate about any other one-time events. Your analysis must be grounded entirely
-in the event text provided and the financial data in this prompt.
+The analyst has flagged the one-time event above. Your job is to ADD VALUE beyond
+what the flag already says. Do NOT just restate or paraphrase the event — the reader
+can already see it. Instead:
 
-Assess whether this specific event FLATTERS (makes reported numbers look better than
-the underlying business reality), UNDERSTATES (makes reported numbers look worse than
-the underlying business reality), or is NEUTRAL/MIXED.
+1. USE THE WEB SEARCH RESULTS to identify what actually caused this event (e.g. an
+   acquisition write-down, a legal settlement, a one-off IP sale, a restructuring
+   programme, an asset impairment, etc.). Name the specific real-world cause.
+2. ASSESS the impact: does it FLATTER (make reported numbers look better than the
+   underlying business), UNDERSTATE (make them look worse), or is it NEUTRAL/MIXED?
+3. QUANTIFY where possible using the financial data provided (e.g. normalised margin
+   vs reported margin, adjusted EPS vs reported EPS).
+4. STATE whether the effect has already lapsed or is still flowing through upcoming numbers.
 
-If you cannot determine the impact from the information provided, say so — do NOT guess.
+Do NOT invent or speculate about events not supported by the web search results or
+financial data. If you cannot identify the specific cause, focus on the quantified
+impact and say the cause is unclear.
 
 EVENT IMPACT RULES:
 - Start with 🔴 if it flatters (inflates) metrics — this is a warning
 - Start with 🟢 if it understates (depresses) metrics — hidden upside
 - Start with 🟡 if neutral or mixed impact
-- Follow with a brief explanation (1-2 sentences max) referencing the specific event
-- Quantify the impact where possible using the financial data provided (e.g. "margin boost ~3pp", "EPS impact ~$0.15")
-- Note whether the effect is already lapsed or still in upcoming numbers
-- If impact cannot be quantified from available data, state the directional effect only
+- Then briefly name the real-world cause (from web results) and quantify the effect
+- 2-3 sentences max
+- Do NOT repeat back the analyst's flag text — add new information
 
 Example outputs:
-  "🔴 Flatters margins +4pp — $120M one-time licensing fee in Q3. Normalised GM ~48% vs reported 52%."
-  "🟢 Understates EPS — $45M restructuring charge is non-recurring. Adj. EPS ~$1.20 vs reported $0.85."
-  "🟡 Mixed — acquisition adds revenue but integration costs offset. Net impact ~neutral for next 2 quarters."
+  "🔴 Flatters margins +4pp — one-off $120M patent licensing payment from Samsung in Q3 boosted GM to 52% vs ~48% normalised. Already lapsed; Q4 margins will revert."
+  "🟢 Understates EPS by ~$0.35 — $45M restructuring charge relates to closure of Austin fab announced Oct 2025. Non-recurring; adj. EPS ~$1.20 vs reported $0.85. Charge completes Q1 2026."
+  "🟡 Mixed — Kinaxis acquisition (closed Aug 2025) adds ~$80M/qtr revenue but $25M integration costs depress margins ~2pp. Costs expected to taper over 3 quarters."
 """
 
 EVENT_IMPACT_JSON_ADDITION = """\
