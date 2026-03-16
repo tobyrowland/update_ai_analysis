@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import sys
+import re
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -254,6 +255,55 @@ def serpapi_search(query: str, api_key: str, logger: logging.Logger) -> str:
     return "\n".join(snippets)
 
 
+# Map terse flag keywords to natural-language search terms
+_EVENT_TYPE_MAP = {
+    "margin swing":   "one-time charge margin impact",
+    "other inc/exp":  "other income expense non-recurring charge",
+    "write-down":     "write-down impairment",
+    "restructuring":  "restructuring charge",
+    "settlement":     "legal settlement",
+    "acquisition":    "acquisition one-time cost",
+    "divestiture":    "divestiture asset sale",
+    "goodwill":       "goodwill impairment write-off",
+    "tax":            "one-time tax benefit charge",
+    "ipo":            "IPO related expenses",
+    "sbc":            "stock-based compensation charge",
+}
+
+# Quarter mapping from month numbers
+_MONTH_TO_QUARTER = {
+    "01": "Q1", "02": "Q1", "03": "Q1",
+    "04": "Q2", "05": "Q2", "06": "Q2",
+    "07": "Q3", "08": "Q3", "09": "Q3",
+    "10": "Q4", "11": "Q4", "12": "Q4",
+}
+
+
+def _build_event_search_query(company: str, ticker: str, event_text: str) -> str:
+    """Turn terse analyst flag text into a useful Google search query.
+
+    Flags look like: '⬇ margin swing -22pp vs norm (2025-09)'
+    We want: 'Celsius Holdings CELH one-time charge margin impact Q3 2025'
+    """
+    # Extract date if present — formats like (2025-09) or (2024-12)
+    date_match = re.search(r"\((\d{4})-(\d{2})\)", event_text)
+    quarter_str = ""
+    if date_match:
+        year = date_match.group(1)
+        month = date_match.group(2)
+        quarter_str = f"{_MONTH_TO_QUARTER.get(month, '')} {year}"
+
+    # Find matching event type from our map
+    event_lower = event_text.lower()
+    search_terms = "one-time non-recurring charge"  # default
+    for key, val in _EVENT_TYPE_MAP.items():
+        if key in event_lower:
+            search_terms = val
+            break
+
+    return f"{company} {ticker} {search_terms} {quarter_str}".strip()
+
+
 def gather_web_context(
     company: str, ticker: str, api_key: str, logger: logging.Logger,
     one_time_event: str = "",
@@ -281,9 +331,7 @@ def gather_web_context(
 
     # Targeted search for the one-time event to give the model real context
     if one_time_event:
-        # Extract key financial terms from the flag for a focused query
-        event_keywords = one_time_event[:120].replace('"', '')
-        q3 = f"{company} {ticker} {event_keywords} {prev_year} {current_year}"
+        q3 = _build_event_search_query(company, ticker, one_time_event)
         time.sleep(1)
         s3 = serpapi_search(q3, api_key, logger)
         if s3:
