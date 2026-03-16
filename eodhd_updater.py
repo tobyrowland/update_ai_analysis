@@ -957,8 +957,8 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
     result["gross_margin"] = round(gross_margin_val, 1) if gross_margin_val is not None else None
 
     # ── GM Trend (Qtly) ──────────────────────────────────────────────
-    # Shows per-quarter gross margins (newest→oldest) plus the overall
-    # pp change with a directional arrow, e.g. "52%→49%→47%→45% ↑7pp"
+    # Shows per-quarter gross margins (oldest→newest) plus the overall
+    # pp change with a directional arrow, e.g. "45%→47%→49%→52% ↑7pp"
     gm_trend_val = None
     if len(quarterly) >= 4:
         margins = []
@@ -975,7 +975,7 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
         if len(margins) >= 2:
             gm_trend_val = margins[0] - margins[-1]  # pp change newest vs oldest
             arrow = "↑" if gm_trend_val > 1 else ("↓" if gm_trend_val < -1 else "→")
-            margin_strs = [f"{m:.0f}%" for m in margins]
+            margin_strs = [f"{m:.0f}%" for m in reversed(margins)]
             pp = f"{abs(gm_trend_val):.0f}pp"
             result["gm_trend"] = f"{'→'.join(margin_strs)} {arrow}{pp}"
         else:
