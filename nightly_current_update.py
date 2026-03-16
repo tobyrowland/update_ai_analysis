@@ -69,17 +69,11 @@ COL_INDEX = {name: i for i, name in enumerate(V2_HEADERS)}
 # Columns that must NEVER be written by any script
 MANUAL_ONLY_COLS = {"deep_dive", "conviction_tier", "next_earnings"}
 
-# Statuses that are human-managed and must not be overwritten
-PROTECTED_STATUSES = {"🟢", "🟡", "⚫", "❌"}
-
-# Status priority for sorting
+# Status priority for sorting (❌ Excluded always at bottom)
 STATUS_PRIORITY = {
     "🟢 Eligible": 1, "🟢": 1,
     "🆕 New": 2, "🆕": 2,
-    "🟡 Watching": 3, "🟡": 3,
-    "⚫ On Hold": 4, "⚫": 4,
-    "🔴 Pending": 5, "🔴": 5,
-    "❌ Exiting": 6, "❌": 6,
+    "❌": 3,
 }
 
 # Row 1 category merges for CURRENT_V2
@@ -462,6 +456,17 @@ def load_ai_analysis(service, logger) -> tuple[dict, dict]:
             "data": get_val("data"),
             "r40_score": get_val("r40_score"),
         }
+
+        # Detect 🔴 markers across all columns for exclusion logic
+        red_cols = []
+        for col_name, col_idx in col_map.items():
+            if col_idx < len(padded):
+                cell_val = str(padded[col_idx]).strip()
+                if cell_val.startswith("🔴"):
+                    red_cols.append(col_name)
+        if red_cols:
+            ai_data[ticker]["_red_flag_cols"] = red_cols
+
         ai_row_map[ticker] = row_idx + 3  # data starts at row 3
 
     logger.info("Loaded %d tickers from AI Analysis", len(ai_data))
@@ -696,7 +701,7 @@ def _status_base(status_str):
     """Extract the emoji prefix from a status string."""
     if not status_str:
         return ""
-    for emoji in PROTECTED_STATUSES:
+    for emoji in ("🟢", "🆕", "❌"):
         if status_str.startswith(emoji):
             return emoji
     return status_str
@@ -817,17 +822,21 @@ def upsert_v2(
         # else keep existing value
 
         # -- Status logic --
-        if is_new:
+        # Check for 🔴 flags in AI Analysis (any column)
+        red_flags = ai_row.get("_red_flag_cols", []) if ai_row else []
+        has_ai = bool(ai_row and ai_row.get("short_outlook"))
+        has_eodhd = bool(ai_row and ai_row.get("data"))
+
+        if red_flags:
+            flag_names = ", ".join(red_flags[:3])
+            row["status"] = f"❌ {flag_names}"
+        elif is_new and not (has_ai and has_eodhd):
             row["status"] = "🆕 New"
+        elif has_ai and has_eodhd:
+            row["status"] = "🟢 Eligible"
         else:
-            current_status = str(row.get("status", "")).strip()
-            status_emoji = _status_base(current_status)
-            if status_emoji in PROTECTED_STATUSES:
-                pass  # Leave unchanged
-            elif ai_row and ai_row.get("short_outlook"):
-                row["status"] = "🟡 Watching"
-            else:
-                row["status"] = "🔴 Pending"
+            # Existing ticker still missing AI or EODHD data
+            row["status"] = "🆕 New"
 
         # -- Manual-only cols: preserve existing values --
         if not is_new:
