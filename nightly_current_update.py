@@ -469,7 +469,12 @@ def load_ai_analysis(service, logger) -> tuple[dict, dict]:
 
         ai_row_map[ticker] = row_idx + 3  # data starts at row 3
 
-    logger.info("Loaded %d tickers from AI Analysis", len(ai_data))
+    # Log status-relevant stats
+    has_outlook = sum(1 for v in ai_data.values() if v.get("short_outlook"))
+    has_data = sum(1 for v in ai_data.values() if v.get("data"))
+    has_red = sum(1 for v in ai_data.values() if v.get("_red_flag_cols"))
+    logger.info("Loaded %d tickers from AI Analysis (outlook=%d, eodhd=%d, red_flags=%d)",
+                len(ai_data), has_outlook, has_data, has_red)
     return ai_data, ai_row_map
 
 
@@ -879,6 +884,19 @@ def upsert_v2(
 
         if ticker in days_map:
             row["days_on_list"] = days_map[ticker]
+
+        # -- Status logic for non-screened tickers --
+        red_flags = ai_row.get("_red_flag_cols", []) if ai_row else []
+        has_ai = bool(ai_row and ai_row.get("short_outlook"))
+        has_eodhd = bool(ai_row and ai_row.get("data"))
+
+        if red_flags:
+            flag_names = ", ".join(red_flags[:3])
+            row["status"] = f"❌ {flag_names}"
+        elif has_ai and has_eodhd:
+            row["status"] = "🟢 Eligible"
+        else:
+            row["status"] = "🆕 New"
 
     # -- Build scoring data --
     scoring_rows = []
