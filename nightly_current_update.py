@@ -830,12 +830,9 @@ def upsert_v2(
         if red_flags:
             flag_names = ", ".join(red_flags[:3])
             row["status"] = f"❌ {flag_names}"
-        elif is_new and not (has_ai and has_eodhd):
-            row["status"] = "🆕 New"
         elif has_ai and has_eodhd:
             row["status"] = "🟢 Eligible"
         else:
-            # Existing ticker still missing AI or EODHD data
             row["status"] = "🆕 New"
 
         # -- Manual-only cols: preserve existing values --
