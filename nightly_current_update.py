@@ -71,7 +71,7 @@ MANUAL_ONLY_COLS = {"deep_dive", "conviction_tier", "next_earnings"}
 
 # Status priority for sorting (❌ Excluded always at bottom)
 STATUS_PRIORITY = {
-    "🟢 Eligible": 1, "🟢": 1,
+    "🏷️": 0, "🟢 Eligible": 1, "🟢": 1,
     "🆕 New": 2, "🆕": 2,
     "❌": 3,
 }
@@ -519,6 +519,7 @@ def load_price_sales(service, logger) -> tuple[dict, dict]:
     ticker_idx = col_map.get("ticker")
     ps_now_idx = col_map.get("ps_now")
     high_52w_idx = col_map.get("52w_high")
+    median_12m_idx = col_map.get("12m_median")
 
     if ticker_idx is None:
         logger.error("Cannot find 'ticker' column in Price-Sales headers: %s", headers)
@@ -529,7 +530,7 @@ def load_price_sales(service, logger) -> tuple[dict, dict]:
 
     ps_data = {}
     ps_row_map = {}  # ticker -> 1-indexed sheet row number
-    max_idx = max(c for c in [ticker_idx, ps_now_idx, high_52w_idx] if c is not None)
+    max_idx = max(c for c in [ticker_idx, ps_now_idx, high_52w_idx, median_12m_idx] if c is not None)
     for row_idx, row in enumerate(data_rows):
         padded = row + [""] * (max_idx + 1 - len(row))
         ticker = padded[ticker_idx].strip().upper()
@@ -538,8 +539,9 @@ def load_price_sales(service, logger) -> tuple[dict, dict]:
 
         ps_now = _safe_float(padded[ps_now_idx])
         high_52w = _safe_float(padded[high_52w_idx]) if high_52w_idx is not None else None
+        median_12m = _safe_float(padded[median_12m_idx]) if median_12m_idx is not None else None
 
-        ps_data[ticker] = {"ps_now": ps_now, "52w_high": high_52w}
+        ps_data[ticker] = {"ps_now": ps_now, "52w_high": high_52w, "12m_median": median_12m}
         ps_row_map[ticker] = data_start_row + row_idx
 
     logger.info("Loaded %d tickers from Price-Sales", len(ps_data))
@@ -717,7 +719,7 @@ def _status_base(status_str):
     """Extract the emoji prefix from a status string."""
     if not status_str:
         return ""
-    for emoji in ("🟢", "🆕", "❌"):
+    for emoji in ("🏷️", "🟢", "🆕", "❌"):
         if status_str.startswith(emoji):
             return emoji
     return status_str
@@ -851,7 +853,15 @@ def upsert_v2(
               and _safe_float(ai_row.get("net_margin%")) < 0):
             row["status"] = "❌ Unprofitable Health Tech"
         elif has_ai and has_eodhd:
-            row["status"] = "🟢 Eligible"
+            # Check for P/S discount vs 12m median
+            ps_row = ps_data.get(ticker, {})
+            _ps = ps_row.get("ps_now")
+            _med = ps_row.get("12m_median")
+            if _ps is not None and _med is not None and _med > 0 and _ps / _med < 0.80:
+                pct = round((1 - _ps / _med) * 100)
+                row["status"] = f"🏷️ -{pct}% vs. 52w p/s"
+            else:
+                row["status"] = "🟢 Eligible"
         else:
             row["status"] = "🆕 New"
 
@@ -913,7 +923,14 @@ def upsert_v2(
               and _safe_float(ai_row.get("net_margin%")) < 0):
             row["status"] = "❌ Unprofitable Health Tech"
         elif has_ai and has_eodhd:
-            row["status"] = "🟢 Eligible"
+            # Check for P/S discount vs 12m median
+            _ps = ps_row.get("ps_now")
+            _med = ps_row.get("12m_median")
+            if _ps is not None and _med is not None and _med > 0 and _ps / _med < 0.80:
+                pct = round((1 - _ps / _med) * 100)
+                row["status"] = f"🏷️ -{pct}% vs. 52w p/s"
+            else:
+                row["status"] = "🟢 Eligible"
         else:
             row["status"] = "🆕 New"
 
