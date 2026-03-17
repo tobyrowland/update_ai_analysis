@@ -426,6 +426,11 @@ def load_ai_analysis(service, logger) -> tuple[dict, dict]:
     for idx, h in enumerate(headers):
         col_map[h] = idx
 
+    logger.info("AI Analysis headers (%d cols): %s", len(headers), headers)
+    logger.info("AI Analysis col_map keys: %s", sorted(col_map.keys()))
+    for key in ("ai", "data", "short_outlook", "ticker"):
+        logger.info("  col_map.get('%s') = %s", key, col_map.get(key))
+
     ticker_idx = col_map.get("ticker")
     if ticker_idx is None:
         logger.error("Cannot find 'ticker' column in AI Analysis headers: %s", headers)
