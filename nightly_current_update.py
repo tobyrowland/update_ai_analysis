@@ -920,9 +920,15 @@ def upsert_v2(
         sr["_rating_f"] = parse_rating_numeric(row.get("rating"))
         scoring_rows.append(sr)
 
-    # Compute composite scores
+    # Compute composite scores with short_outlook penalty
     for sr in scoring_rows:
-        sr["_composite_score"] = compute_composite_score(sr, scoring_rows)
+        raw = compute_composite_score(sr, scoring_rows)
+        outlook = str(sr.get("short_outlook", "")).strip()
+        if outlook.startswith("🔴"):
+            raw *= 0.25
+        elif outlook.startswith("🟡"):
+            raw *= 0.50
+        sr["_composite_score"] = raw
 
     # Sort by status priority, then composite score descending
     def sort_key(sr):
