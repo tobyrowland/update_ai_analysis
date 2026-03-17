@@ -453,6 +453,7 @@ def load_ai_analysis(service, logger) -> tuple[dict, dict]:
             "full_outlook": get_val("full_outlook"),
             "net_margin%": get_val("net_margin%"),
             "net_margin_yoy%": get_val("net_margin_yoy%"),
+            "ai": get_val("ai"),
             "data": get_val("data"),
             "r40_score": get_val("r40_score"),
         }
@@ -829,7 +830,7 @@ def upsert_v2(
         # -- Status logic --
         # Check for 🔴 flags in AI Analysis (any column)
         red_flags = ai_row.get("_red_flag_cols", []) if ai_row else []
-        has_ai = bool(ai_row and ai_row.get("short_outlook"))
+        has_ai = bool(ai_row and ai_row.get("ai"))
         has_eodhd = bool(ai_row and ai_row.get("data"))
 
         if red_flags:
@@ -887,7 +888,7 @@ def upsert_v2(
 
         # -- Status logic for non-screened tickers --
         red_flags = ai_row.get("_red_flag_cols", []) if ai_row else []
-        has_ai = bool(ai_row and ai_row.get("short_outlook"))
+        has_ai = bool(ai_row and ai_row.get("ai"))
         has_eodhd = bool(ai_row and ai_row.get("data"))
 
         if red_flags:

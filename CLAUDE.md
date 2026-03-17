@@ -72,8 +72,8 @@ J: fundamentals_snapshot  T: composite_score (formula)
 ```
 
 **Status (auto-assigned):**
-- 🟢 Eligible — has AI analysis + EODHD data, no 🔴 flags in AI Analysis
-- 🆕 New — missing AI or EODHD data
+- 🟢 Eligible — has dates in both `ai` and `data` columns in AI Analysis, no 🔴 flags
+- 🆕 New — missing `ai` or `data` date in AI Analysis
 - ❌ Excluded — 🔴 marker on any AI Analysis column; sorted to bottom with note of flagged columns
 
 **Composite score weights:** R40 40%, P/S 25% (inverted), 52w vs SPY 20%, Rating 15% (inverted)
