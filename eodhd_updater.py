@@ -896,16 +896,28 @@ def read_criteria(service, logger: logging.Logger) -> list[dict]:
         logger.warning("Criteria sheet missing required 'metric' or 'operator' column")
         return []
 
+    # Build lookup tables for normalising metric names.
+    # Users may type display names (fcf_margin%) or legacy headers.
+    _display_to_key = {v.lower(): k for k, v in DISPLAY_NAMES.items()}
+    _alias_lower = {k.lower(): v for k, v in HEADER_ALIASES.items()}
+
     rules = []
     for row in rows[header_idx + 1:]:
         if not row or not row[0].strip():
             continue  # skip empty / section header rows
         padded = row + [""] * (len(headers) - len(row))
-        metric = padded[metric_col].strip().lower()
+        raw_metric = padded[metric_col].strip()
         operator = padded[op_col].strip()
 
-        if not metric or operator not in _CRITERIA_OPS:
+        if not raw_metric or operator not in _CRITERIA_OPS:
             continue
+
+        # Normalise metric name to internal key
+        metric = raw_metric.lower()
+        if metric in _display_to_key:
+            metric = _display_to_key[metric]
+        elif metric in _alias_lower:
+            metric = _alias_lower[metric]
 
         rules.append({
             "metric": metric,
