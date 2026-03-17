@@ -73,7 +73,10 @@ I: description            S: days_on_list (formula)
 J: fundamentals_snapshot  T: composite_score (formula)
 ```
 
-**Status emoji priority:** 🟢 Eligible > 🆕 New > 🟡 Watching > ⚫ On Hold > 🔴 Pending > ❌ Exiting
+**Status (auto-assigned):**
+- 🟢 Eligible — has dates in both `ai` and `data` columns in AI Analysis, no 🔴 flags
+- 🆕 New — missing `ai` or `data` date in AI Analysis
+- ❌ Excluded — 🔴 marker on any AI Analysis column; sorted to bottom with note of flagged columns
 
 **Composite score weights:** R40 40%, P/S 25% (inverted), 52w vs SPY 20%, Rating 15% (inverted)
 
