@@ -469,7 +469,7 @@ def load_ai_analysis(service, logger) -> tuple[dict, dict]:
                 cell_val = str(padded[col_idx]).strip()
                 if cell_val.startswith("🔴"):
                     red_cols.append(col_name)
-                elif cell_val.startswith("🟡"):
+                elif cell_val.startswith("🟡") and col_name != "key_risks":
                     yellow_cols.append(col_name)
         if red_cols:
             ai_data[ticker]["_red_flag_cols"] = red_cols
