@@ -473,11 +473,13 @@ def load_ai_analysis(service, logger) -> tuple[dict, dict]:
         ai_row_map[ticker] = row_idx + 3  # data starts at row 3
 
     # Log status-relevant stats
+    has_ai_date = sum(1 for v in ai_data.values() if v.get("ai"))
     has_outlook = sum(1 for v in ai_data.values() if v.get("short_outlook"))
     has_data = sum(1 for v in ai_data.values() if v.get("data"))
     has_red = sum(1 for v in ai_data.values() if v.get("_red_flag_cols"))
-    logger.info("Loaded %d tickers from AI Analysis (outlook=%d, eodhd=%d, red_flags=%d)",
-                len(ai_data), has_outlook, has_data, has_red)
+    logger.info("AI Analysis col_map: ai=%s, data=%s", col_map.get("ai"), col_map.get("data"))
+    logger.info("Loaded %d tickers from AI Analysis (ai_date=%d, outlook=%d, eodhd=%d, red_flags=%d)",
+                len(ai_data), has_ai_date, has_outlook, has_data, has_red)
     return ai_data, ai_row_map
 
 
