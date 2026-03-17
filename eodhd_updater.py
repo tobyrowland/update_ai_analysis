@@ -29,6 +29,7 @@ from googleapiclient.discovery import build
 
 SPREADSHEET_ID = "1js3dUTJtKhY1dUcwzYUGBOdKDZXBurLtRGgcIV8msYk"
 SHEET_NAME = "AI Analysis"
+CRITERIA_SHEET = "Criteria"
 EODHD_BASE_URL = "https://eodhd.com/api/fundamentals"
 DELAY_BETWEEN_CALLS = 1  # seconds between EODHD API calls
 BATCH_SIZE = 5
@@ -278,14 +279,12 @@ def get_sheets_service():
 
 def read_all_rows(service) -> list[list[str]]:
     """Return all rows from the AI Analysis sheet."""
-    # Read enough columns to cover all defined columns
-    end_col = _col_letter(len(ALL_COLUMNS) - 1)
     result = (
         service.spreadsheets()
         .values()
         .get(
             spreadsheetId=SPREADSHEET_ID,
-            range=f"'{SHEET_NAME}'!A1:{end_col}",
+            range=f"'{SHEET_NAME}'",
             valueRenderOption="FORMATTED_VALUE",
         )
         .execute()
@@ -820,6 +819,138 @@ def _sorted_entries(section: dict) -> list[tuple[str, dict]]:
     entries = [(k, v) for k, v in section.items() if isinstance(v, dict)]
     entries.sort(key=lambda x: x[0], reverse=True)
     return entries
+
+
+# ---------------------------------------------------------------------------
+# Screening criteria — read from "Criteria" sheet
+# ---------------------------------------------------------------------------
+
+# Dot characters for screening flags
+DOT_RED = "\U0001f534"     # 🔴
+DOT_YELLOW = "\U0001f7e1"  # 🟡
+DOT_GREEN = "\U0001f7e2"   # 🟢
+
+# Supported operators for criteria rules
+_CRITERIA_OPS = {
+    "<":  lambda val, thresh: val < thresh,
+    "<=": lambda val, thresh: val <= thresh,
+    ">":  lambda val, thresh: val > thresh,
+    ">=": lambda val, thresh: val >= thresh,
+}
+
+
+def read_criteria(service, logger: logging.Logger) -> list[dict]:
+    """Read screening rules from the Criteria sheet.
+
+    Returns a list of rule dicts:
+        {"metric": str, "operator": str, "red": float|None,
+         "yellow": float|None, "green": float|None, "description": str}
+    """
+    try:
+        result = (
+            service.spreadsheets()
+            .values()
+            .get(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"'{CRITERIA_SHEET}'!A1:ZZ",
+                valueRenderOption="FORMATTED_VALUE",
+            )
+            .execute()
+        )
+        rows = result.get("values", [])
+    except Exception as exc:
+        logger.warning("Could not read Criteria sheet: %s", exc)
+        return []
+
+    if len(rows) < 2:
+        logger.info("Criteria sheet is empty or has no data rows")
+        return []
+
+    # Find the header row (first row containing "metric" in column A)
+    header_idx = None
+    for i, row in enumerate(rows):
+        if row and row[0].strip().lower() == "metric":
+            header_idx = i
+            break
+
+    if header_idx is None:
+        logger.warning("Criteria sheet: could not find header row with 'metric'")
+        return []
+
+    headers = [h.strip().lower() for h in rows[header_idx]]
+
+    def col(name):
+        try:
+            return headers.index(name)
+        except ValueError:
+            return None
+
+    metric_col = col("metric")
+    op_col = col("operator")
+    red_col = col("red")
+    yellow_col = col("yellow")
+    green_col = col("green")
+    desc_col = col("description")
+
+    if metric_col is None or op_col is None:
+        logger.warning("Criteria sheet missing required 'metric' or 'operator' column")
+        return []
+
+    rules = []
+    for row in rows[header_idx + 1:]:
+        if not row or not row[0].strip():
+            continue  # skip empty / section header rows
+        padded = row + [""] * (len(headers) - len(row))
+        metric = padded[metric_col].strip().lower()
+        operator = padded[op_col].strip()
+
+        if not metric or operator not in _CRITERIA_OPS:
+            continue
+
+        rules.append({
+            "metric": metric,
+            "operator": operator,
+            "red": safe_float(padded[red_col]) if red_col is not None else None,
+            "yellow": safe_float(padded[yellow_col]) if yellow_col is not None else None,
+            "green": safe_float(padded[green_col]) if green_col is not None else None,
+            "description": padded[desc_col].strip() if desc_col is not None else "",
+        })
+
+    logger.info("Loaded %d screening criteria from '%s' sheet", len(rules), CRITERIA_SHEET)
+    for r in rules:
+        logger.info("  %s %s red=%s yellow=%s green=%s — %s",
+                     r["metric"], r["operator"], r["red"], r["yellow"],
+                     r["green"], r["description"])
+    return rules
+
+
+def evaluate_criteria(value: float | None, metric: str,
+                      criteria: list[dict]) -> str | None:
+    """Evaluate a metric value against screening criteria.
+
+    Returns DOT_RED, DOT_YELLOW, DOT_GREEN, or None (no matching rule).
+    """
+    if value is None:
+        return None
+
+    for rule in criteria:
+        if rule["metric"] != metric:
+            continue
+
+        op = _CRITERIA_OPS[rule["operator"]]
+
+        # Check thresholds in order: red (worst), yellow, green (best)
+        if rule["red"] is not None and op(value, rule["red"]):
+            return DOT_RED
+        if rule["yellow"] is not None and op(value, rule["yellow"]):
+            return DOT_YELLOW
+        # If green threshold is defined and we pass it, show green dot
+        if rule["green"] is not None and op(value, rule["green"]):
+            return DOT_GREEN
+        # Value exists and a rule was found but didn't trigger any threshold
+        return DOT_GREEN
+
+    return None  # no rule for this metric
 
 
 # ---------------------------------------------------------------------------
@@ -1408,6 +1539,9 @@ def main():
     all_rows = read_all_rows(service)
     logger.info("Read %d rows from sheet (including headers)", len(all_rows))
 
+    # Load screening criteria from the Criteria sheet
+    criteria = read_criteria(service, logger)
+
     # ── Read sheet headers and build column mapping ─────────────────
     # The sheet now uses lowercase underscore column keys as headers.
     # We also support legacy display-name headers via HEADER_ALIASES.
@@ -1538,13 +1672,24 @@ def main():
                 if val is None:
                     values[col_letter] = NULL_VALUE
                 elif key in PCT_COLS and isinstance(val, (int, float)):
-                    values[col_letter] = f"{val:.1f}%"
+                    formatted = f"{val:.1f}%"
+                    dot = evaluate_criteria(val, key, criteria)
+                    values[col_letter] = f"{dot} {formatted}" if dot else formatted
                 elif key in INTEGER_COLS and isinstance(val, (int, float)):
-                    values[col_letter] = f"{val:.0f}"
+                    formatted = f"{val:.0f}"
+                    dot = evaluate_criteria(val, key, criteria)
+                    values[col_letter] = f"{dot} {formatted}" if dot else formatted
                 elif key in DOLLAR_COLS and isinstance(val, (int, float)):
-                    values[col_letter] = f"${val:.2f}"
+                    formatted = f"${val:.2f}"
+                    dot = evaluate_criteria(val, key, criteria)
+                    values[col_letter] = f"{dot} {formatted}" if dot else formatted
                 else:
-                    values[col_letter] = str(val)
+                    formatted = str(val)
+                    # For string values like "8/10", try to extract numeric
+                    # part for criteria evaluation
+                    numeric_val = safe_float(formatted.split("/")[0]) if "/" in formatted else safe_float(formatted)
+                    dot = evaluate_criteria(numeric_val, key, criteria)
+                    values[col_letter] = f"{dot} {formatted}" if dot else formatted
 
             if values:
                 updates.append({"row": row_number, "values": values})
