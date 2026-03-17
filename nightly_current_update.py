@@ -413,7 +413,7 @@ def load_ai_analysis(service, logger) -> tuple[dict, dict]:
     Also returns {ticker: row_number} for deep linking.
     """
     logger.info("Loading AI Analysis tab...")
-    rows = read_sheet(service, AI_ANALYSIS_SHEET, end_col="AD")
+    rows = read_sheet(service, AI_ANALYSIS_SHEET, end_col="AH")
     if len(rows) < 3:
         logger.warning("AI Analysis tab has fewer than 3 rows")
         return {}, {}
@@ -426,10 +426,7 @@ def load_ai_analysis(service, logger) -> tuple[dict, dict]:
     for idx, h in enumerate(headers):
         col_map[h] = idx
 
-    logger.info("AI Analysis headers (%d cols): %s", len(headers), headers)
-    logger.info("AI Analysis col_map keys: %s", sorted(col_map.keys()))
-    for key in ("ai", "data", "short_outlook", "ticker"):
-        logger.info("  col_map.get('%s') = %s", key, col_map.get(key))
+    logger.info("AI Analysis: %d headers found, col_map has %d keys", len(headers), len(col_map))
 
     ticker_idx = col_map.get("ticker")
     if ticker_idx is None:
