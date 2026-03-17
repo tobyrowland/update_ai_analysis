@@ -71,7 +71,7 @@ MANUAL_ONLY_COLS = {"deep_dive", "conviction_tier", "next_earnings"}
 
 # Status priority for sorting (❌ Excluded always at bottom)
 STATUS_PRIORITY = {
-    "🏷️": 0, "🟢 Eligible": 1, "🟢": 1,
+    "🏷️": 1, "🟢 Eligible": 1, "🟢": 1,
     "🆕 New": 2, "🆕": 2,
     "❌": 3,
 }
