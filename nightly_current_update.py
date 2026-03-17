@@ -840,6 +840,10 @@ def upsert_v2(
         if red_flags:
             flag_names = ", ".join(red_flags[:3])
             row["status"] = f"❌ {flag_names}"
+        elif (row.get("sector", "") == "Health Technology"
+              and _safe_float(ai_row.get("net_margin%") if ai_row else None) is not None
+              and _safe_float(ai_row.get("net_margin%")) < 0):
+            row["status"] = "❌ Unprofitable Health Tech"
         elif has_ai and has_eodhd:
             row["status"] = "🟢 Eligible"
         else:
@@ -898,6 +902,10 @@ def upsert_v2(
         if red_flags:
             flag_names = ", ".join(red_flags[:3])
             row["status"] = f"❌ {flag_names}"
+        elif (row.get("sector", "") == "Health Technology"
+              and _safe_float(ai_row.get("net_margin%") if ai_row else None) is not None
+              and _safe_float(ai_row.get("net_margin%")) < 0):
+            row["status"] = "❌ Unprofitable Health Tech"
         elif has_ai and has_eodhd:
             row["status"] = "🟢 Eligible"
         else:
