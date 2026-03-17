@@ -246,7 +246,8 @@ def _safe_float(val):
     if val is None or val == "" or val == "—":
         return None
     try:
-        f = float(val)
+        cleaned = str(val).strip().rstrip("%")
+        f = float(cleaned)
         if math.isnan(f) or math.isinf(f):
             return None
         return f
@@ -460,15 +461,20 @@ def load_ai_analysis(service, logger) -> tuple[dict, dict]:
             "r40_score": get_val("r40_score"),
         }
 
-        # Detect 🔴 markers across all columns for exclusion logic
+        # Detect 🔴 and 🟡 markers across all columns
         red_cols = []
+        yellow_cols = []
         for col_name, col_idx in col_map.items():
             if col_idx < len(padded):
                 cell_val = str(padded[col_idx]).strip()
                 if cell_val.startswith("🔴"):
                     red_cols.append(col_name)
+                elif cell_val.startswith("🟡"):
+                    yellow_cols.append(col_name)
         if red_cols:
             ai_data[ticker]["_red_flag_cols"] = red_cols
+        if yellow_cols:
+            ai_data[ticker]["_yellow_flag_cols"] = yellow_cols
 
         ai_row_map[ticker] = row_idx + 3  # data starts at row 3
 
@@ -928,13 +934,19 @@ def upsert_v2(
         sr["_rating_f"] = parse_rating_numeric(row.get("rating"))
         scoring_rows.append(sr)
 
-    # Compute composite scores with short_outlook penalty
+    # Compute composite scores with outlook/flag penalties
     for sr in scoring_rows:
         raw = compute_composite_score(sr, scoring_rows)
+        # Penalty from short_outlook emoji
         outlook = str(sr.get("short_outlook", "")).strip()
         if outlook.startswith("🔴"):
             raw *= 0.25
         elif outlook.startswith("🟡"):
+            raw *= 0.50
+        # Penalty from 🟡 flags on AI Analysis columns
+        ticker = sr["_ticker"]
+        yellow_flags = ai_data.get(ticker, {}).get("_yellow_flag_cols", [])
+        if yellow_flags:
             raw *= 0.50
         sr["_composite_score"] = raw
 
