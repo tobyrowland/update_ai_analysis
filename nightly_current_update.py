@@ -71,7 +71,7 @@ MANUAL_ONLY_COLS = {"deep_dive", "conviction_tier", "next_earnings"}
 
 # Status priority for sorting (❌ Excluded always at bottom)
 STATUS_PRIORITY = {
-    "🟢 Eligible": 1, "🟢": 1,
+    "🏷️": 1, "🟢 Eligible": 1, "🟢": 1,
     "🆕 New": 2, "🆕": 2,
     "❌": 3,
 }
@@ -246,7 +246,8 @@ def _safe_float(val):
     if val is None or val == "" or val == "—":
         return None
     try:
-        f = float(val)
+        cleaned = str(val).strip().rstrip("%")
+        f = float(cleaned)
         if math.isnan(f) or math.isinf(f):
             return None
         return f
@@ -460,15 +461,20 @@ def load_ai_analysis(service, logger) -> tuple[dict, dict]:
             "r40_score": get_val("r40_score"),
         }
 
-        # Detect 🔴 markers across all columns for exclusion logic
+        # Detect 🔴 and 🟡 markers across all columns
         red_cols = []
+        yellow_cols = []
         for col_name, col_idx in col_map.items():
             if col_idx < len(padded):
                 cell_val = str(padded[col_idx]).strip()
                 if cell_val.startswith("🔴"):
                     red_cols.append(col_name)
+                elif cell_val.startswith("🟡") and col_name != "key_risks":
+                    yellow_cols.append(col_name)
         if red_cols:
             ai_data[ticker]["_red_flag_cols"] = red_cols
+        if yellow_cols:
+            ai_data[ticker]["_yellow_flag_cols"] = yellow_cols
 
         ai_row_map[ticker] = row_idx + 3  # data starts at row 3
 
@@ -513,6 +519,7 @@ def load_price_sales(service, logger) -> tuple[dict, dict]:
     ticker_idx = col_map.get("ticker")
     ps_now_idx = col_map.get("ps_now")
     high_52w_idx = col_map.get("52w_high")
+    median_12m_idx = col_map.get("12m_median")
 
     if ticker_idx is None:
         logger.error("Cannot find 'ticker' column in Price-Sales headers: %s", headers)
@@ -523,7 +530,7 @@ def load_price_sales(service, logger) -> tuple[dict, dict]:
 
     ps_data = {}
     ps_row_map = {}  # ticker -> 1-indexed sheet row number
-    max_idx = max(c for c in [ticker_idx, ps_now_idx, high_52w_idx] if c is not None)
+    max_idx = max(c for c in [ticker_idx, ps_now_idx, high_52w_idx, median_12m_idx] if c is not None)
     for row_idx, row in enumerate(data_rows):
         padded = row + [""] * (max_idx + 1 - len(row))
         ticker = padded[ticker_idx].strip().upper()
@@ -532,8 +539,9 @@ def load_price_sales(service, logger) -> tuple[dict, dict]:
 
         ps_now = _safe_float(padded[ps_now_idx])
         high_52w = _safe_float(padded[high_52w_idx]) if high_52w_idx is not None else None
+        median_12m = _safe_float(padded[median_12m_idx]) if median_12m_idx is not None else None
 
-        ps_data[ticker] = {"ps_now": ps_now, "52w_high": high_52w}
+        ps_data[ticker] = {"ps_now": ps_now, "52w_high": high_52w, "12m_median": median_12m}
         ps_row_map[ticker] = data_start_row + row_idx
 
     logger.info("Loaded %d tickers from Price-Sales", len(ps_data))
@@ -711,7 +719,7 @@ def _status_base(status_str):
     """Extract the emoji prefix from a status string."""
     if not status_str:
         return ""
-    for emoji in ("🟢", "🆕", "❌"):
+    for emoji in ("🏷️", "🟢", "🆕", "❌"):
         if status_str.startswith(emoji):
             return emoji
     return status_str
@@ -840,8 +848,20 @@ def upsert_v2(
         if red_flags:
             flag_names = ", ".join(red_flags[:3])
             row["status"] = f"❌ {flag_names}"
+        elif (row.get("sector", "") == "Health Technology"
+              and _safe_float(ai_row.get("net_margin%") if ai_row else None) is not None
+              and _safe_float(ai_row.get("net_margin%")) < 0):
+            row["status"] = "❌ Unprofitable Health Tech"
         elif has_ai and has_eodhd:
-            row["status"] = "🟢 Eligible"
+            # Check for P/S discount vs 12m median
+            ps_row = ps_data.get(ticker, {})
+            _ps = ps_row.get("ps_now")
+            _med = ps_row.get("12m_median")
+            if _ps is not None and _med is not None and _med > 0 and _ps / _med < 0.80:
+                pct = round((1 - _ps / _med) * 100)
+                row["status"] = f"🏷️ -{pct}% vs. 52w p/s"
+            else:
+                row["status"] = "🟢 Eligible"
         else:
             row["status"] = "🆕 New"
 
@@ -898,8 +918,19 @@ def upsert_v2(
         if red_flags:
             flag_names = ", ".join(red_flags[:3])
             row["status"] = f"❌ {flag_names}"
+        elif (row.get("sector", "") == "Health Technology"
+              and _safe_float(ai_row.get("net_margin%") if ai_row else None) is not None
+              and _safe_float(ai_row.get("net_margin%")) < 0):
+            row["status"] = "❌ Unprofitable Health Tech"
         elif has_ai and has_eodhd:
-            row["status"] = "🟢 Eligible"
+            # Check for P/S discount vs 12m median
+            _ps = ps_row.get("ps_now")
+            _med = ps_row.get("12m_median")
+            if _ps is not None and _med is not None and _med > 0 and _ps / _med < 0.80:
+                pct = round((1 - _ps / _med) * 100)
+                row["status"] = f"🏷️ -{pct}% vs. 52w p/s"
+            else:
+                row["status"] = "🟢 Eligible"
         else:
             row["status"] = "🆕 New"
 
@@ -920,9 +951,21 @@ def upsert_v2(
         sr["_rating_f"] = parse_rating_numeric(row.get("rating"))
         scoring_rows.append(sr)
 
-    # Compute composite scores
+    # Compute composite scores with outlook/flag penalties
     for sr in scoring_rows:
-        sr["_composite_score"] = compute_composite_score(sr, scoring_rows)
+        raw = compute_composite_score(sr, scoring_rows)
+        # Penalty from short_outlook emoji
+        outlook = str(sr.get("short_outlook", "")).strip()
+        if outlook.startswith("🔴"):
+            raw *= 0.25
+        elif outlook.startswith("🟡"):
+            raw *= 0.50
+        # Penalty from 🟡 flags on AI Analysis columns
+        ticker = sr["_ticker"]
+        yellow_flags = ai_data.get(ticker, {}).get("_yellow_flag_cols", [])
+        if yellow_flags:
+            raw *= 0.50
+        sr["_composite_score"] = raw
 
     # Sort by status priority, then composite score descending
     def sort_key(sr):
