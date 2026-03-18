@@ -139,8 +139,12 @@ def main():
         logger.error("Source sheet '%s' is empty", SOURCE_SHEET)
         sys.exit(1)
 
-    # Headers are in row 1 (index 0)
-    source_headers = source_rows[0]
+    # Row 1 contains merged group headers (STATUS, IDENTITY, etc.);
+    # the actual column headers (ticker, company_name, …) are in row 2.
+    if len(source_rows) < 2:
+        logger.error("Source sheet '%s' has fewer than 2 rows", SOURCE_SHEET)
+        sys.exit(1)
+    source_headers = source_rows[1]
     src_ticker_col = find_column(source_headers, "ticker")
     src_company_col = find_column(source_headers, "company_name")
     src_exchange_col = find_column(source_headers, "exchange")
@@ -161,9 +165,9 @@ def main():
     logger.info("Source '%s': ticker=col %d, company_name=col %d, exchange=col %d",
                 SOURCE_SHEET, src_ticker_col, src_company_col, src_exchange_col)
 
-    # Extract source companies (data starts at row 2, index 1)
+    # Extract source companies (data starts at row 3, index 2)
     source_companies = {}  # ticker → {company_name, exchange}
-    for row in source_rows[1:]:
+    for row in source_rows[2:]:
         max_col = max(src_ticker_col, src_company_col, src_exchange_col)
         padded = row + [""] * (max_col + 1 - len(row))
         ticker = padded[src_ticker_col].strip().upper()
