@@ -449,6 +449,55 @@ YAHOO_SUFFIX = {
 }
 
 
+def _yahoo_chart_request(yahoo_ticker: str, logger) -> list | None:
+    """Make a single Yahoo Finance chart request with retry on SSL/connection errors."""
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_ticker}"
+    params = {"range": "1y", "interval": "1wk"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/120.0.0.0 Safari/537.36",
+    }
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            resp = requests.get(url, params=params, headers=headers, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            result = data.get("chart", {}).get("result", [])
+            if not result:
+                return None
+
+            timestamps = result[0].get("timestamp", [])
+            adj_closes = (
+                result[0].get("indicators", {})
+                .get("adjclose", [{}])[0]
+                .get("adjclose", [])
+            )
+            if not timestamps or not adj_closes:
+                return None
+
+            prices = []
+            for ts, close in zip(timestamps, adj_closes):
+                if close is None:
+                    continue
+                dt = datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+                prices.append({"date": dt, "close": close})
+            return prices if prices else None
+
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            wait = 2 ** (attempt + 1)
+            logger.warning("Yahoo %s attempt %d/%d failed (%s), retrying in %ds",
+                           yahoo_ticker, attempt + 1, max_retries, type(e).__name__, wait)
+            time.sleep(wait)
+        except Exception as e:
+            logger.warning("Yahoo Finance failed for %s: %s", yahoo_ticker, e)
+            return None
+
+    return None
+
+
 def fetch_weekly_prices(ticker: str, exchange: str, logger) -> list | None:
     """Fetch ~52 weeks of weekly closing prices from Yahoo Finance.
 
@@ -458,72 +507,23 @@ def fetch_weekly_prices(ticker: str, exchange: str, logger) -> list | None:
     suffix = YAHOO_SUFFIX.get(eodhd_exchange, "")
     yahoo_ticker = ticker + suffix
 
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_ticker}"
-    params = {"range": "1y", "interval": "1wk"}
-    headers = {"User-Agent": "Mozilla/5.0"}
-
-    try:
-        resp = requests.get(url, params=params, headers=headers, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        result = data.get("chart", {}).get("result", [])
-        if not result:
-            logger.warning("Yahoo Finance: no result for %s", yahoo_ticker)
-            return None
-
-        timestamps = result[0].get("timestamp", [])
-        adj_closes = (
-            result[0].get("indicators", {})
-            .get("adjclose", [{}])[0]
-            .get("adjclose", [])
-        )
-        if not timestamps or not adj_closes:
-            logger.warning("Yahoo Finance: no price data for %s", yahoo_ticker)
-            return None
-
-        prices = []
-        for ts, close in zip(timestamps, adj_closes):
-            if close is None:
-                continue
-            dt = datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
-            prices.append({"date": dt, "close": close})
-
+    time.sleep(DELAY_BETWEEN_CALLS)  # rate limit
+    prices = _yahoo_chart_request(yahoo_ticker, logger)
+    if prices:
         logger.info("Yahoo Finance: got %d weekly prices for %s", len(prices), yahoo_ticker)
-        return prices if prices else None
-
-    except Exception as e:
-        logger.warning("Yahoo Finance failed for %s: %s", yahoo_ticker, e)
+        return prices
 
     # Fallback: try bare ticker (for US-listed ADRs)
     if suffix:
-        try:
-            resp = requests.get(
-                f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}",
-                params=params, headers=headers, timeout=30,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            result = data.get("chart", {}).get("result", [])
-            if result:
-                timestamps = result[0].get("timestamp", [])
-                adj_closes = (
-                    result[0].get("indicators", {})
-                    .get("adjclose", [{}])[0]
-                    .get("adjclose", [])
-                )
-                prices = []
-                for ts, close in zip(timestamps, adj_closes):
-                    if close is None:
-                        continue
-                    dt = datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
-                    prices.append({"date": dt, "close": close})
-                if prices:
-                    logger.info("Yahoo Finance: got %d weekly prices for %s (bare fallback)",
-                                len(prices), ticker)
-                    return prices
-        except Exception as e:
-            logger.warning("Yahoo Finance bare fallback failed for %s: %s", ticker, e)
+        time.sleep(DELAY_BETWEEN_CALLS)
+        prices = _yahoo_chart_request(ticker, logger)
+        if prices:
+            logger.info("Yahoo Finance: got %d weekly prices for %s (bare fallback)",
+                        len(prices), ticker)
+            return prices
 
+    logger.warning("Yahoo Finance: no prices for %s (tried %s%s)",
+                   ticker, yahoo_ticker, f" and {ticker}" if suffix else "")
     return None
 
 
