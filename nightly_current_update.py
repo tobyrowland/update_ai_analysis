@@ -74,7 +74,7 @@ MANUAL_ONLY_COLS = {"deep_dive", "conviction_tier", "next_earnings"}
 STATUS_PRIORITY = {
     "📌": 1, "🏷️": 1, "🟢 Eligible": 1, "🟢": 1,
     "🆕 New": 2, "🆕": 2,
-    "❌": 3,
+    "📌❌": 3, "❌": 3,
 }
 
 # Row 1 category merges for CURRENT_V2
@@ -787,7 +787,7 @@ def _status_base(status_str):
     """Extract the emoji prefix from a status string."""
     if not status_str:
         return ""
-    for emoji in ("📌", "🏷️", "🟢", "🆕", "❌"):
+    for emoji in ("📌❌", "📌", "🏷️", "🟢", "🆕", "❌"):
         if status_str.startswith(emoji):
             return emoji
     return status_str
@@ -1010,7 +1010,7 @@ def upsert_v2(
         elif is_new:
             row["days_on_list"] = 0
 
-        # Status logic — Manual-only tickers get 📌, unless excluded
+        # Status logic — Manual-only tickers get 📌, excluded manuals get 📌❌
         red_flags = ai_row.get("_red_flag_cols", []) if ai_row else []
         has_ai = bool(ai_row and ai_row.get("ai"))
         has_eodhd = bool(ai_row and ai_row.get("data"))
@@ -1018,11 +1018,17 @@ def upsert_v2(
 
         if red_flags:
             flag_names = ", ".join(red_flags[:3])
-            row["status"] = f"❌ {flag_names}"
+            if is_manual_only:
+                row["status"] = f"📌❌ {flag_names}"
+            else:
+                row["status"] = f"❌ {flag_names}"
         elif (row.get("sector", "") == "Health Technology"
               and _safe_float(ai_row.get("net_margin%") if ai_row else None) is not None
               and _safe_float(ai_row.get("net_margin%")) < 0):
-            row["status"] = "❌ Unprofitable Health Tech"
+            if is_manual_only:
+                row["status"] = "📌❌ Unprofitable Health Tech"
+            else:
+                row["status"] = "❌ Unprofitable Health Tech"
         elif is_manual_only:
             row["status"] = "📌 Manual"
         elif has_ai and has_eodhd:
