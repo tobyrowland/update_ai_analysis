@@ -72,7 +72,7 @@ MANUAL_ONLY_COLS = {"deep_dive", "conviction_tier", "next_earnings"}
 
 # Status priority for sorting (❌ Excluded always at bottom)
 STATUS_PRIORITY = {
-    "🏷️": 1, "🟢 Eligible": 1, "🟢": 1,
+    "📌": 1, "🏷️": 1, "🟢 Eligible": 1, "🟢": 1,
     "🆕 New": 2, "🆕": 2,
     "❌": 3,
 }
@@ -787,7 +787,7 @@ def _status_base(status_str):
     """Extract the emoji prefix from a status string."""
     if not status_str:
         return ""
-    for emoji in ("🏷️", "🟢", "🆕", "❌"):
+    for emoji in ("📌", "🏷️", "🟢", "🆕", "❌"):
         if status_str.startswith(emoji):
             return emoji
     return status_str
@@ -1009,10 +1009,12 @@ def upsert_v2(
         elif is_new:
             row["days_on_list"] = 0
 
-        # Status logic (same as screened)
+        # Status logic — Manual-only tickers get 📌, unless excluded
+        screened_set = {e["ticker"].upper() for e in screened}
         red_flags = ai_row.get("_red_flag_cols", []) if ai_row else []
         has_ai = bool(ai_row and ai_row.get("ai"))
         has_eodhd = bool(ai_row and ai_row.get("data"))
+        is_manual_only = ticker not in screened_set
 
         if red_flags:
             flag_names = ", ".join(red_flags[:3])
@@ -1021,6 +1023,8 @@ def upsert_v2(
               and _safe_float(ai_row.get("net_margin%") if ai_row else None) is not None
               and _safe_float(ai_row.get("net_margin%")) < 0):
             row["status"] = "❌ Unprofitable Health Tech"
+        elif is_manual_only:
+            row["status"] = "📌 Manual"
         elif has_ai and has_eodhd:
             _ps = ps_row.get("ps_now")
             _med = ps_row.get("12m_median")
