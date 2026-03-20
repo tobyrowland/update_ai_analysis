@@ -944,6 +944,7 @@ def upsert_v2(
         merged[ticker] = row
 
     # Process Manual tickers (same logic as screened)
+    screened_set = {e["ticker"].upper() for e in screened}
     manual_tickers = set()
     for eq in manual:
         ticker = eq["ticker"].upper()
@@ -1010,7 +1011,6 @@ def upsert_v2(
             row["days_on_list"] = 0
 
         # Status logic — Manual-only tickers get 📌, unless excluded
-        screened_set = {e["ticker"].upper() for e in screened}
         red_flags = ai_row.get("_red_flag_cols", []) if ai_row else []
         has_ai = bool(ai_row and ai_row.get("ai"))
         has_eodhd = bool(ai_row and ai_row.get("data"))
@@ -1059,7 +1059,7 @@ def upsert_v2(
     # Also enrich existing tickers not in today's screen (that survived removal)
     screened_tickers = {eq["ticker"].upper() for eq in screened}
     for ticker, row in merged.items():
-        if ticker in screened_tickers:
+        if ticker in screened_tickers or ticker in manual_tickers:
             continue
 
         ai_row = ai_data.get(ticker, {})
