@@ -17,6 +17,7 @@ import argparse
 import json
 import logging
 import os
+import ssl
 import statistics
 import sys
 import time
@@ -147,6 +148,34 @@ def setup_logging() -> logging.Logger:
 # ---------------------------------------------------------------------------
 
 
+def sheets_execute(request, max_retries=4):
+    """Execute a Google Sheets API request with retry on transient errors."""
+    from googleapiclient.errors import HttpError
+
+    for attempt in range(max_retries):
+        try:
+            return request.execute()
+        except HttpError as e:
+            if e.resp.status == 429 and attempt < max_retries - 1:
+                wait = 2 ** (attempt + 1)
+                logging.getLogger("price_sales_updater").warning(
+                    "Sheets API rate limited (attempt %d/%d), retrying in %ds",
+                    attempt + 1, max_retries, wait,
+                )
+                time.sleep(wait)
+                continue
+            raise
+        except (ssl.SSLEOFError, ConnectionError, OSError) as e:
+            if attempt == max_retries - 1:
+                raise
+            wait = 2 ** (attempt + 1)
+            logging.getLogger("price_sales_updater").warning(
+                "Sheets API transient error (attempt %d/%d): %s, retrying in %ds",
+                attempt + 1, max_retries, e, wait,
+            )
+            time.sleep(wait)
+
+
 def get_sheets_service():
     sa_value = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
     if not sa_value:
@@ -166,7 +195,7 @@ def get_sheets_service():
 
 def read_ticker_list(service, logger) -> list[dict]:
     """Read ticker + exchange from AI Analysis sheet, starting at row 3."""
-    result = (
+    result = sheets_execute(
         service.spreadsheets()
         .values()
         .get(
@@ -174,7 +203,6 @@ def read_ticker_list(service, logger) -> list[dict]:
             range=f"'{SOURCE_SHEET}'!A3:B",
             valueRenderOption="FORMATTED_VALUE",
         )
-        .execute()
     )
     rows = result.get("values", [])
     tickers = []
@@ -188,8 +216,14 @@ def read_ticker_list(service, logger) -> list[dict]:
 
 
 def read_ps_sheet(service, logger) -> dict[str, dict]:
-    """Read all rows from Price-Sales sheet, return dict keyed by ticker."""
-    result = (
+    """Read all rows from Price-Sales sheet, return dict keyed by ticker.
+
+    Dynamically finds the header row (the one containing 'ticker') to handle
+    sheets that have group/merged header rows above the actual column names.
+    Uses PS_COLUMNS for column mapping (data is written in that order).
+    When duplicates exist, keeps the entry with the most recent last_updated.
+    """
+    result = sheets_execute(
         service.spreadsheets()
         .values()
         .get(
@@ -197,57 +231,75 @@ def read_ps_sheet(service, logger) -> dict[str, dict]:
             range=f"'{PS_SHEET}'!A1:K",
             valueRenderOption="FORMATTED_VALUE",
         )
-        .execute()
     )
     rows = result.get("values", [])
     if not rows:
         logger.info("Price-Sales sheet is empty")
         return {}
 
-    headers = rows[0]
+    # Find the actual header row (contains "ticker") to know where data starts
+    header_idx = 0
+    for i, row in enumerate(rows):
+        if row and any(str(cell).strip().lower() == "ticker" for cell in row):
+            header_idx = i
+            break
+
+    logger.info("Found header row at index %d", header_idx)
+
     ps_map = {}
-    for row in rows[1:]:
+    for row in rows[header_idx + 1:]:
         if not row or not row[0]:
             continue
+        # Map columns by position using PS_COLUMNS (the order data was written)
         entry = {}
-        for i, h in enumerate(headers):
-            entry[h] = row[i] if i < len(row) else ""
-        ps_map[entry.get("ticker", "")] = entry
+        for i, col_name in enumerate(PS_COLUMNS):
+            entry[col_name] = row[i] if i < len(row) else ""
+        ticker = entry.get("ticker", "").strip()
+        if not ticker:
+            continue
+        # If duplicate, keep the one with the most recent last_updated
+        if ticker in ps_map:
+            existing_date = ps_map[ticker].get("last_updated", "")
+            new_date = entry.get("last_updated", "")
+            if new_date > existing_date:
+                ps_map[ticker] = entry
+            logger.warning("Duplicate ticker %s found in sheet, keeping most recent", ticker)
+        else:
+            ps_map[ticker] = entry
 
-    logger.info("Read %d existing rows from %s", len(ps_map), PS_SHEET)
+    logger.info("Read %d unique tickers from %s", len(ps_map), PS_SHEET)
     return ps_map
 
 
 def ensure_ps_sheet_exists(service, logger):
     """Create the Price-Sales sheet tab if it doesn't exist, with header row."""
-    meta = (
+    meta = sheets_execute(
         service.spreadsheets()
         .get(spreadsheetId=SPREADSHEET_ID, fields="sheets.properties")
-        .execute()
     )
     for sheet in meta.get("sheets", []):
         if sheet["properties"]["title"] == PS_SHEET:
             logger.info("Sheet '%s' already exists", PS_SHEET)
             return
 
-    service.spreadsheets().batchUpdate(
+    sheets_execute(service.spreadsheets().batchUpdate(
         spreadsheetId=SPREADSHEET_ID,
         body={
             "requests": [
                 {"addSheet": {"properties": {"title": PS_SHEET}}}
             ]
         },
-    ).execute()
+    ))
 
-    service.spreadsheets().values().update(
+    sheets_execute(service.spreadsheets().values().update(
         spreadsheetId=SPREADSHEET_ID,
         range=f"'{PS_SHEET}'!A1",
         valueInputOption="USER_ENTERED",
         body={"values": [PS_COLUMNS]},
-    ).execute()
+    ))
 
     sheet_id = _get_sheet_id(service, PS_SHEET)
-    service.spreadsheets().batchUpdate(
+    sheets_execute(service.spreadsheets().batchUpdate(
         spreadsheetId=SPREADSHEET_ID,
         body={
             "requests": [
@@ -262,45 +314,43 @@ def ensure_ps_sheet_exists(service, logger):
                 }
             ]
         },
-    ).execute()
+    ))
     logger.info("Created sheet '%s' with header row", PS_SHEET)
 
 
 def ensure_logs_sheet_exists(service, logger):
     """Create the Logs sheet tab if it doesn't exist, with header row."""
-    meta = (
+    meta = sheets_execute(
         service.spreadsheets()
         .get(spreadsheetId=SPREADSHEET_ID, fields="sheets.properties")
-        .execute()
     )
     for sheet in meta.get("sheets", []):
         if sheet["properties"]["title"] == LOGS_SHEET:
             return
 
-    service.spreadsheets().batchUpdate(
+    sheets_execute(service.spreadsheets().batchUpdate(
         spreadsheetId=SPREADSHEET_ID,
         body={
             "requests": [
                 {"addSheet": {"properties": {"title": LOGS_SHEET}}}
             ]
         },
-    ).execute()
+    ))
 
-    service.spreadsheets().values().update(
+    sheets_execute(service.spreadsheets().values().update(
         spreadsheetId=SPREADSHEET_ID,
         range=f"'{LOGS_SHEET}'!A1",
         valueInputOption="USER_ENTERED",
         body={"values": [LOG_COLUMNS]},
-    ).execute()
+    ))
     logger.info("Created sheet '%s' with header row", LOGS_SHEET)
 
 
 def _get_sheet_id(service, sheet_name: str) -> int:
     """Return the numeric sheet ID for a given sheet name."""
-    meta = (
+    meta = sheets_execute(
         service.spreadsheets()
         .get(spreadsheetId=SPREADSHEET_ID, fields="sheets.properties")
-        .execute()
     )
     for sheet in meta.get("sheets", []):
         if sheet["properties"]["title"] == sheet_name:
@@ -312,13 +362,13 @@ def append_rows(service, sheet_name: str, rows: list[list], logger):
     """Append rows to a sheet."""
     if not rows:
         return
-    service.spreadsheets().values().append(
+    sheets_execute(service.spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID,
         range=f"'{sheet_name}'!A1",
         valueInputOption="USER_ENTERED",
         insertDataOption="INSERT_ROWS",
         body={"values": rows},
-    ).execute()
+    ))
     logger.info("Appended %d rows to %s", len(rows), sheet_name)
 
 
@@ -327,7 +377,7 @@ def update_rows_by_ticker(service, sheet_name: str, updates: list[dict], logger)
     if not updates:
         return
 
-    result = (
+    result = sheets_execute(
         service.spreadsheets()
         .values()
         .get(
@@ -335,7 +385,6 @@ def update_rows_by_ticker(service, sheet_name: str, updates: list[dict], logger)
             range=f"'{sheet_name}'!A:A",
             valueRenderOption="FORMATTED_VALUE",
         )
-        .execute()
     )
     col_a = result.get("values", [])
     ticker_to_row = {}
@@ -360,11 +409,83 @@ def update_rows_by_ticker(service, sheet_name: str, updates: list[dict], logger)
         )
 
     if batch_data:
-        service.spreadsheets().values().batchUpdate(
+        sheets_execute(service.spreadsheets().values().batchUpdate(
             spreadsheetId=SPREADSHEET_ID,
             body={"valueInputOption": "USER_ENTERED", "data": batch_data},
-        ).execute()
+        ))
         logger.info("Updated %d rows in %s", len(batch_data), sheet_name)
+
+
+def cleanup_duplicate_rows(service, logger):
+    """One-time cleanup: delete duplicate ticker rows, keeping the FIRST (original).
+
+    The old code (before the header-detection fix) appended every ticker as
+    a new row on each run, creating duplicates below the originals.  This
+    function removes those extra rows in a single batched API call.
+    """
+    result = sheets_execute(
+        service.spreadsheets()
+        .values()
+        .get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"'{PS_SHEET}'!A:A",
+            valueRenderOption="FORMATTED_VALUE",
+        )
+    )
+    col_a = result.get("values", [])
+    if not col_a:
+        return
+
+    # Find header row
+    header_idx = 0
+    for i, row in enumerate(col_a):
+        if row and str(row[0]).strip().lower() == "ticker":
+            header_idx = i
+            break
+
+    # Track first occurrence of each ticker; mark later ones for deletion
+    seen: set[str] = set()
+    rows_to_delete: list[int] = []
+    for i in range(header_idx + 1, len(col_a)):
+        row = col_a[i]
+        if not row or not row[0]:
+            continue
+        ticker = str(row[0]).strip()
+        if not ticker:
+            continue
+        if ticker in seen:
+            rows_to_delete.append(i)  # 0-based sheet row index
+        else:
+            seen.add(ticker)
+
+    if not rows_to_delete:
+        logger.info("No duplicate rows to clean up")
+        return
+
+    logger.info("Cleaning up %d duplicate rows (keeping originals)", len(rows_to_delete))
+    sheet_id = _get_sheet_id(service, PS_SHEET)
+
+    # Build all deletes in one batch, bottom-up so indices stay valid
+    requests_list = [
+        {
+            "deleteDimension": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "dimension": "ROWS",
+                    "startIndex": row_idx,
+                    "endIndex": row_idx + 1,
+                }
+            }
+        }
+        for row_idx in sorted(rows_to_delete, reverse=True)
+    ]
+
+    sheets_execute(service.spreadsheets().batchUpdate(
+        spreadsheetId=SPREADSHEET_ID,
+        body={"requests": requests_list},
+    ))
+    logger.info("Cleanup complete — removed %d duplicate rows", len(rows_to_delete))
+
 
 
 # ---------------------------------------------------------------------------
@@ -381,6 +502,26 @@ def _safe_float(val) -> float | None:
         return f if f == f else None  # NaN check
     except (ValueError, TypeError):
         return None
+
+
+def _normalize_date(val: str) -> str:
+    """Normalize a date string to ISO format (YYYY-MM-DD).
+
+    Google Sheets FORMATTED_VALUE returns dates as M/D/YYYY (e.g. '3/23/2026'),
+    but the code writes and compares ISO dates ('2026-03-23').
+    """
+    if not val:
+        return ""
+    # Already ISO
+    if len(val) == 10 and val[4] == "-":
+        return val
+    # Try M/D/YYYY (Sheets display format)
+    for fmt in ("%m/%d/%Y", "%m/%d/%y"):
+        try:
+            return datetime.strptime(val, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return val
 
 
 def eodhd_get(endpoint: str, params: dict | None = None,
@@ -615,8 +756,13 @@ def compute_ps_for_ticker(
     """Fetch data from EODHD and compute P/S ratio + history for one ticker.
 
     Returns a dict ready for sheet writing, or None if data is insufficient.
+    History entries are only added on Fridays (weekly granularity),
+    but ps_now and last_updated refresh daily.
     """
+    today = date.today()
+    today_str = today.isoformat()
     last_friday_str = last_friday.isoformat()
+    is_friday_run = today.weekday() == 4  # Friday = 4
     mode = "backfill" if existing is None else "update"
 
     # --- Fetch fundamentals (market cap, revenue, shares) ---
@@ -677,16 +823,18 @@ def compute_ps_for_ticker(
             new_history.append([last_friday_str, ps_current])
 
     else:
-        # Update: parse existing history, append new data point
+        # Update: parse existing history
         try:
             existing_history = json.loads(existing.get("history_json", "[]"))
         except (json.JSONDecodeError, TypeError):
             existing_history = []
 
-        existing_history.append([last_friday_str, ps_current])
-        # Keep rolling 52-entry window
-        if len(existing_history) > 52:
-            existing_history = existing_history[-52:]
+        # Only add a new history entry on Fridays (weekly granularity)
+        if is_friday_run:
+            existing_history.append([today_str, ps_current])
+            # Keep rolling 52-entry window
+            if len(existing_history) > 52:
+                existing_history = existing_history[-52:]
         new_history = existing_history
 
     if not new_history:
@@ -721,6 +869,7 @@ def compute_ps_for_ticker(
     return {
         "ticker": ticker,
         "company_name": company_name,
+        "revenue_ttm": round(revenue_ttm, 0),
         "ps_now": ps_current,
         "52w_high": ps_52w_high,
         "52w_low": ps_52w_low,
@@ -728,7 +877,7 @@ def compute_ps_for_ticker(
         "ath": ps_ath,
         "%_of_ath": pct_of_ath,
         "history_json": json.dumps(new_history),
-        "last_updated": last_friday_str,
+        "last_updated": today_str,
         "first_recorded": first_recorded,
         "mode": mode,
     }
@@ -771,6 +920,9 @@ def main():
     ensure_ps_sheet_exists(service, logger)
     ensure_logs_sheet_exists(service, logger)
 
+    # Remove duplicate rows left by the old broken code (keeps originals)
+    cleanup_duplicate_rows(service, logger)
+
     # Read inputs
     ticker_list = read_ticker_list(service, logger)
     ps_map = read_ps_sheet(service, logger)
@@ -782,10 +934,12 @@ def main():
         logger.info("Filtered to %d tickers: %s", len(ticker_list), args.tickers)
 
     # Compute dates
+    today = date.today()
+    today_str = today.isoformat()
     last_friday = get_last_friday()
     backfill_from = get_backfill_from()
-    last_friday_str = last_friday.isoformat()
-    logger.info("Last Friday: %s | Backfill from: %s", last_friday, backfill_from)
+    logger.info("Today: %s | Last Friday: %s | Backfill from: %s",
+                today, last_friday, backfill_from)
 
     # Classify and process tickers
     new_rows = []
@@ -798,12 +952,12 @@ def main():
         exchange = item["exchange"]
         existing = ps_map.get(ticker)
 
-        # Classify
+        # Classify — run daily; skip only if already updated today
         if existing is None:
             mode = "backfill"
         elif args.force:
             mode = "update"
-        elif not existing.get("last_updated") or existing["last_updated"] < last_friday_str:
+        elif not existing.get("last_updated") or _normalize_date(existing["last_updated"]) < today_str:
             mode = "update"
         else:
             skipped += 1
