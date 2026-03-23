@@ -433,6 +433,26 @@ def _safe_float(val) -> float | None:
         return None
 
 
+def _normalize_date(val: str) -> str:
+    """Normalize a date string to ISO format (YYYY-MM-DD).
+
+    Google Sheets FORMATTED_VALUE returns dates as M/D/YYYY (e.g. '3/23/2026'),
+    but the code writes and compares ISO dates ('2026-03-23').
+    """
+    if not val:
+        return ""
+    # Already ISO
+    if len(val) == 10 and val[4] == "-":
+        return val
+    # Try M/D/YYYY (Sheets display format)
+    for fmt in ("%m/%d/%Y", "%m/%d/%y"):
+        try:
+            return datetime.strptime(val, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return val
+
+
 def eodhd_get(endpoint: str, params: dict | None = None,
               logger=None) -> dict | list | None:
     """Make a GET request to EODHD API."""
@@ -866,7 +886,7 @@ def main():
             mode = "backfill"
         elif args.force:
             mode = "update"
-        elif not existing.get("last_updated") or existing["last_updated"] < today_str:
+        elif not existing.get("last_updated") or _normalize_date(existing["last_updated"]) < today_str:
             mode = "update"
         else:
             skipped += 1
