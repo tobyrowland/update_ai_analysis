@@ -416,6 +416,77 @@ def update_rows_by_ticker(service, sheet_name: str, updates: list[dict], logger)
         logger.info("Updated %d rows in %s", len(batch_data), sheet_name)
 
 
+def cleanup_duplicate_rows(service, logger):
+    """One-time cleanup: delete duplicate ticker rows, keeping the FIRST (original).
+
+    The old code (before the header-detection fix) appended every ticker as
+    a new row on each run, creating duplicates below the originals.  This
+    function removes those extra rows in a single batched API call.
+    """
+    result = sheets_execute(
+        service.spreadsheets()
+        .values()
+        .get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"'{PS_SHEET}'!A:A",
+            valueRenderOption="FORMATTED_VALUE",
+        )
+    )
+    col_a = result.get("values", [])
+    if not col_a:
+        return
+
+    # Find header row
+    header_idx = 0
+    for i, row in enumerate(col_a):
+        if row and str(row[0]).strip().lower() == "ticker":
+            header_idx = i
+            break
+
+    # Track first occurrence of each ticker; mark later ones for deletion
+    seen: set[str] = set()
+    rows_to_delete: list[int] = []
+    for i in range(header_idx + 1, len(col_a)):
+        row = col_a[i]
+        if not row or not row[0]:
+            continue
+        ticker = str(row[0]).strip()
+        if not ticker:
+            continue
+        if ticker in seen:
+            rows_to_delete.append(i)  # 0-based sheet row index
+        else:
+            seen.add(ticker)
+
+    if not rows_to_delete:
+        logger.info("No duplicate rows to clean up")
+        return
+
+    logger.info("Cleaning up %d duplicate rows (keeping originals)", len(rows_to_delete))
+    sheet_id = _get_sheet_id(service, PS_SHEET)
+
+    # Build all deletes in one batch, bottom-up so indices stay valid
+    requests_list = [
+        {
+            "deleteDimension": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "dimension": "ROWS",
+                    "startIndex": row_idx,
+                    "endIndex": row_idx + 1,
+                }
+            }
+        }
+        for row_idx in sorted(rows_to_delete, reverse=True)
+    ]
+
+    sheets_execute(service.spreadsheets().batchUpdate(
+        spreadsheetId=SPREADSHEET_ID,
+        body={"requests": requests_list},
+    ))
+    logger.info("Cleanup complete — removed %d duplicate rows", len(rows_to_delete))
+
+
 
 # ---------------------------------------------------------------------------
 # EODHD API helpers
@@ -849,8 +920,8 @@ def main():
     ensure_ps_sheet_exists(service, logger)
     ensure_logs_sheet_exists(service, logger)
 
-    # Note: dedup removed — header detection fix in read_ps_sheet prevents
-    # future duplicates.  Manual cleanup is safer for existing data.
+    # Remove duplicate rows left by the old broken code (keeps originals)
+    cleanup_duplicate_rows(service, logger)
 
     # Read inputs
     ticker_list = read_ticker_list(service, logger)
