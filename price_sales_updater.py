@@ -220,6 +220,7 @@ def read_ps_sheet(service, logger) -> dict[str, dict]:
 
     Dynamically finds the header row (the one containing 'ticker') to handle
     sheets that have group/merged header rows above the actual column names.
+    Uses PS_COLUMNS for column mapping (data is written in that order).
     When duplicates exist, keeps the entry with the most recent last_updated.
     """
     result = sheets_execute(
@@ -236,24 +237,24 @@ def read_ps_sheet(service, logger) -> dict[str, dict]:
         logger.info("Price-Sales sheet is empty")
         return {}
 
-    # Find the actual header row (contains "ticker")
+    # Find the actual header row (contains "ticker") to know where data starts
     header_idx = 0
     for i, row in enumerate(rows):
         if row and any(str(cell).strip().lower() == "ticker" for cell in row):
             header_idx = i
             break
 
-    headers = [str(h).strip() for h in rows[header_idx]]
-    logger.info("Found header row at index %d: %s", header_idx, headers[:3])
+    logger.info("Found header row at index %d", header_idx)
 
     ps_map = {}
     for row in rows[header_idx + 1:]:
         if not row or not row[0]:
             continue
+        # Map columns by position using PS_COLUMNS (the order data was written)
         entry = {}
-        for i, h in enumerate(headers):
-            entry[h] = row[i] if i < len(row) else ""
-        ticker = entry.get("ticker", "")
+        for i, col_name in enumerate(PS_COLUMNS):
+            entry[col_name] = row[i] if i < len(row) else ""
+        ticker = entry.get("ticker", "").strip()
         if not ticker:
             continue
         # If duplicate, keep the one with the most recent last_updated
@@ -414,92 +415,6 @@ def update_rows_by_ticker(service, sheet_name: str, updates: list[dict], logger)
         ))
         logger.info("Updated %d rows in %s", len(batch_data), sheet_name)
 
-
-def dedup_ps_sheet(service, logger):
-    """Remove duplicate ticker rows from the Price-Sales sheet.
-
-    Keeps the row with the most recent last_updated for each ticker.
-    Deletes duplicates by row index (bottom-up to preserve indices).
-    """
-    result = sheets_execute(
-        service.spreadsheets()
-        .values()
-        .get(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"'{PS_SHEET}'!A1:L",
-            valueRenderOption="FORMATTED_VALUE",
-        )
-    )
-    rows = result.get("values", [])
-    if not rows:
-        return
-
-    # Find actual header row
-    header_idx = 0
-    for i, row in enumerate(rows):
-        if row and any(str(cell).strip().lower() == "ticker" for cell in row):
-            header_idx = i
-            break
-
-    headers = [str(h).strip() for h in rows[header_idx]]
-    ticker_col = 0  # ticker is always column A
-    last_updated_col = None
-    for i, h in enumerate(headers):
-        if h == "last_updated":
-            last_updated_col = i
-            break
-
-    # Track best row per ticker and rows to delete
-    seen: dict[str, tuple[int, str]] = {}  # ticker -> (row_index, last_updated)
-    rows_to_delete = []
-
-    for i in range(header_idx + 1, len(rows)):
-        row = rows[i]
-        if not row or not row[0]:
-            continue
-        ticker = row[ticker_col].strip()
-        if not ticker:
-            continue
-        lu = row[last_updated_col] if last_updated_col and last_updated_col < len(row) else ""
-
-        if ticker in seen:
-            prev_idx, prev_lu = seen[ticker]
-            if lu > prev_lu:
-                # Current row is newer — delete the previous one
-                rows_to_delete.append(prev_idx)
-                seen[ticker] = (i, lu)
-            else:
-                # Previous row is newer — delete this one
-                rows_to_delete.append(i)
-        else:
-            seen[ticker] = (i, lu)
-
-    if not rows_to_delete:
-        logger.info("No duplicate rows to clean up")
-        return
-
-    logger.info("Removing %d duplicate rows from %s", len(rows_to_delete), PS_SHEET)
-    sheet_id = _get_sheet_id(service, PS_SHEET)
-
-    # Build all delete requests in one batch (bottom-up so indices stay valid)
-    requests_list = []
-    for row_idx in sorted(rows_to_delete, reverse=True):
-        requests_list.append({
-            "deleteDimension": {
-                "range": {
-                    "sheetId": sheet_id,
-                    "dimension": "ROWS",
-                    "startIndex": row_idx,
-                    "endIndex": row_idx + 1,
-                }
-            }
-        })
-
-    sheets_execute(service.spreadsheets().batchUpdate(
-        spreadsheetId=SPREADSHEET_ID,
-        body={"requests": requests_list},
-    ))
-    logger.info("Dedup complete — removed %d rows", len(rows_to_delete))
 
 
 # ---------------------------------------------------------------------------
@@ -914,8 +829,8 @@ def main():
     ensure_ps_sheet_exists(service, logger)
     ensure_logs_sheet_exists(service, logger)
 
-    # Clean up any duplicate rows from previous runs
-    dedup_ps_sheet(service, logger)
+    # Note: dedup removed — header detection fix in read_ps_sheet prevents
+    # future duplicates.  Manual cleanup is safer for existing data.
 
     # Read inputs
     ticker_list = read_ticker_list(service, logger)
