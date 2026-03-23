@@ -615,8 +615,13 @@ def compute_ps_for_ticker(
     """Fetch data from EODHD and compute P/S ratio + history for one ticker.
 
     Returns a dict ready for sheet writing, or None if data is insufficient.
+    History entries are only added on Fridays (weekly granularity),
+    but ps_now and last_updated refresh daily.
     """
+    today = date.today()
+    today_str = today.isoformat()
     last_friday_str = last_friday.isoformat()
+    is_friday_run = today.weekday() == 4  # Friday = 4
     mode = "backfill" if existing is None else "update"
 
     # --- Fetch fundamentals (market cap, revenue, shares) ---
@@ -677,16 +682,18 @@ def compute_ps_for_ticker(
             new_history.append([last_friday_str, ps_current])
 
     else:
-        # Update: parse existing history, append new data point
+        # Update: parse existing history
         try:
             existing_history = json.loads(existing.get("history_json", "[]"))
         except (json.JSONDecodeError, TypeError):
             existing_history = []
 
-        existing_history.append([last_friday_str, ps_current])
-        # Keep rolling 52-entry window
-        if len(existing_history) > 52:
-            existing_history = existing_history[-52:]
+        # Only add a new history entry on Fridays (weekly granularity)
+        if is_friday_run:
+            existing_history.append([today_str, ps_current])
+            # Keep rolling 52-entry window
+            if len(existing_history) > 52:
+                existing_history = existing_history[-52:]
         new_history = existing_history
 
     if not new_history:
@@ -729,7 +736,7 @@ def compute_ps_for_ticker(
         "ath": ps_ath,
         "%_of_ath": pct_of_ath,
         "history_json": json.dumps(new_history),
-        "last_updated": last_friday_str,
+        "last_updated": today_str,
         "first_recorded": first_recorded,
         "mode": mode,
     }
@@ -783,10 +790,12 @@ def main():
         logger.info("Filtered to %d tickers: %s", len(ticker_list), args.tickers)
 
     # Compute dates
+    today = date.today()
+    today_str = today.isoformat()
     last_friday = get_last_friday()
     backfill_from = get_backfill_from()
-    last_friday_str = last_friday.isoformat()
-    logger.info("Last Friday: %s | Backfill from: %s", last_friday, backfill_from)
+    logger.info("Today: %s | Last Friday: %s | Backfill from: %s",
+                today, last_friday, backfill_from)
 
     # Classify and process tickers
     new_rows = []
@@ -799,12 +808,12 @@ def main():
         exchange = item["exchange"]
         existing = ps_map.get(ticker)
 
-        # Classify
+        # Classify — run daily; skip only if already updated today
         if existing is None:
             mode = "backfill"
         elif args.force:
             mode = "update"
-        elif not existing.get("last_updated") or existing["last_updated"] < last_friday_str:
+        elif not existing.get("last_updated") or existing["last_updated"] < today_str:
             mode = "update"
         else:
             skipped += 1
