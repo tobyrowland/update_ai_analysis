@@ -45,7 +45,7 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 # Price-Sales sheet column order (matches header row)
 PS_COLUMNS = [
-    "ticker", "company_name", "ps_now", "52w_high", "52w_low",
+    "ticker", "company_name", "revenue_ttm", "ps_now", "52w_high", "52w_low",
     "12m_median", "ath", "%_of_ath", "history_json", "last_updated",
     "first_recorded",
 ]
@@ -194,7 +194,7 @@ def read_ps_sheet(service, logger) -> dict[str, dict]:
         .values()
         .get(
             spreadsheetId=SPREADSHEET_ID,
-            range=f"'{PS_SHEET}'!A1:K",
+            range=f"'{PS_SHEET}'!A1:L",
             valueRenderOption="FORMATTED_VALUE",
         )
         .execute()
@@ -721,6 +721,7 @@ def compute_ps_for_ticker(
     return {
         "ticker": ticker,
         "company_name": company_name,
+        "revenue_ttm": round(revenue_ttm, 0),
         "ps_now": ps_current,
         "52w_high": ps_52w_high,
         "52w_low": ps_52w_low,
