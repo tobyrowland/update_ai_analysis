@@ -150,9 +150,21 @@ def setup_logging() -> logging.Logger:
 
 def sheets_execute(request, max_retries=4):
     """Execute a Google Sheets API request with retry on transient errors."""
+    from googleapiclient.errors import HttpError
+
     for attempt in range(max_retries):
         try:
             return request.execute()
+        except HttpError as e:
+            if e.resp.status == 429 and attempt < max_retries - 1:
+                wait = 2 ** (attempt + 1)
+                logging.getLogger("price_sales_updater").warning(
+                    "Sheets API rate limited (attempt %d/%d), retrying in %ds",
+                    attempt + 1, max_retries, wait,
+                )
+                time.sleep(wait)
+                continue
+            raise
         except (ssl.SSLEOFError, ConnectionError, OSError) as e:
             if attempt == max_retries - 1:
                 raise
@@ -469,25 +481,24 @@ def dedup_ps_sheet(service, logger):
     logger.info("Removing %d duplicate rows from %s", len(rows_to_delete), PS_SHEET)
     sheet_id = _get_sheet_id(service, PS_SHEET)
 
-    # Delete rows bottom-up so indices stay valid
+    # Build all delete requests in one batch (bottom-up so indices stay valid)
+    requests_list = []
     for row_idx in sorted(rows_to_delete, reverse=True):
-        sheets_execute(service.spreadsheets().batchUpdate(
-            spreadsheetId=SPREADSHEET_ID,
-            body={
-                "requests": [
-                    {
-                        "deleteDimension": {
-                            "range": {
-                                "sheetId": sheet_id,
-                                "dimension": "ROWS",
-                                "startIndex": row_idx,
-                                "endIndex": row_idx + 1,
-                            }
-                        }
-                    }
-                ]
-            },
-        ))
+        requests_list.append({
+            "deleteDimension": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "dimension": "ROWS",
+                    "startIndex": row_idx,
+                    "endIndex": row_idx + 1,
+                }
+            }
+        })
+
+    sheets_execute(service.spreadsheets().batchUpdate(
+        spreadsheetId=SPREADSHEET_ID,
+        body={"requests": requests_list},
+    ))
     logger.info("Dedup complete — removed %d rows", len(rows_to_delete))
 
 
