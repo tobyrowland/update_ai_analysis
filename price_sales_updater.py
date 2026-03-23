@@ -17,6 +17,7 @@ import argparse
 import json
 import logging
 import os
+import ssl
 import statistics
 import sys
 import time
@@ -147,6 +148,22 @@ def setup_logging() -> logging.Logger:
 # ---------------------------------------------------------------------------
 
 
+def sheets_execute(request, max_retries=4):
+    """Execute a Google Sheets API request with retry on transient errors."""
+    for attempt in range(max_retries):
+        try:
+            return request.execute()
+        except (ssl.SSLEOFError, ConnectionError, OSError) as e:
+            if attempt == max_retries - 1:
+                raise
+            wait = 2 ** (attempt + 1)
+            logging.getLogger("price_sales_updater").warning(
+                "Sheets API transient error (attempt %d/%d): %s, retrying in %ds",
+                attempt + 1, max_retries, e, wait,
+            )
+            time.sleep(wait)
+
+
 def get_sheets_service():
     sa_value = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
     if not sa_value:
@@ -166,7 +183,7 @@ def get_sheets_service():
 
 def read_ticker_list(service, logger) -> list[dict]:
     """Read ticker + exchange from AI Analysis sheet, starting at row 3."""
-    result = (
+    result = sheets_execute(
         service.spreadsheets()
         .values()
         .get(
@@ -174,7 +191,6 @@ def read_ticker_list(service, logger) -> list[dict]:
             range=f"'{SOURCE_SHEET}'!A3:B",
             valueRenderOption="FORMATTED_VALUE",
         )
-        .execute()
     )
     rows = result.get("values", [])
     tickers = []
@@ -189,7 +205,7 @@ def read_ticker_list(service, logger) -> list[dict]:
 
 def read_ps_sheet(service, logger) -> dict[str, dict]:
     """Read all rows from Price-Sales sheet, return dict keyed by ticker."""
-    result = (
+    result = sheets_execute(
         service.spreadsheets()
         .values()
         .get(
@@ -197,7 +213,6 @@ def read_ps_sheet(service, logger) -> dict[str, dict]:
             range=f"'{PS_SHEET}'!A1:L",
             valueRenderOption="FORMATTED_VALUE",
         )
-        .execute()
     )
     rows = result.get("values", [])
     if not rows:
@@ -220,34 +235,33 @@ def read_ps_sheet(service, logger) -> dict[str, dict]:
 
 def ensure_ps_sheet_exists(service, logger):
     """Create the Price-Sales sheet tab if it doesn't exist, with header row."""
-    meta = (
+    meta = sheets_execute(
         service.spreadsheets()
         .get(spreadsheetId=SPREADSHEET_ID, fields="sheets.properties")
-        .execute()
     )
     for sheet in meta.get("sheets", []):
         if sheet["properties"]["title"] == PS_SHEET:
             logger.info("Sheet '%s' already exists", PS_SHEET)
             return
 
-    service.spreadsheets().batchUpdate(
+    sheets_execute(service.spreadsheets().batchUpdate(
         spreadsheetId=SPREADSHEET_ID,
         body={
             "requests": [
                 {"addSheet": {"properties": {"title": PS_SHEET}}}
             ]
         },
-    ).execute()
+    ))
 
-    service.spreadsheets().values().update(
+    sheets_execute(service.spreadsheets().values().update(
         spreadsheetId=SPREADSHEET_ID,
         range=f"'{PS_SHEET}'!A1",
         valueInputOption="USER_ENTERED",
         body={"values": [PS_COLUMNS]},
-    ).execute()
+    ))
 
     sheet_id = _get_sheet_id(service, PS_SHEET)
-    service.spreadsheets().batchUpdate(
+    sheets_execute(service.spreadsheets().batchUpdate(
         spreadsheetId=SPREADSHEET_ID,
         body={
             "requests": [
@@ -262,45 +276,43 @@ def ensure_ps_sheet_exists(service, logger):
                 }
             ]
         },
-    ).execute()
+    ))
     logger.info("Created sheet '%s' with header row", PS_SHEET)
 
 
 def ensure_logs_sheet_exists(service, logger):
     """Create the Logs sheet tab if it doesn't exist, with header row."""
-    meta = (
+    meta = sheets_execute(
         service.spreadsheets()
         .get(spreadsheetId=SPREADSHEET_ID, fields="sheets.properties")
-        .execute()
     )
     for sheet in meta.get("sheets", []):
         if sheet["properties"]["title"] == LOGS_SHEET:
             return
 
-    service.spreadsheets().batchUpdate(
+    sheets_execute(service.spreadsheets().batchUpdate(
         spreadsheetId=SPREADSHEET_ID,
         body={
             "requests": [
                 {"addSheet": {"properties": {"title": LOGS_SHEET}}}
             ]
         },
-    ).execute()
+    ))
 
-    service.spreadsheets().values().update(
+    sheets_execute(service.spreadsheets().values().update(
         spreadsheetId=SPREADSHEET_ID,
         range=f"'{LOGS_SHEET}'!A1",
         valueInputOption="USER_ENTERED",
         body={"values": [LOG_COLUMNS]},
-    ).execute()
+    ))
     logger.info("Created sheet '%s' with header row", LOGS_SHEET)
 
 
 def _get_sheet_id(service, sheet_name: str) -> int:
     """Return the numeric sheet ID for a given sheet name."""
-    meta = (
+    meta = sheets_execute(
         service.spreadsheets()
         .get(spreadsheetId=SPREADSHEET_ID, fields="sheets.properties")
-        .execute()
     )
     for sheet in meta.get("sheets", []):
         if sheet["properties"]["title"] == sheet_name:
@@ -312,13 +324,13 @@ def append_rows(service, sheet_name: str, rows: list[list], logger):
     """Append rows to a sheet."""
     if not rows:
         return
-    service.spreadsheets().values().append(
+    sheets_execute(service.spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID,
         range=f"'{sheet_name}'!A1",
         valueInputOption="USER_ENTERED",
         insertDataOption="INSERT_ROWS",
         body={"values": rows},
-    ).execute()
+    ))
     logger.info("Appended %d rows to %s", len(rows), sheet_name)
 
 
@@ -327,7 +339,7 @@ def update_rows_by_ticker(service, sheet_name: str, updates: list[dict], logger)
     if not updates:
         return
 
-    result = (
+    result = sheets_execute(
         service.spreadsheets()
         .values()
         .get(
@@ -335,7 +347,6 @@ def update_rows_by_ticker(service, sheet_name: str, updates: list[dict], logger)
             range=f"'{sheet_name}'!A:A",
             valueRenderOption="FORMATTED_VALUE",
         )
-        .execute()
     )
     col_a = result.get("values", [])
     ticker_to_row = {}
@@ -360,10 +371,10 @@ def update_rows_by_ticker(service, sheet_name: str, updates: list[dict], logger)
         )
 
     if batch_data:
-        service.spreadsheets().values().batchUpdate(
+        sheets_execute(service.spreadsheets().values().batchUpdate(
             spreadsheetId=SPREADSHEET_ID,
             body={"valueInputOption": "USER_ENTERED", "data": batch_data},
-        ).execute()
+        ))
         logger.info("Updated %d rows in %s", len(batch_data), sheet_name)
 
 
