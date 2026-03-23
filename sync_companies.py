@@ -24,6 +24,7 @@ from googleapiclient.discovery import build
 
 SPREADSHEET_ID = "1js3dUTJtKhY1dUcwzYUGBOdKDZXBurLtRGgcIV8msYk"
 SOURCE_SHEET = "CURRENT"
+MANUAL_SHEET = "Manual"
 TARGET_SHEET = "AI Analysis"
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -177,6 +178,33 @@ def main():
             source_companies[ticker] = {"company_name": company, "exchange": exchange}
 
     logger.info("Found %d companies in '%s'", len(source_companies), SOURCE_SHEET)
+
+    # --- Read MANUAL sheet ---
+    try:
+        manual_rows = read_sheet_rows(service, MANUAL_SHEET)
+        if len(manual_rows) >= 2:
+            manual_headers = [str(h).strip().lower() for h in manual_rows[0]]
+            man_ticker_col = find_column(manual_headers, "ticker")
+            man_company_col = find_column(manual_headers, "company_name", "company", "company name")
+            man_exchange_col = find_column(manual_headers, "exchange")
+
+            if man_ticker_col is not None:
+                for row in manual_rows[1:]:
+                    max_col = max(c for c in [man_ticker_col, man_company_col, man_exchange_col] if c is not None)
+                    padded = row + [""] * (max_col + 1 - len(row))
+                    ticker = padded[man_ticker_col].strip().upper()
+                    if ticker and ticker not in source_companies:
+                        source_companies[ticker] = {
+                            "company_name": padded[man_company_col].strip() if man_company_col is not None else "",
+                            "exchange": padded[man_exchange_col].strip() if man_exchange_col is not None else "",
+                        }
+                logger.info("After Manual sheet: %d total companies", len(source_companies))
+            else:
+                logger.info("Manual sheet has no 'ticker' column — skipping")
+        else:
+            logger.info("Manual sheet has fewer than 2 rows — skipping")
+    except Exception as e:
+        logger.info("Manual sheet not readable (may not exist): %s", e)
 
     # --- Read TARGET (AI Analysis) sheet ---
     target_rows = read_sheet_rows(service, TARGET_SHEET)

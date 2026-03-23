@@ -32,6 +32,7 @@ from tradingview_screener import Query, col
 
 SPREADSHEET_ID = "1js3dUTJtKhY1dUcwzYUGBOdKDZXBurLtRGgcIV8msYk"
 TARGET_SHEET = "CURRENT"
+MANUAL_SHEET = "Manual"
 FIRST_SEEN_SHEETS = ["CURRENT_old", "current_old2"]  # Fallback sheets for first_seen
 AI_ANALYSIS_SHEET = "AI Analysis"
 PRICE_SALES_SHEET = "Price-Sales"
@@ -71,9 +72,9 @@ MANUAL_ONLY_COLS = {"deep_dive", "conviction_tier", "next_earnings"}
 
 # Status priority for sorting (❌ Excluded always at bottom)
 STATUS_PRIORITY = {
-    "🏷️": 1, "🟢 Eligible": 1, "🟢": 1,
+    "📌": 1, "🏷️": 1, "🟢 Eligible": 1, "🟢": 1,
     "🆕 New": 2, "🆕": 2,
-    "❌": 3,
+    "📌❌": 3, "❌": 3,
 }
 
 # Row 1 category merges for CURRENT_V2
@@ -639,6 +640,73 @@ def load_first_seen_data(service, logger) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Manual sheet — user-specified tickers to include on CURRENT
+# ---------------------------------------------------------------------------
+
+
+def load_manual_tickers(service, logger) -> list[dict]:
+    """
+    Read the Manual sheet and return a list of equity dicts
+    (same shape as TradingView screened results, but with only the
+    fields available in the Manual sheet).
+    """
+    logger.info("Loading Manual sheet...")
+    try:
+        rows = read_sheet(service, MANUAL_SHEET, end_col="Z")
+    except Exception as e:
+        logger.info("Manual sheet not readable (may not exist): %s", e)
+        return []
+
+    if len(rows) < 2:
+        logger.info("Manual sheet has fewer than 2 rows — nothing to load")
+        return []
+
+    # Detect header row (row 1 or row 2)
+    row1_lower = [str(h).strip().lower() for h in rows[0]]
+    if "ticker" in row1_lower:
+        headers = row1_lower
+        data_rows = rows[1:]
+    elif len(rows) >= 3:
+        headers = [str(h).strip().lower() for h in rows[1]]
+        data_rows = rows[2:]
+    else:
+        headers = row1_lower
+        data_rows = rows[1:]
+
+    col_map = {h: i for i, h in enumerate(headers)}
+    ticker_idx = col_map.get("ticker")
+    if ticker_idx is None:
+        logger.warning("Manual sheet has no 'ticker' column — headers: %s", headers)
+        return []
+
+    company_idx = col_map.get("company_name") or col_map.get("company")
+    exchange_idx = col_map.get("exchange")
+    country_idx = col_map.get("country")
+    sector_idx = col_map.get("sector")
+
+    manual = []
+    for row in data_rows:
+        padded = row + [""] * (max(col_map.values()) + 1 - len(row))
+        ticker = padded[ticker_idx].strip().upper()
+        if not ticker:
+            continue
+        manual.append({
+            "ticker": ticker,
+            "exchange": padded[exchange_idx].strip() if exchange_idx is not None else "",
+            "company_name": padded[company_idx].strip() if company_idx is not None else "",
+            "country": padded[country_idx].strip() if country_idx is not None else "",
+            "sector": padded[sector_idx].strip() if sector_idx is not None else "",
+            "price": "",
+            "perf_52w_vs_spy": "",
+            "rating": "",
+            "_manual": True,
+        })
+
+    logger.info("Loaded %d tickers from Manual sheet", len(manual))
+    return manual
+
+
+# ---------------------------------------------------------------------------
 # Step 3 — Upsert into CURRENT_V2
 # ---------------------------------------------------------------------------
 
@@ -719,7 +787,7 @@ def _status_base(status_str):
     """Extract the emoji prefix from a status string."""
     if not status_str:
         return ""
-    for emoji in ("🏷️", "🟢", "🆕", "❌"):
+    for emoji in ("📌❌", "📌", "🏷️", "🟢", "🆕", "❌"):
         if status_str.startswith(emoji):
             return emoji
     return status_str
@@ -748,6 +816,7 @@ def compute_composite_score(row_data, all_rows):
 
 def upsert_v2(
     screened: list[dict],
+    manual: list[dict],
     ai_data: dict,
     ai_row_map: dict,
     ps_data: dict,
@@ -874,10 +943,129 @@ def upsert_v2(
 
         merged[ticker] = row
 
-    # Also enrich existing tickers not in today's screen
+    # Process Manual tickers (same logic as screened)
+    screened_set = {e["ticker"].upper() for e in screened}
+    manual_tickers = set()
+    for eq in manual:
+        ticker = eq["ticker"].upper()
+        manual_tickers.add(ticker)
+        is_new = ticker not in merged
+
+        if is_new:
+            row = {h: "" for h in V2_HEADERS}
+        else:
+            row = dict(merged[ticker])
+
+        # Only set identity fields if we have data (Manual may have sparse info)
+        if eq.get("exchange"):
+            gf_link = google_finance_url(ticker, eq["exchange"])
+            row["ticker"] = f'=HYPERLINK("{gf_link}", "{eq["ticker"]}")'
+            row["exchange"] = eq["exchange"]
+        elif is_new:
+            row["ticker"] = eq["ticker"]
+
+        if eq.get("company_name"):
+            row["company_name"] = eq["company_name"]
+        if eq.get("country"):
+            row["country"] = eq["country"]
+        if eq.get("sector"):
+            row["sector"] = eq["sector"]
+
+        # AI Analysis enrichment
+        ai_row = ai_data.get(ticker, {})
+        if ai_row:
+            if ai_row.get("description"):
+                row["description"] = ai_row["description"]
+            if ai_row.get("short_outlook"):
+                row["short_outlook"] = ai_row["short_outlook"]
+            if ai_row.get("r40_score"):
+                row["r40_score"] = ai_row["r40_score"]
+            fs_text = ai_row.get("fundamentals_snapshot", "")
+            if fs_text and ticker in ai_row_map:
+                ai_sheet_row = ai_row_map[ticker]
+                safe_text = str(fs_text).replace('"', '""')
+                row["fundamentals_snapshot"] = (
+                    f'=HYPERLINK("#gid={ai_gid}&range=A{ai_sheet_row}", "{safe_text}")'
+                )
+            elif fs_text:
+                row["fundamentals_snapshot"] = fs_text
+
+        # Price-Sales enrichment
+        ps_row = ps_data.get(ticker, {})
+        ps_now_val = ps_row.get("ps_now")
+        if ps_now_val is not None and ticker in ps_row_map:
+            ps_sheet_row = ps_row_map[ticker]
+            row["ps_now"] = (
+                f'=HYPERLINK("#gid={ps_gid}&range=A{ps_sheet_row}", "{ps_now_val:.2f}")'
+            )
+        elif ps_now_val is not None:
+            row["ps_now"] = ps_now_val
+        high_52w = ps_row.get("52w_high")
+        if ps_now_val is not None and high_52w is not None and high_52w > 0:
+            row["price_%_of_52w_high"] = ps_now_val / high_52w
+
+        # days_on_list
+        if ticker in days_map:
+            row["days_on_list"] = days_map[ticker]
+        elif is_new:
+            row["days_on_list"] = 0
+
+        # Status logic — Manual-only tickers get 📌, excluded manuals get 📌❌
+        red_flags = ai_row.get("_red_flag_cols", []) if ai_row else []
+        has_ai = bool(ai_row and ai_row.get("ai"))
+        has_eodhd = bool(ai_row and ai_row.get("data"))
+        is_manual_only = ticker not in screened_set
+
+        if red_flags:
+            flag_names = ", ".join(red_flags[:3])
+            if is_manual_only:
+                row["status"] = f"📌❌ {flag_names}"
+            else:
+                row["status"] = f"❌ {flag_names}"
+        elif (row.get("sector", "") == "Health Technology"
+              and _safe_float(ai_row.get("net_margin%") if ai_row else None) is not None
+              and _safe_float(ai_row.get("net_margin%")) < 0):
+            if is_manual_only:
+                row["status"] = "📌❌ Unprofitable Health Tech"
+            else:
+                row["status"] = "❌ Unprofitable Health Tech"
+        elif is_manual_only:
+            row["status"] = "📌 Manual"
+        elif has_ai and has_eodhd:
+            _ps = ps_row.get("ps_now")
+            _med = ps_row.get("12m_median")
+            if _ps is not None and _med is not None and _med > 0 and _ps / _med < 0.80:
+                pct = round((1 - _ps / _med) * 100)
+                row["status"] = f"🏷️ -{pct}% vs. 52w p/s"
+            else:
+                row["status"] = "🟢 Eligible"
+        else:
+            row["status"] = "🆕 New"
+
+        if not is_new:
+            for manual_col in MANUAL_ONLY_COLS:
+                pass
+
+        merged[ticker] = row
+
+    logger.info("Processed %d Manual tickers (%d already in screen)",
+                len(manual_tickers),
+                len(manual_tickers & {eq["ticker"].upper() for eq in screened}))
+
+    # Remove tickers that are no longer in screen or Manual
+    screened_tickers = {eq["ticker"].upper() for eq in screened}
+    keep_tickers = screened_tickers | manual_tickers
+    removed = [t for t in merged if t not in keep_tickers]
+    for t in removed:
+        del merged[t]
+    if removed:
+        logger.info("Removed %d tickers no longer in screen or Manual: %s",
+                    len(removed), ", ".join(sorted(removed)[:20]))
+
+    # Also enrich existing tickers not in today's screen (that survived removal)
     screened_tickers = {eq["ticker"].upper() for eq in screened}
     for ticker, row in merged.items():
-        if ticker in screened_tickers:
+        if ticker in screened_tickers or ticker in manual_tickers:
             continue
 
         ai_row = ai_data.get(ticker, {})
@@ -1085,13 +1273,14 @@ def main():
     ai_data, ai_row_map = load_ai_analysis(service, logger)
     ps_data, ps_row_map = load_price_sales(service, logger)
     days_map = load_first_seen_data(service, logger)
+    manual = load_manual_tickers(service, logger)
 
     # Load existing CURRENT data
     existing = load_v2_data(service, logger)
 
     # Step 3: Upsert
     final_rows = upsert_v2(
-        screened, ai_data, ai_row_map, ps_data, ps_row_map,
+        screened, manual, ai_data, ai_row_map, ps_data, ps_row_map,
         days_map, existing, sheet_gids, logger,
     )
 
