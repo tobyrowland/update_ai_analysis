@@ -46,7 +46,7 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 # Price-Sales sheet column order (matches header row)
 PS_COLUMNS = [
-    "ticker", "company_name", "revenue_ttm", "ps_now", "52w_high", "52w_low",
+    "ticker", "company_name", "ps_now", "52w_high", "52w_low",
     "12m_median", "ath", "%_of_ath", "history_json", "last_updated",
     "first_recorded",
 ]
@@ -228,7 +228,7 @@ def read_ps_sheet(service, logger) -> dict[str, dict]:
         .values()
         .get(
             spreadsheetId=SPREADSHEET_ID,
-            range=f"'{PS_SHEET}'!A1:L",
+            range=f"'{PS_SHEET}'!A1:K",
             valueRenderOption="FORMATTED_VALUE",
         )
     )
