@@ -38,6 +38,11 @@ AI_ANALYSIS_SHEET = "AI Analysis"
 PRICE_SALES_SHEET = "Price-Sales"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
+# Map alternative/legacy header names → canonical lowercase keys.
+HEADER_ALIASES = {
+    "ticker_clean": "ticker",
+}
+
 # ---------------------------------------------------------------------------
 # CURRENT_V2 column layout (A=0 .. T=19)
 # ---------------------------------------------------------------------------
@@ -426,7 +431,7 @@ def load_ai_analysis(service, logger) -> tuple[dict, dict]:
 
     col_map = {}
     for idx, h in enumerate(headers):
-        col_map[h] = idx
+        col_map[HEADER_ALIASES.get(h, h)] = idx
 
     logger.info("AI Analysis: %d headers found, col_map has %d keys", len(headers), len(col_map))
 

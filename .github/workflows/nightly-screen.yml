@@ -1,12 +1,13 @@
-name: Nightly CURRENT Sheet Update
+name: Nightly TradingView Screen
 
 on:
   schedule:
-    - cron: "30 6 * * *"   # 06:30 UTC daily (after EODHD + narratives)
-  workflow_dispatch:        # allow manual trigger
+    # Runs at 4:30 AM UTC daily (before EODHD at 5:00 AM)
+    - cron: "30 4 * * *"
+  workflow_dispatch: # Allow manual trigger from GitHub UI
 
 jobs:
-  update:
+  screen:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -23,15 +24,15 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run Nightly CURRENT Update
+      - name: Run nightly TradingView screen
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-        run: python nightly_current_update.py
+        run: python nightly_screen.py
 
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: nightly-current-logs-${{ github.run_id }}
+          name: nightly-screen-logs-${{ github.run_id }}
           path: logs/
           retention-days: 30
