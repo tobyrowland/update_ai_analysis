@@ -2,8 +2,8 @@ name: Get TV data and score
 
 on:
   schedule:
-    # Runs at 6:30 AM UTC daily (after EODHD at 5:00 + narratives at 6:00)
-    - cron: "30 6 * * *"
+    # Runs at 5:00 AM UTC daily (after all data updates)
+    - cron: "0 5 * * *"
   workflow_dispatch: # Allow manual trigger from GitHub UI
 
 jobs:
