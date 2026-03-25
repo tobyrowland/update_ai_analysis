@@ -80,6 +80,20 @@ SCREENING_COLS = [
     "ps_now", "price_pct_of_52w_high", "perf_52w_vs_spy", "rating",
 ]
 
+# Display names for screening column headers (written to row 2)
+SCREENING_DISPLAY = {
+    "status": "status",
+    "composite_score": "composite_score",
+    "price": "price",
+    "ps_now": "ps_now",
+    "price_pct_of_52w_high": "price_%_of_52w_high",
+    "perf_52w_vs_spy": "perf_52w_vs_spy",
+    "rating": "rating",
+}
+
+# Group header for row 1 (spans all screening columns)
+SCREENING_GROUP = "SCREENING"
+
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -178,6 +192,105 @@ def read_sheet(service, sheet_name: str, end_col: str = "AH"):
         .execute()
     )
     return result.get("values", [])
+
+
+# ---------------------------------------------------------------------------
+# Ensure columns exist in AI Analysis
+# ---------------------------------------------------------------------------
+
+
+def ensure_screening_columns(service, logger) -> dict[str, int]:
+    """
+    Check that screening + identity columns exist in AI Analysis row 2 headers.
+    If missing, append them (with row 1 group header). Returns updated col_map.
+    """
+    raw_rows = read_sheet(service, AI_ANALYSIS_SHEET)
+    if len(raw_rows) < 2:
+        logger.error("AI Analysis has fewer than 2 rows — cannot ensure columns")
+        return {}
+
+    row1 = list(raw_rows[0])  # group headers
+    row2 = list(raw_rows[1])  # column headers
+
+    # Build current col_map
+    col_map = {}
+    for idx, h in enumerate(row2):
+        key = HEADER_ALIASES.get(h.strip(), h.strip().lower())
+        col_map[key] = idx
+
+    # Identity columns that should exist (added by nightly_screen)
+    identity_cols = [
+        ("country", "country", "COMPANY"),
+        ("sector", "sector", "COMPANY"),
+    ]
+
+    # Screening columns
+    screening_cols = [
+        (key, SCREENING_DISPLAY[key], SCREENING_GROUP) for key in SCREENING_COLS
+    ]
+
+    # Find which columns are missing
+    all_needed = identity_cols + screening_cols
+    missing = [(key, display, group) for key, display, group in all_needed
+               if key not in col_map]
+
+    if not missing:
+        logger.info("All screening/identity columns present in sheet")
+        return col_map
+
+    logger.info("Adding %d missing columns: %s",
+                len(missing), [m[1] for m in missing])
+
+    # Append missing columns at the end of the current headers
+    next_col = max(len(row1), len(row2))
+    updates = []
+
+    for key, display, group in missing:
+        col_letter = _col_letter(next_col)
+        # Row 1: group header
+        updates.append({
+            "range": f"'{AI_ANALYSIS_SHEET}'!{col_letter}1",
+            "values": [[group]],
+        })
+        # Row 2: column header
+        updates.append({
+            "range": f"'{AI_ANALYSIS_SHEET}'!{col_letter}2",
+            "values": [[display]],
+        })
+        col_map[key] = next_col
+        next_col += 1
+
+    # Ensure sheet has enough columns
+    meta = service.spreadsheets().get(
+        spreadsheetId=SPREADSHEET_ID, fields="sheets.properties"
+    ).execute()
+    for sheet in meta.get("sheets", []):
+        props = sheet["properties"]
+        if props["title"] == AI_ANALYSIS_SHEET:
+            current_cols = props["gridProperties"]["columnCount"]
+            if current_cols < next_col:
+                service.spreadsheets().batchUpdate(
+                    spreadsheetId=SPREADSHEET_ID,
+                    body={"requests": [{
+                        "updateSheetProperties": {
+                            "properties": {
+                                "sheetId": props["sheetId"],
+                                "gridProperties": {"columnCount": next_col},
+                            },
+                            "fields": "gridProperties.columnCount",
+                        }
+                    }]},
+                ).execute()
+                logger.info("Expanded sheet to %d columns", next_col)
+            break
+
+    service.spreadsheets().values().batchUpdate(
+        spreadsheetId=SPREADSHEET_ID,
+        body={"valueInputOption": "USER_ENTERED", "data": updates},
+    ).execute()
+
+    logger.info("Column headers written successfully")
+    return col_map
 
 
 # ---------------------------------------------------------------------------
@@ -518,7 +631,11 @@ def main():
 
     service = get_sheets_service()
 
-    # Step 1: Load all data sources in parallel (conceptually)
+    # Step 0: Ensure screening columns exist in AI Analysis headers
+    logger.info("Step 0: Ensuring screening columns exist...")
+    ensure_screening_columns(service, logger)
+
+    # Step 1: Load all data sources
     logger.info("Step 1: Loading data sources...")
 
     # Read raw AI Analysis rows (we need them for the sorted rewrite)
