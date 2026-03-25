@@ -170,7 +170,7 @@ def _safe_float(val):
         return None
 
 
-def read_sheet(service, sheet_name: str, end_col: str = "AH"):
+def read_sheet(service, sheet_name: str, end_col: str = "AZ"):
     """Read all rows from a sheet tab."""
     result = (
         service.spreadsheets()
@@ -271,13 +271,15 @@ def load_price_sales(service, logger) -> dict[str, dict]:
         data_rows = rows[1:]
 
     hmap = {h: i for i, h in enumerate(headers)}
-    ticker_idx = hmap.get("ticker") or hmap.get("ticker_clean")
+    ticker_idx = hmap.get("ticker")
+    if ticker_idx is None:
+        ticker_idx = hmap.get("ticker_clean")
     ps_now_idx = hmap.get("ps_now")
     high_idx = hmap.get("52w_high")
     median_idx = hmap.get("12m_median")
 
     if ticker_idx is None:
-        logger.warning("Price-Sales has no ticker column")
+        logger.warning("Price-Sales has no ticker column — headers found: %s", headers)
         return {}
 
     result = {}

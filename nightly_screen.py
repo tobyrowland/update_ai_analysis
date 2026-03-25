@@ -118,7 +118,7 @@ def _extract_ticker(val):
     return val.strip().upper()
 
 
-def read_sheet(service, sheet_name: str, end_col: str = "AH"):
+def read_sheet(service, sheet_name: str, end_col: str = "AZ"):
     """Read all rows from a sheet tab."""
     result = (
         service.spreadsheets()
