@@ -70,6 +70,8 @@ HEADER_ALIASES = {
     "Data": "data",
     "Data As Of": "data",
     "Fundamentals Date": "data",
+    "Scoring": "scoring",
+    "scoring": "scoring",
 }
 
 # Status priority for sorting (❌ Excluded always at bottom)
@@ -83,6 +85,7 @@ STATUS_PRIORITY = {
 SCREENING_COLS = [
     "status", "composite_score", "price",
     "ps_now", "price_pct_of_52w_high", "perf_52w_vs_spy", "rating",
+    "scoring",
 ]
 
 
@@ -617,6 +620,7 @@ def main():
 
         entry["_composite_score"] = raw
         entry["composite_score"] = raw
+        entry["scoring"] = date.today().isoformat()
 
     # Step 5: Sort
     ai_entries.sort(key=sort_key)
