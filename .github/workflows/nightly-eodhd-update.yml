@@ -1,9 +1,9 @@
-name: Nightly EODHD Update
+name: EODHD Update
 
 on:
   schedule:
-    # Runs at 5:00 AM UTC daily (before the AI narratives job at 6:00 AM)
-    - cron: "0 5 * * *"
+    # Runs at 3:30 AM UTC daily (after TradingView screen at 3:00)
+    - cron: "30 3 * * *"
   workflow_dispatch:
     inputs:
       force:

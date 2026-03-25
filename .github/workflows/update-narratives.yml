@@ -1,9 +1,9 @@
-name: Update AI Narratives
+name: AI Narratives Update
 
 on:
   schedule:
-    # Runs at 6:00 AM UTC daily
-    - cron: "0 6 * * *"
+    # Runs at 4:00 AM UTC daily (after EODHD at 3:30)
+    - cron: "0 4 * * *"
   workflow_dispatch: # Allow manual trigger from GitHub UI
 
 jobs:

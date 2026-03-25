@@ -1,9 +1,9 @@
-name: Daily Price-Sales Update
+name: Update Price-Sales
 
 on:
   schedule:
-    # Runs at 6:00 AM UTC every day (after US market close)
-    - cron: "0 6 * * *"
+    # Runs at 4:30 AM UTC daily (after AI narratives at 4:00)
+    - cron: "30 4 * * *"
   workflow_dispatch:
     inputs:
       tickers:
