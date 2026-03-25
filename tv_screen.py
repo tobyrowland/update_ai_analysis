@@ -190,3 +190,76 @@ def run_tradingview_screen(logger) -> list[dict]:
 
     logger.info("TradingView screening complete: %d unique equities", len(all_results))
     return list(all_results.values())
+
+
+def fetch_market_data(tickers_with_exchange: list[tuple[str, str]], logger) -> dict[str, dict]:
+    """
+    Fetch price, rating, and 52-week performance for specific tickers from
+    TradingView (no screening filters). Returns {TICKER: {price, rating,
+    perf_52w_vs_spy}}.
+
+    tickers_with_exchange: list of (ticker, exchange) tuples.
+    """
+    if not tickers_with_exchange:
+        return {}
+
+    spy_perf_y = _get_spy_perf_y(logger)
+
+    # Build EXCHANGE:TICKER identifiers for TradingView
+    tv_ids = []
+    ticker_map = {}  # tv_id → clean ticker
+    for ticker, exchange in tickers_with_exchange:
+        tv_id = f"{exchange}:{ticker}" if exchange else ticker
+        tv_ids.append(tv_id)
+        ticker_map[tv_id] = ticker
+
+    # TradingView limits queries — batch in chunks of 500
+    BATCH_SIZE = 500
+    results = {}
+
+    for i in range(0, len(tv_ids), BATCH_SIZE):
+        batch = tv_ids[i:i + BATCH_SIZE]
+        try:
+            _, df = (
+                Query()
+                .set_tickers(*batch)
+                .select("name", "close", "Perf.Y", "recommendation_mark")
+                .get_scanner_data()
+            )
+            logger.info("TradingView market data batch %d: got %d/%d",
+                        i // BATCH_SIZE + 1, len(df), len(batch))
+        except Exception as e:
+            logger.warning("TradingView market data batch failed: %s", e)
+            continue
+
+        for _, row in df.iterrows():
+            raw_name = str(row.get("name", ""))
+            ticker = clean_ticker(raw_name)
+            if not ticker:
+                continue
+
+            price = row.get("close")
+            perf_y = row.get("Perf.Y")
+            if perf_y is not None:
+                perf_52w_vs_spy = safe_divide_100(perf_y) - safe_divide_100(spy_perf_y)
+            else:
+                perf_52w_vs_spy = None
+
+            rec_mark = row.get("recommendation_mark")
+            try:
+                mark_f = float(rec_mark) if rec_mark is not None else None
+                if mark_f is not None and math.isnan(mark_f):
+                    mark_f = None
+            except (ValueError, TypeError):
+                mark_f = None
+            rating = f"{mark_f:.1f}" if mark_f is not None else ""
+
+            results[ticker.upper()] = {
+                "price": price,
+                "perf_52w_vs_spy": perf_52w_vs_spy,
+                "rating": rating,
+            }
+
+    logger.info("Fetched market data for %d/%d tickers",
+                len(results), len(tickers_with_exchange))
+    return results
