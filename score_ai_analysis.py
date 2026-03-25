@@ -461,7 +461,10 @@ def write_sorted_sheet(service, entries: list[dict], col_map: dict, raw_rows: li
 
     # We need to rewrite all data rows (row 3+) in the new sorted order.
     # Preserve all existing cell values, only update screening columns.
-    max_col = max(col_map.values()) + 1
+    # Use the widest row in the sheet to determine column count (not just col_map).
+    raw_max_col = max((len(r) for r in raw_rows), default=0)
+    map_max_col = max(col_map.values()) + 1 if col_map else 0
+    max_col = max(raw_max_col, map_max_col)
 
     sorted_rows = []
     for entry in entries:
