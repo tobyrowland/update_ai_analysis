@@ -51,6 +51,7 @@ HEADER_EVENT_IMPACT = "event_impact"
 # Map legacy/alternative sheet headers → current lowercase underscore keys.
 HEADER_ALIASES = {
     "Ticker":               "ticker",
+    "ticker_clean":         "ticker",
     "Company":              "company_name",
     "Company Name":         "company_name",
     "Short Outlook":        "short_outlook",
