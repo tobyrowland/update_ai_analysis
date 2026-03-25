@@ -1,4 +1,4 @@
-name: Update AI Analysis w TradingView
+name: Get TV data and score
 
 on:
   schedule:
