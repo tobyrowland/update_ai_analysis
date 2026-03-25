@@ -23,7 +23,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from scipy.stats import percentileofscore
 
-from tv_screen import run_tradingview_screen
+from tv_screen import run_tradingview_screen, fetch_market_data
 
 load_dotenv()
 
@@ -656,14 +656,28 @@ def main():
     screened_tickers = set(screened_map.keys())
     logger.info("TradingView returned %d equities", len(screened))
 
+    # Step 2b: Fetch market data for tickers NOT in the screen
+    all_ai_tickers = {e["_ticker"] for e in ai_entries}
+    missing_tickers = [
+        (e["_ticker"], e.get("exchange", ""))
+        for e in ai_entries
+        if e["_ticker"] not in screened_tickers
+    ]
+    if missing_tickers:
+        logger.info("Fetching market data for %d tickers not in TradingView screen...",
+                    len(missing_tickers))
+        extra_data = fetch_market_data(missing_tickers, logger)
+    else:
+        extra_data = {}
+
     # Step 3: Compute status and scoring inputs for each ticker
     logger.info("Step 3: Computing status and scores...")
 
     for entry in ai_entries:
         ticker = entry["_ticker"]
 
-        # Merge market data from TradingView
-        tv = screened_map.get(ticker, {})
+        # Merge market data — prefer screened data, fall back to direct lookup
+        tv = screened_map.get(ticker) or extra_data.get(ticker, {})
         entry["price"] = tv.get("price")
         entry["perf_52w_vs_spy"] = tv.get("perf_52w_vs_spy")
         entry["rating"] = tv.get("rating", "")
