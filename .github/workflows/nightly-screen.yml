@@ -2,8 +2,8 @@ name: Nightly TradingView Screen
 
 on:
   schedule:
-    # Runs at midnight UTC daily (before EODHD at 5:00 AM)
-    - cron: "0 0 * * *"
+    # Runs at 3:00 AM UTC (4:00 AM BST) — before EODHD at 5:00 AM
+    - cron: "0 3 * * *"
   workflow_dispatch: # Allow manual trigger from GitHub UI
 
 jobs:
