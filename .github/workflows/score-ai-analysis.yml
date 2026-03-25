@@ -1,4 +1,4 @@
-name: Score & Rank AI Analysis
+name: Update AI Analysis w TradingView
 
 on:
   schedule:
