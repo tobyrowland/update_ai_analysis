@@ -11,6 +11,7 @@ import argparse
 import json
 import logging
 import os
+import statistics as _stats
 import sys
 import time
 from datetime import date, datetime, timedelta
@@ -28,6 +29,7 @@ from googleapiclient.discovery import build
 
 SPREADSHEET_ID = "1js3dUTJtKhY1dUcwzYUGBOdKDZXBurLtRGgcIV8msYk"
 SHEET_NAME = "AI Analysis"
+CRITERIA_SHEET = "Criteria"
 EODHD_BASE_URL = "https://eodhd.com/api/fundamentals"
 DELAY_BETWEEN_CALLS = 1  # seconds between EODHD API calls
 BATCH_SIZE = 5
@@ -68,6 +70,9 @@ GROUPS = [
     ]),
     ("EARNINGS", "1B3A4B", [
         "eps_only", "eps_yoy",
+    ]),
+    ("DATA QUALITY", "5B3A1B", [
+        "one_time_events",
     ]),
     ("AI NARRATIVE", "2E4057", [
         "full_outlook", "key_risks",
@@ -116,6 +121,7 @@ DISPLAY_NAMES = {
     "short_outlook":        "short_outlook",
     "full_outlook":         "full_outlook",
     "key_risks":            "key_risks",
+    "one_time_events":      "one_time_events",
     "ai":                   "ai",
     "data":                 "data",
 }
@@ -165,6 +171,8 @@ HEADER_ALIASES = {
     "Analyzed":             "ai",
     "AI Analyzed":          "ai",
     "Data":                 "data",
+    "One-Time Events":      "one_time_events",
+    "One Time Events":      "one_time_events",
     "Data As Of":           "data",
     "Fundamentals Date":    "data",
 }
@@ -206,6 +214,7 @@ COL_WIDTHS = {
     "short_outlook": 50,
     "full_outlook": 80,
     "key_risks": 50,
+    "one_time_events": 50,
     "ai": 16,
     "data": 16,
 }
@@ -237,6 +246,7 @@ EODHD_COLUMNS = [
     "opex_pct_revenue", "sm_rd_pct_revenue",
     "rule_of_40", "qrtrs_to_profitability",
     "eps_only", "eps_yoy",
+    "one_time_events",
     "r40_score", "fundamentals_snapshot", "data",
 ]
 
@@ -301,14 +311,12 @@ def get_sheets_service():
 
 def read_all_rows(service) -> list[list[str]]:
     """Return all rows from the AI Analysis sheet."""
-    # Read enough columns to cover all defined columns
-    end_col = _col_letter(len(ALL_COLUMNS) - 1)
     result = (
         service.spreadsheets()
         .values()
         .get(
             spreadsheetId=SPREADSHEET_ID,
-            range=f"'{SHEET_NAME}'!A1:{end_col}",
+            range=f"'{SHEET_NAME}'",
             valueRenderOption="FORMATTED_VALUE",
         )
         .execute()
@@ -585,10 +593,18 @@ EXCHANGE_FALLBACKS = {
     "XETRA": ["F", "US"],
     "F":     ["XETRA", "US"],
     # India — BSE symbols are often numeric; try NSE which uses names
-    "BSE":   ["NSE"],
-    "NSE":   ["BSE"],
-    # Japan
+    "BSE":   ["NSE", "US"],
+    "NSE":   ["BSE", "US"],
+    # Japan — many TSE tickers have no US ADR, so search is key
     "TSE":   ["US"],
+    # Switzerland
+    "SW":    ["US"],
+    # Netherlands / Euronext
+    "AS":    ["US", "PA"],
+    # Other Europe
+    "PA":    ["US", "AS"],
+    "MI":    ["US"],
+    "MC":    ["US"],
     # UK
     "LSE":   ["US"],
     # Canada
@@ -678,7 +694,8 @@ def _search_eodhd(query: str, api_key: str, logger: logging.Logger,
                     return (r["Code"], ex)
         # Otherwise take the first result that has fundamentals-friendly
         # exchange (prefer US, then major exchanges)
-        preferred = ["US", "LSE", "NSE", "XETRA", "TO", "AS", "PA"]
+        preferred = ["US", "LSE", "NSE", "BSE", "TSE", "XETRA", "TO",
+                     "AS", "PA", "SW", "HK", "F", "MI", "MC"]
         for pref in preferred:
             for r in results:
                 if r.get("Exchange", "") == pref:
@@ -755,8 +772,28 @@ def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger,
                 return data
             tried.add(search_exchange)
 
+    # 3b. For OTC foreign tickers (ending in F or Y), strip suffix and
+    #     search for the underlying ticker — e.g. ADYYF → ADYY → Adyen
+    if primary == "US" and len(ticker) > 2 and ticker[-1] in ("F", "Y"):
+        base_ticker = ticker[:-1]
+        if base_ticker.upper() != ticker.upper():
+            logger.info("  Trying OTC base ticker search: %s", base_ticker)
+            time.sleep(0.3)
+            result = _search_eodhd(base_ticker, api_key, logger, original_ticker=ticker)
+            if result:
+                search_ticker, search_exchange = result
+                if search_exchange not in tried or search_ticker.upper() != ticker.upper():
+                    time.sleep(0.3)
+                    data, status = _try_fetch_one(search_ticker, search_exchange, api_key)
+                    if data is not None:
+                        logger.info("  Found %s.%s via OTC base ticker search",
+                                    search_ticker, search_exchange)
+                        return data
+                    tried.add(search_exchange)
+
     # 4. Search API — try by company name (handles cases like
-    #    TSE code 7974 → US ADR "NTDOY" for Nintendo)
+    #    TSE code 7974 → US ADR "NTDOY" for Nintendo,
+    #    GETTEX 49G → ONON.US for On Holding)
     if company:
         # Use first few words to avoid overly specific queries
         search_name = " ".join(company.split()[:3])
@@ -814,6 +851,150 @@ def _sorted_entries(section: dict) -> list[tuple[str, dict]]:
     entries = [(k, v) for k, v in section.items() if isinstance(v, dict)]
     entries.sort(key=lambda x: x[0], reverse=True)
     return entries
+
+
+# ---------------------------------------------------------------------------
+# Screening criteria — read from "Criteria" sheet
+# ---------------------------------------------------------------------------
+
+# Dot characters for screening flags
+DOT_RED = "\U0001f534"     # 🔴
+DOT_YELLOW = "\U0001f7e1"  # 🟡
+DOT_GREEN = "\U0001f7e2"   # 🟢
+
+# Supported operators for criteria rules
+_CRITERIA_OPS = {
+    "<":  lambda val, thresh: val < thresh,
+    "<=": lambda val, thresh: val <= thresh,
+    ">":  lambda val, thresh: val > thresh,
+    ">=": lambda val, thresh: val >= thresh,
+}
+
+
+def read_criteria(service, logger: logging.Logger) -> list[dict]:
+    """Read screening rules from the Criteria sheet.
+
+    Returns a list of rule dicts:
+        {"metric": str, "operator": str, "red": float|None,
+         "yellow": float|None, "green": float|None, "description": str}
+    """
+    try:
+        result = (
+            service.spreadsheets()
+            .values()
+            .get(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"'{CRITERIA_SHEET}'!A1:ZZ",
+                valueRenderOption="FORMATTED_VALUE",
+            )
+            .execute()
+        )
+        rows = result.get("values", [])
+    except Exception as exc:
+        logger.warning("Could not read Criteria sheet: %s", exc)
+        return []
+
+    if len(rows) < 2:
+        logger.info("Criteria sheet is empty or has no data rows")
+        return []
+
+    # Find the header row (first row containing "metric" in column A)
+    header_idx = None
+    for i, row in enumerate(rows):
+        if row and row[0].strip().lower() == "metric":
+            header_idx = i
+            break
+
+    if header_idx is None:
+        logger.warning("Criteria sheet: could not find header row with 'metric'")
+        return []
+
+    headers = [h.strip().lower() for h in rows[header_idx]]
+
+    def col(name):
+        try:
+            return headers.index(name)
+        except ValueError:
+            return None
+
+    metric_col = col("metric")
+    op_col = col("operator")
+    red_col = col("red")
+    yellow_col = col("yellow")
+    green_col = col("green")
+    desc_col = col("description")
+
+    if metric_col is None or op_col is None:
+        logger.warning("Criteria sheet missing required 'metric' or 'operator' column")
+        return []
+
+    # Build lookup tables for normalising metric names.
+    # Users may type display names (fcf_margin%) or legacy headers.
+    _display_to_key = {v.lower(): k for k, v in DISPLAY_NAMES.items()}
+    _alias_lower = {k.lower(): v for k, v in HEADER_ALIASES.items()}
+
+    rules = []
+    for row in rows[header_idx + 1:]:
+        if not row or not row[0].strip():
+            continue  # skip empty / section header rows
+        padded = row + [""] * (len(headers) - len(row))
+        raw_metric = padded[metric_col].strip()
+        operator = padded[op_col].strip()
+
+        if not raw_metric or operator not in _CRITERIA_OPS:
+            continue
+
+        # Normalise metric name to internal key
+        metric = raw_metric.lower()
+        if metric in _display_to_key:
+            metric = _display_to_key[metric]
+        elif metric in _alias_lower:
+            metric = _alias_lower[metric]
+
+        rules.append({
+            "metric": metric,
+            "operator": operator,
+            "red": safe_float(padded[red_col]) if red_col is not None else None,
+            "yellow": safe_float(padded[yellow_col]) if yellow_col is not None else None,
+            "green": safe_float(padded[green_col]) if green_col is not None else None,
+            "description": padded[desc_col].strip() if desc_col is not None else "",
+        })
+
+    logger.info("Loaded %d screening criteria from '%s' sheet", len(rules), CRITERIA_SHEET)
+    for r in rules:
+        logger.info("  %s %s red=%s yellow=%s green=%s — %s",
+                     r["metric"], r["operator"], r["red"], r["yellow"],
+                     r["green"], r["description"])
+    return rules
+
+
+def evaluate_criteria(value: float | None, metric: str,
+                      criteria: list[dict]) -> str | None:
+    """Evaluate a metric value against screening criteria.
+
+    Returns DOT_RED, DOT_YELLOW, DOT_GREEN, or None (no matching rule).
+    """
+    if value is None:
+        return None
+
+    for rule in criteria:
+        if rule["metric"] != metric:
+            continue
+
+        op = _CRITERIA_OPS[rule["operator"]]
+
+        # Check thresholds in order: red (worst), yellow, green (best)
+        if rule["red"] is not None and op(value, rule["red"]):
+            return DOT_RED
+        if rule["yellow"] is not None and op(value, rule["yellow"]):
+            return DOT_YELLOW
+        # If green threshold is defined and we pass it, show green dot
+        if rule["green"] is not None and op(value, rule["green"]):
+            return DOT_GREEN
+        # Value exists and a rule was found but didn't trigger any threshold
+        return DOT_GREEN
+
+    return None  # no rule for this metric
 
 
 # ---------------------------------------------------------------------------
@@ -951,8 +1132,8 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
     result["gross_margin"] = round(gross_margin_val, 1) if gross_margin_val is not None else None
 
     # ── GM Trend (Qtly) ──────────────────────────────────────────────
-    # Shows per-quarter gross margins (newest→oldest) plus the overall
-    # pp change with a directional arrow, e.g. "52%→49%→47%→45% ↑7pp"
+    # Shows per-quarter gross margins (oldest→newest) plus the overall
+    # pp change with a directional arrow, e.g. "45%→47%→49%→52% ↑7pp"
     gm_trend_val = None
     if len(quarterly) >= 4:
         margins = []
@@ -969,7 +1150,7 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
         if len(margins) >= 2:
             gm_trend_val = margins[0] - margins[-1]  # pp change newest vs oldest
             arrow = "↑" if gm_trend_val > 1 else ("↓" if gm_trend_val < -1 else "→")
-            margin_strs = [f"{m:.0f}%" for m in margins]
+            margin_strs = [f"{m:.0f}%" for m in reversed(margins)]
             pp = f"{abs(gm_trend_val):.0f}pp"
             result["gm_trend"] = f"{'→'.join(margin_strs)} {arrow}{pp}"
         else:
@@ -1130,6 +1311,130 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
     else:
         result["eps_yoy"] = None
 
+    # ── One-Time Events Detection ──────────────────────────────────────
+    # Compare recent 4 quarters against a baseline (Q-4 to Q-11) to detect
+    # anomalous items.  Only flag when a metric is BOTH >2× the company's
+    # own historical norm AND exceeds an absolute floor (15% of revenue or
+    # 15pp margin deviation).  This avoids false positives on large caps
+    # with structurally high investment income (GOOG, MSFT) and companies
+    # with consistent margin trends (PLTR transitioning to profit).
+    #
+    # Direction: ⬆ = gain flatters results, ⬇ = charge depresses, ⬆⬇ = mixed.
+    one_time_items = []  # list of (signed_pct, description)
+
+    if len(quarterly) >= 5:
+        # Build baseline from quarters 4–11 (prior 2 years)
+        bl_oi_ni_gaps = []
+        bl_toi_pcts = []
+        bl_margins = []
+        for _, entry in quarterly[4:12]:
+            rev = safe_float(entry.get("totalRevenue"))
+            oi = safe_float(entry.get("operatingIncome"))
+            ni = safe_float(entry.get("netIncome"))
+            toi = safe_float(entry.get("totalOtherIncomeExpenseNet"))
+            if rev and rev > 0:
+                if oi is not None and ni is not None:
+                    bl_oi_ni_gaps.append(abs(ni - oi) / rev * 100)
+                if toi is not None:
+                    bl_toi_pcts.append(abs(toi) / rev * 100)
+                if ni is not None:
+                    bl_margins.append(ni / rev * 100)
+
+        avg_gap = _stats.mean(bl_oi_ni_gaps) if bl_oi_ni_gaps else 0
+        avg_toi = _stats.mean(bl_toi_pcts) if bl_toi_pcts else 0
+        avg_margin = _stats.mean(bl_margins) if bl_margins else 0
+        std_margin = (_stats.stdev(bl_margins)
+                      if len(bl_margins) >= 2 else 0)
+
+        # Detect consistent margin trend (all recent quarters deviate in
+        # the same direction) — this is growth/decline, not one-time.
+        margin_devs = []
+        for q_date, entry in quarterly[:4]:
+            rev = safe_float(entry.get("totalRevenue"))
+            ni = safe_float(entry.get("netIncome"))
+            if rev and rev > 0 and ni is not None:
+                margin_devs.append(ni / rev * 100 - avg_margin)
+        is_margin_trend = (len(margin_devs) >= 3
+                           and (all(d > 0 for d in margin_devs)
+                                or all(d < 0 for d in margin_devs)))
+
+        for i, (q_date, entry) in enumerate(quarterly[:4]):
+            rev = safe_float(entry.get("totalRevenue"))
+            oi = safe_float(entry.get("operatingIncome"))
+            ni = safe_float(entry.get("netIncome"))
+            nr = safe_float(entry.get("nonRecurring"))
+            ei = safe_float(entry.get("extraordinaryItems"))
+            dc = safe_float(entry.get("discontinuedOperations"))
+            toi = safe_float(entry.get("totalOtherIncomeExpenseNet"))
+            if not rev or rev <= 0:
+                continue
+            q_label = q_date[:7]  # YYYY-MM
+
+            # Explicit non-recurring items (>5% of revenue — always flag)
+            if nr and abs(nr) / rev > 0.05:
+                pct = nr / rev * 100
+                sign = "+" if pct > 0 else ""
+                one_time_items.append(
+                    (pct, f"nonRecurring {sign}{pct:.0f}% of rev ({q_label})"))
+
+            # Extraordinary items (>3% of revenue — always flag)
+            if ei and abs(ei) / rev > 0.03:
+                pct = ei / rev * 100
+                sign = "+" if pct > 0 else ""
+                one_time_items.append(
+                    (pct, f"extraordinary {sign}{pct:.0f}% of rev ({q_label})"))
+
+            # Discontinued operations (>3% of revenue — always flag)
+            if dc and abs(dc) / rev > 0.03:
+                pct = dc / rev * 100
+                sign = "+" if pct > 0 else ""
+                one_time_items.append(
+                    (pct, f"discontinued ops {sign}{pct:.0f}% of rev ({q_label})"))
+
+            # OI→NI gap: >2× baseline AND >15% absolute
+            if oi is not None and ni is not None:
+                gap_pct = (ni - oi) / rev * 100
+                if abs(gap_pct) > 15 and (avg_gap == 0
+                                           or abs(gap_pct) > avg_gap * 2):
+                    sign = "+" if gap_pct > 0 else ""
+                    one_time_items.append(
+                        (gap_pct,
+                         f"OI\u2192NI gap {sign}{gap_pct:.0f}% of rev ({q_label})"))
+
+            # Other inc/exp: >2× baseline AND >15% absolute
+            if toi:
+                toi_pct = toi / rev * 100
+                if (abs(toi_pct) > 15
+                        and (avg_toi == 0 or abs(toi_pct) > avg_toi * 2)):
+                    sign = "+" if toi_pct > 0 else ""
+                    one_time_items.append(
+                        (toi_pct,
+                         f"other inc/exp {sign}{toi_pct:.0f}% of rev ({q_label})"))
+
+            # Margin swing: >2× stdev AND >15pp — skip if consistent trend
+            if ni is not None and std_margin > 0 and not is_margin_trend:
+                margin = ni / rev * 100
+                margin_dev = margin - avg_margin
+                if abs(margin_dev) > max(std_margin * 2, 15):
+                    sign = "+" if margin_dev > 0 else ""
+                    one_time_items.append(
+                        (margin_dev,
+                         f"margin swing {sign}{margin_dev:.0f}pp vs norm ({q_label})"))
+
+    if one_time_items:
+        has_gain = any(v > 0 for v, _ in one_time_items)
+        has_charge = any(v < 0 for v, _ in one_time_items)
+        if has_gain and has_charge:
+            arrow = "\u2b06\u2b07"  # ⬆⬇
+        elif has_gain:
+            arrow = "\u2b06"        # ⬆
+        else:
+            arrow = "\u2b07"        # ⬇
+        details = " | ".join(desc for _, desc in one_time_items)
+        result["one_time_events"] = f"{arrow} {details}"
+    else:
+        result["one_time_events"] = None
+
     # ── R40 Score ─────────────────────────────────────────────────────
     # Format: 💎💎 R40: 54 | FCF +27% | ⏳ ~12 qtrs GAAP
     #
@@ -1278,10 +1583,15 @@ def main():
     all_rows = read_all_rows(service)
     logger.info("Read %d rows from sheet (including headers)", len(all_rows))
 
+    # Load screening criteria from the Criteria sheet
+    criteria = read_criteria(service, logger)
+
     # ── Read sheet headers and build column mapping ─────────────────
     # The sheet now uses lowercase underscore column keys as headers.
     # We also support legacy display-name headers via HEADER_ALIASES.
     all_keys = set(DISPLAY_NAMES.keys())
+    # Reverse map: display name → internal key (e.g. "gross_margin%" → "gross_margin")
+    display_to_key = {v: k for k, v in DISPLAY_NAMES.items()}
 
     key_col = {}  # column_key → 0-based column index
     if len(all_rows) >= 2:
@@ -1292,6 +1602,9 @@ def main():
             # Check if the header matches a known column key directly
             if name in all_keys:
                 col_key = name
+            # Check if it's a display name (e.g. "gross_margin%" → "gross_margin")
+            elif name in display_to_key:
+                col_key = display_to_key[name]
             else:
                 col_key = None
             if col_key and col_key not in key_col:
@@ -1403,13 +1716,24 @@ def main():
                 if val is None:
                     values[col_letter] = NULL_VALUE
                 elif key in PCT_COLS and isinstance(val, (int, float)):
-                    values[col_letter] = f"{val:.1f}%"
+                    formatted = f"{val:.1f}%"
+                    dot = evaluate_criteria(val, key, criteria)
+                    values[col_letter] = f"{dot} {formatted}" if dot else formatted
                 elif key in INTEGER_COLS and isinstance(val, (int, float)):
-                    values[col_letter] = f"{val:.0f}"
+                    formatted = f"{val:.0f}"
+                    dot = evaluate_criteria(val, key, criteria)
+                    values[col_letter] = f"{dot} {formatted}" if dot else formatted
                 elif key in DOLLAR_COLS and isinstance(val, (int, float)):
-                    values[col_letter] = f"${val:.2f}"
+                    formatted = f"${val:.2f}"
+                    dot = evaluate_criteria(val, key, criteria)
+                    values[col_letter] = f"{dot} {formatted}" if dot else formatted
                 else:
-                    values[col_letter] = str(val)
+                    formatted = str(val)
+                    # For string values like "8/10", try to extract numeric
+                    # part for criteria evaluation
+                    numeric_val = safe_float(formatted.split("/")[0]) if "/" in formatted else safe_float(formatted)
+                    dot = evaluate_criteria(numeric_val, key, criteria)
+                    values[col_letter] = f"{dot} {formatted}" if dot else formatted
 
             if values:
                 updates.append({"row": row_number, "values": values})

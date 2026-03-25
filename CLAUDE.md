@@ -48,6 +48,8 @@ Supports `--force` flag to ignore staleness.
 ### update_ai_narratives.py (06:00 UTC daily)
 Refreshes stale narratives (90+ days) using Gemini 2.5 Flash.
 Dynamic column detection with header aliases. Injects full financial context into prompt.
+When `one_time_events` column has content, generates `event_impact` analysis with traffic-light
+indicators: 🔴 flatters (inflates metrics), 🟢 understates (hidden upside), 🟡 neutral/mixed.
 
 ### price_sales_updater.py (Sundays 02:00 UTC)
 Tracks P/S ratios over time. Backfills 52 weeks of history for new tickers.

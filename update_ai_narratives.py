@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import sys
+import re
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -39,10 +40,13 @@ MAX_RETRIES = 2  # total attempts per ticker
 # The script reads actual sheet headers rather than relying on hardcoded positions.
 HEADER_TICKER = "ticker"
 HEADER_COMPANY = "company_name"
+HEADER_DESCRIPTION = "description"
 HEADER_SHORT_OUTLOOK = "short_outlook"
 HEADER_OUTLOOK = "full_outlook"
 HEADER_RISKS = "key_risks"
 HEADER_ANALYZED = "ai"
+HEADER_ONE_TIME_EVENTS = "one_time_events"
+HEADER_EVENT_IMPACT = "event_impact"
 
 # Map legacy/alternative sheet headers → current lowercase underscore keys.
 HEADER_ALIASES = {
@@ -60,6 +64,9 @@ HEADER_ALIASES = {
     "Data":                 "data",
     "Data As Of":           "data",
     "Fundamentals Date":    "data",
+    "One Time Events":      "one_time_events",
+    "One-Time Events":      "one_time_events",
+    "Event Impact":         "event_impact",
 }
 
 NULL_VALUE = "—"  # must match eodhd_updater.py
@@ -150,7 +157,7 @@ def read_all_rows(service) -> list[list[str]]:
         .values()
         .get(
             spreadsheetId=SPREADSHEET_ID,
-            range=f"'{SHEET_NAME}'!A1:AD",
+            range=f"'{SHEET_NAME}'",
             valueRenderOption="FORMATTED_VALUE",
         )
         .execute()
@@ -249,10 +256,64 @@ def serpapi_search(query: str, api_key: str, logger: logging.Logger) -> str:
     return "\n".join(snippets)
 
 
+# Map terse flag keywords to natural-language search terms
+_EVENT_TYPE_MAP = {
+    "margin swing":   "one-time charge margin impact",
+    "other inc/exp":  "other income expense non-recurring charge",
+    "write-down":     "write-down impairment",
+    "restructuring":  "restructuring charge",
+    "settlement":     "legal settlement",
+    "acquisition":    "acquisition one-time cost",
+    "divestiture":    "divestiture asset sale",
+    "goodwill":       "goodwill impairment write-off",
+    "tax":            "one-time tax benefit charge",
+    "ipo":            "IPO related expenses",
+    "sbc":            "stock-based compensation charge",
+}
+
+# Quarter mapping from month numbers
+_MONTH_TO_QUARTER = {
+    "01": "Q1", "02": "Q1", "03": "Q1",
+    "04": "Q2", "05": "Q2", "06": "Q2",
+    "07": "Q3", "08": "Q3", "09": "Q3",
+    "10": "Q4", "11": "Q4", "12": "Q4",
+}
+
+
+def _build_event_search_query(company: str, ticker: str, event_text: str) -> str:
+    """Turn terse analyst flag text into a useful Google search query.
+
+    Flags look like: '⬇ margin swing -22pp vs norm (2025-09)'
+    We want: 'Celsius Holdings CELH one-time charge margin impact Q3 2025'
+    """
+    # Extract date if present — formats like (2025-09) or (2024-12)
+    date_match = re.search(r"\((\d{4})-(\d{2})\)", event_text)
+    quarter_str = ""
+    if date_match:
+        year = date_match.group(1)
+        month = date_match.group(2)
+        quarter_str = f"{_MONTH_TO_QUARTER.get(month, '')} {year}"
+
+    # Find matching event type from our map
+    event_lower = event_text.lower()
+    search_terms = "one-time non-recurring charge"  # default
+    for key, val in _EVENT_TYPE_MAP.items():
+        if key in event_lower:
+            search_terms = val
+            break
+
+    return f"{company} {ticker} {search_terms} {quarter_str}".strip()
+
+
 def gather_web_context(
-    company: str, ticker: str, api_key: str, logger: logging.Logger
+    company: str, ticker: str, api_key: str, logger: logging.Logger,
+    one_time_event: str = "",
 ) -> str:
-    """Run two SerpAPI searches and merge results."""
+    """Run SerpAPI searches and merge results.
+
+    When a one_time_event flag is provided, runs an additional targeted search
+    to find context about the specific event (write-down, settlement, etc.).
+    """
     current_year = date.today().year
     prev_year = current_year - 1
 
@@ -260,6 +321,7 @@ def gather_web_context(
     q2 = f"{company} {ticker} outlook forecast analyst {current_year}"
 
     s1 = serpapi_search(q1, api_key, logger)
+    time.sleep(1)
     s2 = serpapi_search(q2, api_key, logger)
 
     parts = []
@@ -267,6 +329,15 @@ def gather_web_context(
         parts.append(f"EARNINGS SEARCH:\n{s1}")
     if s2:
         parts.append(f"OUTLOOK SEARCH:\n{s2}")
+
+    # Targeted search for the one-time event to give the model real context
+    if one_time_event:
+        q3 = _build_event_search_query(company, ticker, one_time_event)
+        time.sleep(1)
+        s3 = serpapi_search(q3, api_key, logger)
+        if s3:
+            parts.append(f"ONE-TIME EVENT SEARCH:\n{s3}")
+            logger.info("  Found web context for one-time event on %s", ticker)
 
     return "\n\n".join(parts)
 
@@ -303,7 +374,15 @@ Key Risks: 🟡 Prolonged cyclical downturn and continued inventory digestion in
 
 ---
 
-Now generate the three fields for {company_name} ({ticker}). Follow these rules exactly:
+Now generate the four fields for {company_name} ({ticker}). Follow these rules exactly:
+
+DESCRIPTION RULES:
+- One sentence summarising the company's core business, products/services, and industry
+- 60-80 characters
+- Examples:
+  "Japanese conveyor-belt sushi chain operator with global expansion"
+  "LNG containment system designer for gas carriers and onshore tanks"
+  "Semiconductor deposition equipment maker for advanced chip manufacturing"
 
 SHORT OUTLOOK RULES:
 - One sentence, max 15 words
@@ -324,10 +403,54 @@ KEY RISKS RULES:
 
 Respond ONLY with a JSON object in this exact format, no markdown, no preamble:
 {{
+  "description": "...",
   "short_outlook": "...",
   "full_outlook": "...",
   "key_risks": "..."
 }}
+"""
+
+EVENT_IMPACT_SECTION = """\
+
+ONE-TIME EVENT FLAGGED BY ANALYST:
+{one_time_event}
+
+ADDITIONAL TASK — EVENT IMPACT ANALYSIS:
+The analyst has flagged the one-time event above. Your job is to ADD VALUE beyond
+what the flag already says. Do NOT just restate or paraphrase the event — the reader
+can already see it. Instead:
+
+1. USE THE WEB SEARCH RESULTS (especially the "ONE-TIME EVENT SEARCH" section) to
+   identify what actually caused this event (e.g. an acquisition write-down, a legal
+   settlement, a one-off IP sale, a restructuring programme, an asset impairment,
+   etc.). Name the specific real-world cause.
+2. ASSESS the impact: does it FLATTER (make reported numbers look better than the
+   underlying business), UNDERSTATE (make them look worse), or is it NEUTRAL/MIXED?
+3. QUANTIFY where possible using the financial data provided (e.g. normalised margin
+   vs reported margin, adjusted EPS vs reported EPS).
+4. STATE whether the effect has already lapsed or is still flowing through upcoming numbers.
+
+Do NOT invent or speculate about events not supported by the web search results or
+financial data. If you cannot identify the specific cause, focus on the quantified
+impact and say the cause is unclear.
+
+EVENT IMPACT RULES:
+- Start with 🔴 if it flatters (inflates) metrics — this is a warning
+- Start with 🟢 if it understates (depresses) metrics — hidden upside
+- Start with 🟡 if neutral or mixed impact
+- Then briefly name the real-world cause (from web results) and quantify the effect
+- 2-3 sentences max
+- Do NOT repeat back the analyst's flag text — add new information
+
+Example outputs:
+  "🔴 Flatters margins +4pp — one-off $120M patent licensing payment from Samsung in Q3 boosted GM to 52% vs ~48% normalised. Already lapsed; Q4 margins will revert."
+  "🟢 Understates EPS by ~$0.35 — $45M restructuring charge relates to closure of Austin fab announced Oct 2025. Non-recurring; adj. EPS ~$1.20 vs reported $0.85. Charge completes Q1 2026."
+  "🟡 Mixed — Kinaxis acquisition (closed Aug 2025) adds ~$80M/qtr revenue but $25M integration costs depress margins ~2pp. Costs expected to taper over 3 quarters."
+"""
+
+EVENT_IMPACT_JSON_ADDITION = """\
+Include this additional field in your JSON response:
+  "event_impact": "..."
 """
 
 
@@ -393,7 +516,7 @@ def call_gemini(prompt: str, api_key: str, logger: logging.Logger) -> dict | Non
                 logger.warning("Gemini returned non-JSON: %s", text[:200])
                 return None
 
-            required_keys = {"short_outlook", "full_outlook", "key_risks"}
+            required_keys = {"description", "short_outlook", "full_outlook", "key_risks"}
             missing = required_keys - set(result.keys())
             if missing:
                 logger.warning("Gemini response missing keys: %s (got: %s)", missing, list(result.keys()))
@@ -462,10 +585,21 @@ def process_company(
 
     logger.info("Processing %s (%s) — row %d", ticker, company, row_number)
 
-    # Web search
+    # Check for one-time events (before web search so we can target the search)
+    one_time_events_idx = col_map.get(HEADER_ONE_TIME_EVENTS)
+    one_time_event_text = ""
+    if one_time_events_idx is not None and one_time_events_idx < len(padded):
+        one_time_event_text = padded[one_time_events_idx].strip()
+        if one_time_event_text == NULL_VALUE:
+            one_time_event_text = ""
+
+    # Web search (includes targeted event search when one_time_event is present)
     web_context = ""
     if serpapi_key:
-        web_context = gather_web_context(company, ticker, serpapi_key, logger)
+        web_context = gather_web_context(
+            company, ticker, serpapi_key, logger,
+            one_time_event=one_time_event_text,
+        )
 
     web_section = ""
     if web_context:
@@ -481,6 +615,21 @@ def process_company(
         financial_data_summary=fin_summary,
         web_section=web_section,
     )
+
+    # Inject one-time event analysis if present
+    has_event = bool(one_time_event_text)
+    if has_event:
+        event_section = EVENT_IMPACT_SECTION.format(one_time_event=one_time_event_text)
+        prompt = prompt.replace(
+            'Respond ONLY with a JSON object in this exact format, no markdown, no preamble:',
+            event_section + '\n' + EVENT_IMPACT_JSON_ADDITION + '\nRespond ONLY with a JSON object in this exact format, no markdown, no preamble:',
+        )
+        # Update the JSON template in the prompt to include event_impact
+        prompt = prompt.replace(
+            '  "key_risks": "..."\n}',
+            '  "key_risks": "...",\n  "event_impact": "..."\n}',
+        )
+        logger.info("  One-time event detected for %s: %s", ticker, one_time_event_text[:80])
 
     if dry_run:
         logger.info("[DRY RUN] Prompt for %s:\n%s", ticker, prompt[:500] + "...")
@@ -500,6 +649,7 @@ def process_company(
 
     # Map output fields to sheet columns dynamically
     field_to_header = {
+        "description": HEADER_DESCRIPTION,
         "short_outlook": HEADER_SHORT_OUTLOOK,
         "full_outlook": HEADER_OUTLOOK,
         "key_risks": HEADER_RISKS,
@@ -511,6 +661,15 @@ def process_company(
             values[_col_letter(idx)] = result[field]
         else:
             logger.warning("Column '%s' not found in sheet, skipping field '%s'", header, field)
+
+    # Write event_impact if we requested it and got a response
+    event_impact_idx = col_map.get(HEADER_EVENT_IMPACT)
+    if event_impact_idx is not None:
+        if has_event and result.get("event_impact"):
+            values[_col_letter(event_impact_idx)] = result["event_impact"]
+        elif not has_event:
+            # Clear stale event_impact if one_time_events is now empty
+            values[_col_letter(event_impact_idx)] = ""
 
     # Write the analysis date
     analyzed_idx = col_map.get(HEADER_ANALYZED)
