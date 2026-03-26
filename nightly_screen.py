@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-from tv_screen import run_tradingview_screen
+from tv_screen import run_tradingview_screen, fetch_sector_data
 
 load_dotenv()
 
@@ -377,6 +377,39 @@ def main():
     # Step 5: Write changes
     add_new_tickers(service, new_tickers, col_map, logger)
     update_missing_fields(service, field_updates, col_map, logger)
+
+    # Step 6: Backfill sector from TradingView for tickers still missing it
+    # (covers tickers not in current screen results or manual sheet)
+    tickers_missing_sector = []
+    for ticker, info in ticker_rows.items():
+        if not info.get("sector"):
+            # Check if we already queued an update for this ticker's sector
+            already_updated = any(
+                u["row"] == info["row"] and "sector" in u["fields"]
+                for u in field_updates
+            )
+            if not already_updated:
+                tickers_missing_sector.append((ticker, info.get("exchange", "")))
+
+    if tickers_missing_sector:
+        logger.info("Fetching sector from TradingView for %d tickers missing sector",
+                     len(tickers_missing_sector))
+        sector_data = fetch_sector_data(tickers_missing_sector, logger)
+        sector_updates = []
+        for ticker, exchange in tickers_missing_sector:
+            sector = sector_data.get(ticker.upper(), "")
+            if sector:
+                row_num = ticker_rows[ticker]["row"]
+                sector_updates.append({
+                    "row": row_num,
+                    "fields": {"sector": sector},
+                })
+        if sector_updates:
+            update_missing_fields(service, sector_updates, col_map, logger)
+            logger.info("Backfilled sector for %d tickers via TradingView lookup",
+                         len(sector_updates))
+        else:
+            logger.info("No sector data found for tickers missing sector")
 
     # Log new tickers
     if new_tickers:
