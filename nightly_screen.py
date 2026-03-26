@@ -366,6 +366,54 @@ def add_new_tickers(service, new_tickers: list[dict], col_map: dict, logger):
     logger.info("Appended %d new tickers to AI Analysis", len(append_rows))
 
 
+def linkify_tickers(service, col_map: dict, ticker_rows: dict, logger):
+    """Convert plain-text tickers to =HYPERLINK() formulas pointing to Google Finance."""
+    if "ticker" not in col_map:
+        return
+
+    ticker_col = _col_letter(col_map["ticker"])
+    # Read ticker column with FORMULA render to see raw cell values
+    result = (
+        service.spreadsheets()
+        .values()
+        .get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"'{AI_ANALYSIS_SHEET}'!{ticker_col}3:{ticker_col}",
+            valueRenderOption="FORMULA",
+        )
+        .execute()
+    )
+    raw_cells = result.get("values", [])
+
+    data = []
+    for row_offset, cell in enumerate(raw_cells):
+        val = cell[0] if cell else ""
+        if not val or val.startswith("="):
+            continue  # already a formula or empty
+        # Plain text ticker — convert to HYPERLINK
+        ticker = val.strip().upper()
+        info = ticker_rows.get(ticker, {})
+        exchange = info.get("exchange", "")
+        if not exchange:
+            continue  # can't build URL without exchange
+        sheet_row = row_offset + 3
+        formula = _ticker_hyperlink(ticker, exchange)
+        data.append({
+            "range": f"'{AI_ANALYSIS_SHEET}'!{ticker_col}{sheet_row}",
+            "values": [[formula]],
+        })
+
+    if not data:
+        logger.info("All tickers already have HYPERLINK formulas")
+        return
+
+    service.spreadsheets().values().batchUpdate(
+        spreadsheetId=SPREADSHEET_ID,
+        body={"valueInputOption": "USER_ENTERED", "data": data},
+    ).execute()
+    logger.info("Linked %d tickers to Google Finance", len(data))
+
+
 def update_missing_fields(service, updates: list[dict], col_map: dict, logger):
     """Fill in country/sector for existing tickers where those fields are empty."""
     if not updates:
@@ -512,6 +560,9 @@ def main():
                          len(sector_updates))
         else:
             logger.info("No sector data returned from TradingView for any missing ticker")
+
+    # Step 7: Linkify plain-text tickers to Google Finance
+    linkify_tickers(service, col_map, ticker_rows, logger)
 
     # Log new tickers
     if new_tickers:
