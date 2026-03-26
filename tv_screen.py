@@ -263,3 +263,54 @@ def fetch_market_data(tickers_with_exchange: list[tuple[str, str]], logger) -> d
     logger.info("Fetched market data for %d/%d tickers",
                 len(results), len(tickers_with_exchange))
     return results
+
+
+def fetch_sector_data(tickers_with_exchange: list[tuple[str, str]], logger) -> dict[str, str]:
+    """
+    Fetch sector for specific tickers from TradingView (no screening filters).
+    Returns {TICKER: sector_string}.
+
+    tickers_with_exchange: list of (ticker, exchange) tuples.
+    """
+    if not tickers_with_exchange:
+        return {}
+
+    # Build EXCHANGE:TICKER identifiers for TradingView
+    tv_ids = []
+    ticker_map = {}  # tv_id → clean ticker
+    for ticker, exchange in tickers_with_exchange:
+        tv_id = f"{exchange}:{ticker}" if exchange else ticker
+        tv_ids.append(tv_id)
+        ticker_map[tv_id] = ticker
+
+    BATCH_SIZE = 500
+    results = {}
+
+    for i in range(0, len(tv_ids), BATCH_SIZE):
+        batch = tv_ids[i:i + BATCH_SIZE]
+        try:
+            _, df = (
+                Query()
+                .set_tickers(*batch)
+                .select("name", "sector")
+                .get_scanner_data()
+            )
+            logger.info("TradingView sector batch %d: got %d/%d",
+                        i // BATCH_SIZE + 1, len(df), len(batch))
+        except Exception as e:
+            logger.warning("TradingView sector batch failed: %s", e)
+            continue
+
+        for _, row in df.iterrows():
+            raw_name = str(row.get("name", ""))
+            ticker = clean_ticker(raw_name)
+            if not ticker:
+                continue
+
+            sector = str(row.get("sector", ""))
+            if sector and sector.lower() not in ("nan", "none", ""):
+                results[ticker.upper()] = sector
+
+    logger.info("Fetched sector for %d/%d tickers",
+                len(results), len(tickers_with_exchange))
+    return results
