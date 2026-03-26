@@ -431,11 +431,27 @@ def _rating_multiplier(rating):
     return 0.01
 
 
+def _collar_perf(perf):
+    """Apply strict momentum collar to perf_52w_vs_spy.
+
+    < -0.5  → None  (disqualified — falling knife)
+    > 0.4   → 0.4   (capped — avoid hype blow-off tops)
+    else    → perf   (pass through for linear scaling)
+    """
+    if perf is None:
+        return perf
+    if perf < -0.5:
+        return None  # sentinel: hard disqualify
+    return min(perf, 0.4)
+
+
 def compute_composite_score(row_data, all_rows):
     """Calculate composite score using percentile-based weighting.
 
     Base score (0–100) from three factors, then multiplied by a rating gate.
-    Weights rescaled from the original 40/25/20 (out of 85) to sum to 100.
+    Performance is collared: < -0.5 disqualifies, > 0.4 capped.
+    Percentile ranking uses the collared values so scaling is linear
+    within the -0.5 to 0.4 band.
     """
     def pct(values, v, invert=False):
         if v is None or not values:
@@ -443,14 +459,21 @@ def compute_composite_score(row_data, all_rows):
         p = percentileofscore(values, v, kind="mean") / 100
         return (1 - p) if invert else p
 
+    # Hard disqualify: perf < -0.5
+    collared_perf = _collar_perf(row_data.get("_perf_f"))
+    if row_data.get("_perf_f") is not None and collared_perf is None:
+        return 0
+
     all_ps = [r["_ps_now_f"] for r in all_rows if r.get("_ps_now_f") is not None]
-    all_perf = [r["_perf_f"] for r in all_rows if r.get("_perf_f") is not None]
     all_r40 = [r["_r40_f"] for r in all_rows if r.get("_r40_f") is not None]
+    # Collar all perf values so percentile ranking scales within the band
+    all_perf = [_collar_perf(r["_perf_f"]) for r in all_rows
+                if r.get("_perf_f") is not None and _collar_perf(r["_perf_f"]) is not None]
 
     base = (
         pct(all_r40, row_data.get("_r40_f")) * 47
         + pct(all_ps, row_data.get("_ps_now_f"), invert=True) * 29
-        + pct(all_perf, row_data.get("_perf_f")) * 24
+        + pct(all_perf, collared_perf) * 24
     )
 
     return base * _rating_multiplier(row_data.get("_rating_f"))
