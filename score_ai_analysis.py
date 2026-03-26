@@ -647,13 +647,24 @@ def main():
 
         # Scoring inputs
         entry["_ps_now_f"] = ps_now
-        entry["_perf_f"] = _safe_float(entry.get("perf_52w_vs_spy"))
+        perf_raw = entry.get("perf_52w_vs_spy")
+        entry["_perf_f"] = _safe_float(perf_raw)
         entry["_r40_f"] = parse_r40_score(entry.get("r40_score", ""))
         entry["_rating_f"] = parse_rating_numeric(entry.get("rating", ""))
 
+        if ticker in ("TLPPF", "MTNN"):
+            logger.info("DEBUG %s: perf_raw=%r  _perf_f=%s  rating=%s  _rating_f=%s",
+                        ticker, perf_raw, entry["_perf_f"], entry.get("rating"), entry["_rating_f"])
+
     # Step 4: Compute composite scores with penalties
+    collar_disqualified = []
     for entry in ai_entries:
         raw = compute_composite_score(entry, ai_entries)
+
+        if raw == 0 and entry.get("_perf_f") is not None:
+            collar_disqualified.append(
+                (entry["_ticker"], entry.get("_perf_f"))
+            )
 
         # Penalty from short_outlook emoji
         outlook = str(entry.get("short_outlook", "")).strip()
@@ -669,6 +680,13 @@ def main():
         entry["_composite_score"] = raw
         entry["composite_score"] = raw
         entry["scoring"] = date.today().isoformat()
+
+    if collar_disqualified:
+        logger.info("Momentum collar disqualified %d tickers:", len(collar_disqualified))
+        for ticker, perf in collar_disqualified:
+            logger.info("  %s  perf_52w_vs_spy=%.4f", ticker, perf)
+    else:
+        logger.info("Momentum collar: no tickers disqualified")
 
     # Step 5: Sort
     ai_entries.sort(key=sort_key)
