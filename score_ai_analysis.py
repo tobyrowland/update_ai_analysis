@@ -414,8 +414,29 @@ def compute_status(entry, ps_data, screened_tickers, manual_tickers):
     return "🆕 New"
 
 
+def _rating_multiplier(rating):
+    """Return a multiplier based on TradingView analyst rating.
+
+    1.0–1.2   → 1.0  (no penalty — best in class)
+    1.21–1.6  → linear taper from 1.0 → 0.01  (proceed with caution)
+    >1.6      → 0.01  (disqualify)
+    None      → 1.0  (no data, no penalty)
+    """
+    if rating is None:
+        return 1.0
+    if rating <= 1.2:
+        return 1.0
+    if rating <= 1.6:
+        return 1.0 - (rating - 1.2) / (1.6 - 1.2) * 0.99
+    return 0.01
+
+
 def compute_composite_score(row_data, all_rows):
-    """Calculate composite score using percentile-based weighting."""
+    """Calculate composite score using percentile-based weighting.
+
+    Base score (0–100) from three factors, then multiplied by a rating gate.
+    Weights rescaled from the original 40/25/20 (out of 85) to sum to 100.
+    """
     def pct(values, v, invert=False):
         if v is None or not values:
             return 0.5
@@ -425,14 +446,14 @@ def compute_composite_score(row_data, all_rows):
     all_ps = [r["_ps_now_f"] for r in all_rows if r.get("_ps_now_f") is not None]
     all_perf = [r["_perf_f"] for r in all_rows if r.get("_perf_f") is not None]
     all_r40 = [r["_r40_f"] for r in all_rows if r.get("_r40_f") is not None]
-    all_rtg = [r["_rating_f"] for r in all_rows if r.get("_rating_f") is not None]
 
-    return (
-        pct(all_r40, row_data.get("_r40_f")) * 40
-        + pct(all_ps, row_data.get("_ps_now_f"), invert=True) * 25
-        + pct(all_perf, row_data.get("_perf_f")) * 20
-        + pct(all_rtg, row_data.get("_rating_f"), invert=True) * 15
+    base = (
+        pct(all_r40, row_data.get("_r40_f")) * 47
+        + pct(all_ps, row_data.get("_ps_now_f"), invert=True) * 29
+        + pct(all_perf, row_data.get("_perf_f")) * 24
     )
+
+    return base * _rating_multiplier(row_data.get("_rating_f"))
 
 
 # ---------------------------------------------------------------------------

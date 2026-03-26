@@ -94,7 +94,8 @@ LAST ANALYSIS: ai, data
 - 🆕 New — missing `ai` or `data` date
 - ❌ Excluded — 🔴 marker on any column; sorted to bottom with note of flagged columns
 
-**Composite score weights:** R40 40%, P/S 25% (inverted), 52w vs SPY 20%, Rating 15% (inverted)
+**Composite score base weights:** R40 47%, P/S 29% (inverted), 52w vs SPY 24%
+**Rating multiplier:** 1.0–1.2 → ×1.0, 1.21–1.6 → linear taper ×1.0→×0.01, >1.6 → ×0.01 (disqualify)
 **Penalties:** 🔴 outlook ×0.25, 🟡 outlook ×0.50, 🟡 flags on any column ×0.50
 
 ## Key Constants
