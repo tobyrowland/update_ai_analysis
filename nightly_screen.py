@@ -45,9 +45,12 @@ TV_TO_GOOGLE_FINANCE = {
     # Canada
     "TSX": "TSE", "TSXV": "CVE",
     # United Kingdom
-    "LSE": "LON", "LON": "LON",
-    # Germany
-    "XETRA": "ETR", "FRA": "FRA", "ETR": "ETR", "GETTEX": "ETR",
+    "LSE": "LON", "LON": "LON", "LSIN": "LON",
+    # Germany (many alternative exchanges → map to primary ETR/FRA)
+    "XETRA": "ETR", "XETR": "ETR", "FRA": "FRA", "ETR": "ETR",
+    "FWB": "FRA", "GETTEX": "ETR", "TRADEGATE": "ETR",
+    "MU": "ETR", "STU": "ETR", "BE": "ETR", "DU": "ETR",
+    "DUS": "ETR", "HM": "ETR", "HA": "ETR",
     # France
     "EPA": "EPA", "PAR": "EPA",
     # Netherlands
@@ -55,7 +58,7 @@ TV_TO_GOOGLE_FINANCE = {
     # Switzerland
     "SWX": "SWX",
     # Italy
-    "BIT": "BIT",
+    "BIT": "BIT", "MIL": "BIT", "EUROTLX": "BIT",
     # Spain
     "BME": "BME",
     # Sweden
@@ -69,7 +72,7 @@ TV_TO_GOOGLE_FINANCE = {
     # Japan
     "TSE": "TYO", "JPX": "TYO", "TYO": "TYO",
     # India
-    "NSE": "NSE", "BSE": "BOM",
+    "NSE": "NSE", "BSE": "BOM", "NSEI": "NSE",
     # South Korea
     "KRX": "KRX", "KOSDAQ": "KRX",
     # Australia
