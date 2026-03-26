@@ -224,6 +224,7 @@ def fetch_market_data(tickers_with_exchange: list[tuple[str, str]], logger) -> d
                 Query()
                 .set_tickers(*batch)
                 .select("name", "close", "Perf.Y", "recommendation_mark")
+                .limit(len(batch))
                 .get_scanner_data()
             )
             logger.info("TradingView market data batch %d: got %d/%d",
@@ -293,6 +294,7 @@ def fetch_sector_data(tickers_with_exchange: list[tuple[str, str]], logger) -> d
                 Query()
                 .set_tickers(*batch)
                 .select("name", "sector")
+                .limit(len(batch))
                 .get_scanner_data()
             )
             logger.info("TradingView sector batch %d: got %d/%d",
