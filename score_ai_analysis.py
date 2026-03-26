@@ -414,25 +414,69 @@ def compute_status(entry, ps_data, screened_tickers, manual_tickers):
     return "🆕 New"
 
 
+def _rating_multiplier(rating):
+    """Return a multiplier based on TradingView analyst rating.
+
+    1.0–1.2   → 1.0  (no penalty — best in class)
+    1.21–1.6  → linear taper from 1.0 → 0.01  (proceed with caution)
+    >1.6      → 0.01  (disqualify)
+    None      → 1.0  (no data, no penalty)
+    """
+    if rating is None:
+        return 1.0
+    if rating <= 1.2:
+        return 1.0
+    if rating <= 1.6:
+        return 1.0 - (rating - 1.2) / (1.6 - 1.2) * 0.99
+    return 0.01
+
+
+def _collar_perf(perf):
+    """Apply strict momentum collar to perf_52w_vs_spy.
+
+    < -0.5  → None  (disqualified — falling knife)
+    > 0.4   → 0.4   (capped — avoid hype blow-off tops)
+    else    → perf   (pass through for linear scaling)
+    """
+    if perf is None:
+        return perf
+    if perf < -0.5:
+        return None  # sentinel: hard disqualify
+    return min(perf, 0.4)
+
+
 def compute_composite_score(row_data, all_rows):
-    """Calculate composite score using percentile-based weighting."""
+    """Calculate composite score using percentile-based weighting.
+
+    Base score (0–100) from three factors, then multiplied by a rating gate.
+    Performance is collared: < -0.5 disqualifies, > 0.4 capped.
+    Percentile ranking uses the collared values so scaling is linear
+    within the -0.5 to 0.4 band.
+    """
     def pct(values, v, invert=False):
         if v is None or not values:
             return 0.5
         p = percentileofscore(values, v, kind="mean") / 100
         return (1 - p) if invert else p
 
-    all_ps = [r["_ps_now_f"] for r in all_rows if r.get("_ps_now_f") is not None]
-    all_perf = [r["_perf_f"] for r in all_rows if r.get("_perf_f") is not None]
-    all_r40 = [r["_r40_f"] for r in all_rows if r.get("_r40_f") is not None]
-    all_rtg = [r["_rating_f"] for r in all_rows if r.get("_rating_f") is not None]
+    # Hard disqualify: perf < -0.5
+    collared_perf = _collar_perf(row_data.get("_perf_f"))
+    if row_data.get("_perf_f") is not None and collared_perf is None:
+        return 0
 
-    return (
-        pct(all_r40, row_data.get("_r40_f")) * 40
-        + pct(all_ps, row_data.get("_ps_now_f"), invert=True) * 25
-        + pct(all_perf, row_data.get("_perf_f")) * 20
-        + pct(all_rtg, row_data.get("_rating_f"), invert=True) * 15
+    all_ps = [r["_ps_now_f"] for r in all_rows if r.get("_ps_now_f") is not None]
+    all_r40 = [r["_r40_f"] for r in all_rows if r.get("_r40_f") is not None]
+    # Collar all perf values so percentile ranking scales within the band
+    all_perf = [_collar_perf(r["_perf_f"]) for r in all_rows
+                if r.get("_perf_f") is not None and _collar_perf(r["_perf_f"]) is not None]
+
+    base = (
+        pct(all_r40, row_data.get("_r40_f")) * 47
+        + pct(all_ps, row_data.get("_ps_now_f"), invert=True) * 29
+        + pct(all_perf, collared_perf) * 24
     )
+
+    return base * _rating_multiplier(row_data.get("_rating_f"))
 
 
 # ---------------------------------------------------------------------------
@@ -580,9 +624,13 @@ def main():
 
         # Merge market data — prefer screened data, fall back to direct lookup
         tv = screened_map.get(ticker) or extra_data.get(ticker, {})
-        entry["price"] = tv.get("price")
-        entry["perf_52w_vs_spy"] = tv.get("perf_52w_vs_spy")
-        entry["rating"] = tv.get("rating", "")
+        # Prefer TradingView data, fall back to existing sheet values
+        tv_price = tv.get("price")
+        entry["price"] = tv_price if tv_price is not None else entry.get("price")
+        tv_perf = tv.get("perf_52w_vs_spy")
+        entry["perf_52w_vs_spy"] = tv_perf if tv_perf is not None else entry.get("perf_52w_vs_spy")
+        tv_rating = tv.get("rating")
+        entry["rating"] = tv_rating if tv_rating is not None else (entry.get("rating") or "")
 
         # Merge P/S data
         ps = ps_data.get(ticker, {})
@@ -599,13 +647,24 @@ def main():
 
         # Scoring inputs
         entry["_ps_now_f"] = ps_now
-        entry["_perf_f"] = _safe_float(entry.get("perf_52w_vs_spy"))
+        perf_raw = entry.get("perf_52w_vs_spy")
+        entry["_perf_f"] = _safe_float(perf_raw)
         entry["_r40_f"] = parse_r40_score(entry.get("r40_score", ""))
         entry["_rating_f"] = parse_rating_numeric(entry.get("rating", ""))
 
+        if ticker in ("TLPPF", "MTNN"):
+            logger.info("DEBUG %s: perf_raw=%r  _perf_f=%s  rating=%s  _rating_f=%s",
+                        ticker, perf_raw, entry["_perf_f"], entry.get("rating"), entry["_rating_f"])
+
     # Step 4: Compute composite scores with penalties
+    collar_disqualified = []
     for entry in ai_entries:
         raw = compute_composite_score(entry, ai_entries)
+
+        if raw == 0 and entry.get("_perf_f") is not None:
+            collar_disqualified.append(
+                (entry["_ticker"], entry.get("_perf_f"))
+            )
 
         # Penalty from short_outlook emoji
         outlook = str(entry.get("short_outlook", "")).strip()
@@ -621,6 +680,13 @@ def main():
         entry["_composite_score"] = raw
         entry["composite_score"] = raw
         entry["scoring"] = date.today().isoformat()
+
+    if collar_disqualified:
+        logger.info("Momentum collar disqualified %d tickers:", len(collar_disqualified))
+        for ticker, perf in collar_disqualified:
+            logger.info("  %s  perf_52w_vs_spy=%.4f", ticker, perf)
+    else:
+        logger.info("Momentum collar: no tickers disqualified")
 
     # Step 5: Sort
     ai_entries.sort(key=sort_key)
