@@ -36,7 +36,87 @@ AI_ANALYSIS_SHEET = "AI Analysis"
 MANUAL_SHEET = "Manual"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-# Map alternative/legacy header names → canonical lowercase keys.
+# Map TradingView exchange codes → Google Finance exchange codes.
+TV_TO_GOOGLE_FINANCE = {
+    # United States
+    "NASDAQ": "NASDAQ", "NYSE": "NYSE", "NYSEARCA": "NYSEARCA",
+    "NYSEMKT": "NYSEAMERICAN", "AMEX": "NYSEAMERICAN", "OTC": "OTCMKTS",
+    "BATS": "BATS",
+    # Canada
+    "TSX": "TSE", "TSXV": "CVE",
+    # United Kingdom
+    "LSE": "LON", "LON": "LON",
+    # Germany
+    "XETRA": "ETR", "FRA": "FRA", "ETR": "ETR", "GETTEX": "ETR",
+    # France
+    "EPA": "EPA", "PAR": "EPA",
+    # Netherlands
+    "AMS": "AMS",
+    # Switzerland
+    "SWX": "SWX",
+    # Italy
+    "BIT": "BIT",
+    # Spain
+    "BME": "BME",
+    # Sweden
+    "STO": "STO",
+    # Norway
+    "OSL": "OSL",
+    # Denmark
+    "CSE": "CPH",
+    # Finland
+    "HEL": "HEL",
+    # Japan
+    "TSE": "TYO", "JPX": "TYO", "TYO": "TYO",
+    # India
+    "NSE": "NSE", "BSE": "BOM",
+    # South Korea
+    "KRX": "KRX", "KOSDAQ": "KRX",
+    # Australia
+    "ASX": "ASX",
+    # New Zealand
+    "NZX": "NZE",
+    # Singapore
+    "SGX": "SGX",
+    # Hong Kong
+    "HKG": "HKG", "HKEX": "HKG",
+    # Brazil
+    "SAO": "BVMF", "BVMF": "BVMF",
+    # South Africa
+    "JSE": "JSE",
+    # Saudi Arabia
+    "TADAWUL": "TADAWUL", "SAU": "TADAWUL",
+    # Israel
+    "TASE": "TLV",
+    # Turkey
+    "BIST": "IST",
+    # Indonesia
+    "IDX": "IDX",
+    # Thailand
+    "SET": "BKK",
+    # Malaysia
+    "MYX": "KLSE",
+    # Philippines
+    "PSE": "PSE",
+    # Mexico
+    "BMV": "BMV",
+    # Poland
+    "GPW": "WSE",
+}
+
+
+def _google_finance_url(ticker: str, exchange: str) -> str:
+    """Build a Google Finance URL for a ticker."""
+    gf_exchange = TV_TO_GOOGLE_FINANCE.get(exchange.upper(), exchange)
+    return f"https://www.google.com/finance/quote/{ticker}:{gf_exchange}"
+
+
+def _ticker_hyperlink(ticker: str, exchange: str) -> str:
+    """Build a =HYPERLINK() formula pointing to Google Finance."""
+    url = _google_finance_url(ticker, exchange)
+    return f'=HYPERLINK("{url}", "{ticker}")'
+
+
 HEADER_ALIASES = {
     "Ticker": "ticker",
     "ticker_clean": "ticker",
@@ -262,7 +342,8 @@ def add_new_tickers(service, new_tickers: list[dict], col_map: dict, logger):
     for eq in new_tickers:
         row = [""] * max_col
         if "ticker" in col_map:
-            row[col_map["ticker"]] = eq["ticker"]
+            exchange = eq.get("exchange", "")
+            row[col_map["ticker"]] = _ticker_hyperlink(eq["ticker"], exchange) if exchange else eq["ticker"]
         if "exchange" in col_map:
             row[col_map["exchange"]] = eq.get("exchange", "")
         if "company_name" in col_map:
