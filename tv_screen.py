@@ -266,27 +266,10 @@ def fetch_market_data(tickers_with_exchange: list[tuple[str, str]], logger) -> d
     return results
 
 
-def fetch_sector_data(tickers_with_exchange: list[tuple[str, str]], logger) -> dict[str, str]:
-    """
-    Fetch sector for specific tickers from TradingView (no screening filters).
-    Returns {TICKER: sector_string}.
-
-    tickers_with_exchange: list of (ticker, exchange) tuples.
-    """
-    if not tickers_with_exchange:
-        return {}
-
-    # Build EXCHANGE:TICKER identifiers for TradingView
-    tv_ids = []
-    ticker_map = {}  # tv_id → clean ticker
-    for ticker, exchange in tickers_with_exchange:
-        tv_id = f"{exchange}:{ticker}" if exchange else ticker
-        tv_ids.append(tv_id)
-        ticker_map[tv_id] = ticker
-
+def _fetch_sector_batch(tv_ids: list[str], logger) -> dict[str, str]:
+    """Query TradingView for sector given a list of EXCHANGE:TICKER ids."""
     BATCH_SIZE = 500
     results = {}
-
     for i in range(0, len(tv_ids), BATCH_SIZE):
         batch = tv_ids[i:i + BATCH_SIZE]
         try:
@@ -297,8 +280,8 @@ def fetch_sector_data(tickers_with_exchange: list[tuple[str, str]], logger) -> d
                 .limit(len(batch))
                 .get_scanner_data()
             )
-            logger.info("TradingView sector batch %d: got %d/%d",
-                        i // BATCH_SIZE + 1, len(df), len(batch))
+            logger.info("TradingView sector batch: got %d/%d",
+                        len(df), len(batch))
         except Exception as e:
             logger.warning("TradingView sector batch failed: %s", e)
             continue
@@ -308,10 +291,51 @@ def fetch_sector_data(tickers_with_exchange: list[tuple[str, str]], logger) -> d
             ticker = clean_ticker(raw_name)
             if not ticker:
                 continue
-
             sector = str(row.get("sector", ""))
             if sector and sector.lower() not in ("nan", "none", ""):
                 results[ticker.upper()] = sector
+    return results
+
+
+def fetch_sector_data(tickers_with_exchange: list[tuple[str, str]], logger) -> dict[str, str]:
+    """
+    Fetch sector for specific tickers from TradingView (no screening filters).
+    Returns {TICKER: sector_string}.
+
+    Tries EXCHANGE:TICKER first, then retries unmatched tickers as just TICKER
+    (lets TradingView resolve the exchange automatically).
+    """
+    if not tickers_with_exchange:
+        return {}
+
+    # First pass: query with exchange prefix
+    tv_ids = []
+    all_tickers = {}  # ticker → exchange
+    for ticker, exchange in tickers_with_exchange:
+        tv_id = f"{exchange}:{ticker}" if exchange else ticker
+        tv_ids.append(tv_id)
+        all_tickers[ticker.upper()] = exchange
+
+    logger.info("Fetching sector for %d tickers (pass 1: with exchange)...",
+                len(tv_ids))
+    results = _fetch_sector_batch(tv_ids, logger)
+
+    # Second pass: retry unmatched tickers on common exchanges
+    missed = [t for t in all_tickers if t not in results]
+    if missed:
+        FALLBACK_EXCHANGES = [
+            "NYSE", "NASDAQ", "XETR", "FWB", "LSE", "TSE", "ASX",
+            "TSX", "NSE", "EPA", "AMS", "SWX", "BIT", "BME", "STO",
+            "KRX", "SGX", "NZX", "JSE",
+        ]
+        retry_ids = []
+        for ticker in missed:
+            for ex in FALLBACK_EXCHANGES:
+                retry_ids.append(f"{ex}:{ticker}")
+        logger.info("Retrying %d unmatched tickers across %d common exchanges...",
+                     len(missed), len(FALLBACK_EXCHANGES))
+        retry_results = _fetch_sector_batch(retry_ids, logger)
+        results.update(retry_results)
 
     logger.info("Fetched sector for %d/%d tickers",
                 len(results), len(tickers_with_exchange))

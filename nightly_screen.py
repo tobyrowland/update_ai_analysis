@@ -387,7 +387,7 @@ def linkify_tickers(service, col_map: dict, ticker_rows: dict, logger):
 
     data = []
     for row_offset, cell in enumerate(raw_cells):
-        val = cell[0] if cell else ""
+        val = str(cell[0]) if cell else ""
         if not val or val.startswith("="):
             continue  # already a formula or empty
         # Plain text ticker — convert to HYPERLINK
