@@ -624,9 +624,13 @@ def main():
 
         # Merge market data — prefer screened data, fall back to direct lookup
         tv = screened_map.get(ticker) or extra_data.get(ticker, {})
-        entry["price"] = tv.get("price")
-        entry["perf_52w_vs_spy"] = tv.get("perf_52w_vs_spy")
-        entry["rating"] = tv.get("rating", "")
+        # Prefer TradingView data, fall back to existing sheet values
+        tv_price = tv.get("price")
+        entry["price"] = tv_price if tv_price is not None else entry.get("price")
+        tv_perf = tv.get("perf_52w_vs_spy")
+        entry["perf_52w_vs_spy"] = tv_perf if tv_perf is not None else entry.get("perf_52w_vs_spy")
+        tv_rating = tv.get("rating")
+        entry["rating"] = tv_rating if tv_rating is not None else (entry.get("rating") or "")
 
         # Merge P/S data
         ps = ps_data.get(ticker, {})
