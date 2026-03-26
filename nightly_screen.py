@@ -153,6 +153,7 @@ def load_ai_analysis_tickers(service, logger) -> tuple[set[str], dict[str, int],
 
     # Row 1 = group headers, Row 2 = column headers, Row 3+ = data
     raw_headers = [str(h).strip() for h in rows[1]]
+    logger.info("Raw headers (row 2): %s", raw_headers[:10])
     col_map = {}
     for idx, h in enumerate(raw_headers):
         key = HEADER_ALIASES.get(h, h.lower())
@@ -348,6 +349,20 @@ def main():
         logger.error("Could not read AI Analysis column map — aborting")
         return
 
+    logger.info("col_map keys: %s", sorted(col_map.keys()))
+    if "sector" in col_map:
+        logger.info("sector column index: %d (col %s)", col_map["sector"],
+                     _col_letter(col_map["sector"]))
+    else:
+        logger.warning("'sector' NOT found in col_map!")
+
+    # Count tickers missing sector in the sheet
+    total_missing_sector = sum(
+        1 for info in ticker_rows.values() if not info.get("sector")
+    )
+    logger.info("Tickers missing sector in sheet: %d / %d",
+                total_missing_sector, len(ticker_rows))
+
     # Step 4: Identify new tickers and missing fields
     new_tickers = []
     field_updates = []
@@ -371,45 +386,51 @@ def main():
                     "fields": missing_fields,
                 })
 
+    sector_via_screen = sum(1 for u in field_updates if "sector" in u["fields"])
     logger.info("New tickers to add: %d", len(new_tickers))
-    logger.info("Existing tickers with missing fields to update: %d", len(field_updates))
+    logger.info("Existing tickers with missing fields to update: %d (%d with sector)",
+                len(field_updates), sector_via_screen)
 
     # Step 5: Write changes
     add_new_tickers(service, new_tickers, col_map, logger)
     update_missing_fields(service, field_updates, col_map, logger)
 
-    # Step 6: Backfill sector from TradingView for tickers still missing it
-    # (covers tickers not in current screen results or manual sheet)
-    tickers_missing_sector = []
+    # Step 6: Backfill sector from TradingView for ALL tickers still missing it
+    # Re-read which tickers still need sector (not covered by Step 5)
+    tickers_needing_sector = []
+    updated_rows = {u["row"] for u in field_updates if "sector" in u["fields"]}
     for ticker, info in ticker_rows.items():
-        if not info.get("sector"):
-            # Check if we already queued an update for this ticker's sector
-            already_updated = any(
-                u["row"] == info["row"] and "sector" in u["fields"]
-                for u in field_updates
-            )
-            if not already_updated:
-                tickers_missing_sector.append((ticker, info.get("exchange", "")))
+        if not info.get("sector") and info["row"] not in updated_rows:
+            tickers_needing_sector.append((ticker, info.get("exchange", "")))
 
-    if tickers_missing_sector:
-        logger.info("Fetching sector from TradingView for %d tickers missing sector",
-                     len(tickers_missing_sector))
-        sector_data = fetch_sector_data(tickers_missing_sector, logger)
+    logger.info("Tickers still missing sector after screen merge: %d", len(tickers_needing_sector))
+
+    if tickers_needing_sector:
+        if len(tickers_needing_sector) <= 20:
+            logger.info("Missing sector tickers: %s",
+                         [(t, e) for t, e in tickers_needing_sector])
+
+        sector_data = fetch_sector_data(tickers_needing_sector, logger)
+        logger.info("TradingView returned sector for %d / %d tickers",
+                     len(sector_data), len(tickers_needing_sector))
+
         sector_updates = []
-        for ticker, exchange in tickers_missing_sector:
+        for ticker, exchange in tickers_needing_sector:
             sector = sector_data.get(ticker.upper(), "")
             if sector:
-                row_num = ticker_rows[ticker]["row"]
                 sector_updates.append({
-                    "row": row_num,
+                    "row": ticker_rows[ticker]["row"],
                     "fields": {"sector": sector},
                 })
+            else:
+                logger.debug("No sector found for %s (exchange=%s)", ticker, exchange)
+
         if sector_updates:
             update_missing_fields(service, sector_updates, col_map, logger)
             logger.info("Backfilled sector for %d tickers via TradingView lookup",
                          len(sector_updates))
         else:
-            logger.info("No sector data found for tickers missing sector")
+            logger.info("No sector data returned from TradingView for any missing ticker")
 
     # Log new tickers
     if new_tickers:
@@ -422,4 +443,47 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "--backfill-sector" in sys.argv:
+        logger = setup_logging()
+        logger.info("=" * 60)
+        logger.info("Sector Backfill Only — %s", date.today().isoformat())
+        logger.info("=" * 60)
+        service = get_sheets_service()
+        existing_tickers, col_map, ticker_rows = load_ai_analysis_tickers(service, logger)
+        if "sector" not in col_map:
+            logger.error("'sector' column not found in headers! col_map: %s", sorted(col_map.keys()))
+            sys.exit(1)
+        logger.info("sector column: index %d (col %s)", col_map["sector"],
+                     _col_letter(col_map["sector"]))
+
+        missing = [(t, info.get("exchange", ""))
+                    for t, info in ticker_rows.items() if not info.get("sector")]
+        logger.info("Tickers missing sector: %d / %d", len(missing), len(ticker_rows))
+        if not missing:
+            logger.info("All tickers already have sector — nothing to do")
+            sys.exit(0)
+
+        for t, e in missing[:10]:
+            logger.info("  e.g. %s (exchange=%r)", t, e)
+
+        sector_data = fetch_sector_data(missing, logger)
+        logger.info("TradingView returned sector for %d / %d", len(sector_data), len(missing))
+
+        updates = []
+        for ticker, exchange in missing:
+            sector = sector_data.get(ticker.upper(), "")
+            if sector:
+                updates.append({
+                    "row": ticker_rows[ticker]["row"],
+                    "fields": {"sector": sector},
+                })
+        logger.info("Updates to write: %d", len(updates))
+        if updates:
+            for u in updates[:10]:
+                logger.info("  row %d → %s", u["row"], u["fields"]["sector"])
+            update_missing_fields(service, updates, col_map, logger)
+            logger.info("Done — backfilled sector for %d tickers", len(updates))
+        else:
+            logger.info("TradingView had no sector data for any of the missing tickers")
+    else:
+        main()
