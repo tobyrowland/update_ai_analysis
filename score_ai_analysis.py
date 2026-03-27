@@ -637,43 +637,59 @@ def main():
 
         # Scoring inputs
         perf_raw = entry.get("perf_52w_vs_spy")
-        entry["_perf_f"] = _safe_float(perf_raw)
+        # Parse perf — sheet FORMATTED_VALUE returns "%-10.00%" for -0.10;
+        # TradingView returns the raw decimal float.  Normalise to decimal.
+        if isinstance(perf_raw, str) and "%" in perf_raw:
+            entry["_perf_f"] = _safe_float(perf_raw)
+            if entry["_perf_f"] is not None:
+                entry["_perf_f"] /= 100
+        else:
+            entry["_perf_f"] = _safe_float(perf_raw)
         entry["_r40_f"] = parse_r40_score(entry.get("r40_score", ""))
         entry["_rating_f"] = parse_rating_numeric(entry.get("rating", ""))
 
-        if ticker in ("TLPPF", "MTNN"):
-            logger.info("DEBUG %s: perf_raw=%r  _perf_f=%s  rating=%s  _rating_f=%s",
-                        ticker, perf_raw, entry["_perf_f"], entry.get("rating"), entry["_rating_f"])
 
     # Step 4: Compute composite scores with collar multipliers and penalties
-    collar_disqualified = []
+    perf_disqualified = []
+    rating_disqualified = []
+    red_flag_zeroed = []
     # Columns where a 🔴 marker zeroes the composite score
     RED_ZERO_COLS = ("short_outlook", "key_risks", "event_impact", "rev_consistency_score")
     for entry in ai_entries:
         raw = compute_composite_score(entry)
 
-        if raw == 0 and entry.get("_perf_f") is not None:
-            collar_disqualified.append(
-                (entry["_ticker"], entry.get("_perf_f"))
-            )
+        # Track disqualification reasons
+        perf = entry.get("_perf_f")
+        if perf is not None and perf < -0.5:
+            perf_disqualified.append((entry["_ticker"], perf))
+        rating = entry.get("_rating_f")
+        if rating is not None and rating > 1.6:
+            rating_disqualified.append((entry["_ticker"], rating))
 
         # 🔴 on any of these columns → multiply by 0
         for col in RED_ZERO_COLS:
             val = str(entry.get(col, "")).strip()
             if "🔴" in val:
                 raw *= 0
+                red_flag_zeroed.append((entry["_ticker"], col))
                 break
 
         entry["_composite_score"] = raw
         entry["composite_score"] = raw
         entry["scoring"] = date.today().isoformat()
 
-    if collar_disqualified:
-        logger.info("Momentum collar disqualified %d tickers:", len(collar_disqualified))
-        for ticker, perf in collar_disqualified:
-            logger.info("  %s  perf_52w_vs_spy=%.4f", ticker, perf)
-    else:
-        logger.info("Momentum collar: no tickers disqualified")
+    if perf_disqualified:
+        logger.info("Momentum collar disqualified %d tickers:", len(perf_disqualified))
+        for ticker, perf in perf_disqualified:
+            logger.info("  %s  perf=%.4f", ticker, perf)
+    if rating_disqualified:
+        logger.info("Rating collar disqualified %d tickers:", len(rating_disqualified))
+        for ticker, rtg in rating_disqualified:
+            logger.info("  %s  rating=%.2f", ticker, rtg)
+    if red_flag_zeroed:
+        logger.info("Red flag zeroed %d tickers:", len(red_flag_zeroed))
+        for ticker, col in red_flag_zeroed:
+            logger.info("  %s  🔴 %s", ticker, col)
 
     # Step 5: Sort
     ai_entries.sort(key=sort_key)
