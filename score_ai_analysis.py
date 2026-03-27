@@ -63,6 +63,12 @@ HEADER_ALIASES = {
     "Rating": "rating",
     "Short Outlook": "short_outlook",
     "R40 Score": "r40_score",
+    "Key Risks": "key_risks",
+    "key_risks": "key_risks",
+    "Event Impact": "event_impact",
+    "event_impact": "event_impact",
+    "Rev Consistency Score": "rev_consistency_score",
+    "rev_consistency_score": "rev_consistency_score",
     "AI": "ai",
     "Analyzed": "ai",
     "AI Analyzed": "ai",
@@ -649,8 +655,10 @@ def main():
             logger.info("DEBUG %s: perf_raw=%r  _perf_f=%s  rating=%s  _rating_f=%s",
                         ticker, perf_raw, entry["_perf_f"], entry.get("rating"), entry["_rating_f"])
 
-    # Step 4: Compute composite scores with penalties
+    # Step 4: Compute composite scores with collar multipliers and penalties
     collar_disqualified = []
+    # Columns where a 🔴 marker zeroes the composite score
+    RED_ZERO_COLS = ("short_outlook", "key_risks", "event_impact", "rev_consistency_score")
     for entry in ai_entries:
         raw = compute_composite_score(entry)
 
@@ -659,14 +667,19 @@ def main():
                 (entry["_ticker"], entry.get("_perf_f"))
             )
 
-        # Penalty from short_outlook emoji
+        # 🔴 on any of these columns → multiply by 0
+        for col in RED_ZERO_COLS:
+            val = str(entry.get(col, "")).strip()
+            if "🔴" in val:
+                raw *= 0
+                break
+
+        # 🟡 on short_outlook → ×0.50
         outlook = str(entry.get("short_outlook", "")).strip()
-        if outlook.startswith("🔴"):
-            raw *= 0.25
-        elif outlook.startswith("🟡"):
+        if outlook.startswith("🟡"):
             raw *= 0.50
 
-        # Penalty from 🟡 flags
+        # Penalty from 🟡 flags on any column
         if entry.get("_yellow_flags"):
             raw *= 0.50
 
