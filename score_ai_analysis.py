@@ -21,7 +21,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from scipy.stats import percentileofscore
 
 from tv_screen import run_tradingview_screen, fetch_market_data
 
@@ -64,6 +63,12 @@ HEADER_ALIASES = {
     "Rating": "rating",
     "Short Outlook": "short_outlook",
     "R40 Score": "r40_score",
+    "Key Risks": "key_risks",
+    "key_risks": "key_risks",
+    "Event Impact": "event_impact",
+    "event_impact": "event_impact",
+    "Rev Consistency Score": "rev_consistency_score",
+    "rev_consistency_score": "rev_consistency_score",
     "AI": "ai",
     "Analyzed": "ai",
     "AI Analyzed": "ai",
@@ -347,12 +352,19 @@ def load_manual_tickers(service, logger) -> set[str]:
 
 
 def parse_r40_score(r40_str):
-    """Parse r40_score like '💎💎💎 R40: 90' → 90."""
+    """Parse r40_score — handles both plain numeric and legacy '💎💎💎 R40: 90' format."""
     if not r40_str:
         return None
-    match = re.search(r"R40:\s*(\d+)", str(r40_str))
+    s = str(r40_str).strip()
+    # Try plain numeric first (new format)
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    # Legacy formatted string
+    match = re.search(r"R40:\s*(-?\d+)", s)
     if match:
-        return int(match.group(1))
+        return float(match.group(1))
     return None
 
 
@@ -431,52 +443,40 @@ def _rating_multiplier(rating):
     return 0.01
 
 
-def _collar_perf(perf):
-    """Apply strict momentum collar to perf_52w_vs_spy.
+def _perf_multiplier(perf):
+    """Return a multiplier based on 52-week performance vs SPY.
 
-    < -0.5  → None  (disqualified — falling knife)
-    > 0.4   → 0.4   (capped — avoid hype blow-off tops)
-    else    → perf   (pass through for linear scaling)
+    < -0.5  → 0.0   (falling knife — disqualify)
+    -0.5–0.4 → linear 0.0 → 1.0
+    > 0.4   → 1.0   (capped — no extra credit for blow-off tops)
+    None    → 1.0   (no data, no penalty)
     """
     if perf is None:
-        return perf
+        return 1.0
     if perf < -0.5:
-        return None  # sentinel: hard disqualify
-    return min(perf, 0.4)
+        return 0.0
+    if perf > 0.4:
+        return 1.0
+    return (perf + 0.5) / 0.9
 
 
-def compute_composite_score(row_data, all_rows):
-    """Calculate composite score using percentile-based weighting.
+def compute_composite_score(row_data):
+    """Calculate composite score: r40 × collar multipliers.
 
-    Base score (0–100) from three factors, then multiplied by a rating gate.
-    Performance is collared: < -0.5 disqualifies, > 0.4 capped.
-    Percentile ranking uses the collared values so scaling is linear
-    within the -0.5 to 0.4 band.
+    Base is the raw R40 score (rule_of_40 = rev_growth_ttm + net_margin).
+    Collars gate/scale the score:
+      - Rating:  1.0–1.2 ×1.0, 1.21–1.6 taper to ×0.01, >1.6 ×0.01
+      - Perf:    <-0.5 ×0, -0.5–0.4 linear 0→1, >0.4 ×1.0
     """
-    def pct(values, v, invert=False):
-        if v is None or not values:
-            return 0.5
-        p = percentileofscore(values, v, kind="mean") / 100
-        return (1 - p) if invert else p
-
-    # Hard disqualify: perf < -0.5
-    collared_perf = _collar_perf(row_data.get("_perf_f"))
-    if row_data.get("_perf_f") is not None and collared_perf is None:
+    r40 = row_data.get("_r40_f")
+    if r40 is None:
         return 0
 
-    all_ps = [r["_ps_now_f"] for r in all_rows if r.get("_ps_now_f") is not None]
-    all_r40 = [r["_r40_f"] for r in all_rows if r.get("_r40_f") is not None]
-    # Collar all perf values so percentile ranking scales within the band
-    all_perf = [_collar_perf(r["_perf_f"]) for r in all_rows
-                if r.get("_perf_f") is not None and _collar_perf(r["_perf_f"]) is not None]
-
-    base = (
-        pct(all_r40, row_data.get("_r40_f")) * 47
-        + pct(all_ps, row_data.get("_ps_now_f"), invert=True) * 29
-        + pct(all_perf, collared_perf) * 24
+    return (
+        r40
+        * _rating_multiplier(row_data.get("_rating_f"))
+        * _perf_multiplier(row_data.get("_perf_f"))
     )
-
-    return base * _rating_multiplier(row_data.get("_rating_f"))
 
 
 # ---------------------------------------------------------------------------
@@ -646,7 +646,6 @@ def main():
         entry["status"] = compute_status(entry, ps_data, screened_tickers, manual_tickers)
 
         # Scoring inputs
-        entry["_ps_now_f"] = ps_now
         perf_raw = entry.get("perf_52w_vs_spy")
         entry["_perf_f"] = _safe_float(perf_raw)
         entry["_r40_f"] = parse_r40_score(entry.get("r40_score", ""))
@@ -656,24 +655,31 @@ def main():
             logger.info("DEBUG %s: perf_raw=%r  _perf_f=%s  rating=%s  _rating_f=%s",
                         ticker, perf_raw, entry["_perf_f"], entry.get("rating"), entry["_rating_f"])
 
-    # Step 4: Compute composite scores with penalties
+    # Step 4: Compute composite scores with collar multipliers and penalties
     collar_disqualified = []
+    # Columns where a 🔴 marker zeroes the composite score
+    RED_ZERO_COLS = ("short_outlook", "key_risks", "event_impact", "rev_consistency_score")
     for entry in ai_entries:
-        raw = compute_composite_score(entry, ai_entries)
+        raw = compute_composite_score(entry)
 
         if raw == 0 and entry.get("_perf_f") is not None:
             collar_disqualified.append(
                 (entry["_ticker"], entry.get("_perf_f"))
             )
 
-        # Penalty from short_outlook emoji
+        # 🔴 on any of these columns → multiply by 0
+        for col in RED_ZERO_COLS:
+            val = str(entry.get(col, "")).strip()
+            if "🔴" in val:
+                raw *= 0
+                break
+
+        # 🟡 on short_outlook → ×0.50
         outlook = str(entry.get("short_outlook", "")).strip()
-        if outlook.startswith("🔴"):
-            raw *= 0.25
-        elif outlook.startswith("🟡"):
+        if outlook.startswith("🟡"):
             raw *= 0.50
 
-        # Penalty from 🟡 flags
+        # Penalty from 🟡 flags on any column
         if entry.get("_yellow_flags"):
             raw *= 0.50
 
