@@ -674,15 +674,6 @@ def main():
                 raw *= 0
                 break
 
-        # 🟡 on short_outlook → ×0.50
-        outlook = str(entry.get("short_outlook", "")).strip()
-        if outlook.startswith("🟡"):
-            raw *= 0.50
-
-        # Penalty from 🟡 flags on any column
-        if entry.get("_yellow_flags"):
-            raw *= 0.50
-
         entry["_composite_score"] = raw
         entry["composite_score"] = raw
         entry["scoring"] = date.today().isoformat()

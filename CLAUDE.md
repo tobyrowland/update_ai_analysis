@@ -98,7 +98,7 @@ LAST ANALYSIS: ai, data
 **Collars (multipliers on r40):**
 - **Rating:** 1.0–1.2 → ×1.0, 1.21–1.6 → linear taper ×1.0→×0.01, >1.6 → ×0.01 (disqualify)
 - **Momentum (perf_52w_vs_spy):** < -0.5 → ×0 (falling knife), -0.5–0.4 → linear ×0→×1.0, > 0.4 → ×1.0 (capped)
-**Penalties:** 🔴 on short_outlook/key_risks/event_impact/rev_consistency_score → ×0, 🟡 outlook ×0.50, 🟡 flags on any column ×0.50
+**Penalties:** 🔴 on short_outlook/key_risks/event_impact/rev_consistency_score → ×0
 
 ## Key Constants
 
