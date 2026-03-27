@@ -1666,10 +1666,13 @@ def main():
         if not exchange:
             exchange = "US"
 
-        # Skip if data is recent unless --force
+        # Skip if data is recent or previously flagged as unavailable
         if not args.force and fund_date_col is not None:
             fund_date_str = padded[fund_date_col].strip() if fund_date_col < len(padded) else ""
             if fund_date_str:
+                if fund_date_str == "No EODHD data":
+                    logger.info("Skipping %s — previously flagged as no EODHD data", ticker)
+                    continue
                 try:
                     last_date = dateparser.parse(fund_date_str).date()
                     if (date.today() - last_date) <= timedelta(days=STALENESS_DAYS):
@@ -1700,6 +1703,19 @@ def main():
                                             exchange=exchange, company=company)
             if eodhd_data is None:
                 errors += 1
+                # Flag the ticker so it's skipped on future runs and
+                # visibly marked in the sheet.
+                if not args.dry_run:
+                    data_col = key_col.get("data")
+                    snapshot_col = key_col.get("fundamentals_snapshot")
+                    flag_values = {}
+                    if data_col is not None:
+                        flag_values[_col_letter(data_col)] = "No EODHD data"
+                    if snapshot_col is not None:
+                        flag_values[_col_letter(snapshot_col)] = "No EODHD data"
+                    if flag_values:
+                        updates.append({"row": row_number, "values": flag_values})
+                        logger.info("Flagged %s as 'No EODHD data'", ticker)
                 continue
 
             if args.dry_run:
