@@ -528,10 +528,13 @@ EXCHANGE_TO_EODHD = {
     "OMXVIL":   "VS",      # Vilnius
     "OMXRIG":   "RG",      # Riga
     # Germany — Lang & Schwarz / Tradegate / misc
-    "LS":       "F",       # Lang & Schwarz → Frankfurt (EODHD has no LS)
-    "LSX":      "F",       # Lang & Schwarz Exchange
-    "LSIN":     "F",       # Lang & Schwarz Indicationen
-    "TRADEGATE":"F",       # Tradegate → Frankfurt
+    # These use WKN/ISIN codes (e.g. A12GFK, A406FX) that differ from EODHD
+    # tickers.  The exchange mapping here is just for the fallback chain;
+    # resolution mostly relies on the company-name search.
+    "LS":       "LS",
+    "LSX":      "LSX",
+    "LSIN":     "LSIN",
+    "TRADEGATE":"TRADEGATE",
     # Asia-Pacific
     "HKG":      "HK",
     "HKEX":     "HK",
@@ -600,6 +603,11 @@ EXCHANGE_FALLBACKS = {
     "PA":    ["US", "AS"],
     "MI":    ["US"],
     "MC":    ["US"],
+    # Germany — secondary exchanges (WKN codes, need search API)
+    "LS":        ["XETRA", "F", "US"],
+    "LSX":       ["XETRA", "F", "US"],
+    "LSIN":      ["XETRA", "F", "US"],
+    "TRADEGATE": ["XETRA", "F", "US"],
     # UK
     "LSE":   ["US"],
     # Canada
@@ -734,30 +742,42 @@ def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger,
     EXCHANGE_FALLBACKS, and finally falls back to the EODHD search API
     (searching by both ticker code and company name).
     """
-    # Strip share-class suffixes used on some exchanges (e.g. BMV: VISTA/A,
-    # ARGX/N; Copenhagen: NSIS_B).  These aren't part of the EODHD ticker.
-    clean_ticker = ticker.split("/")[0]       # VISTA/A → VISTA
-    clean_ticker = clean_ticker.split("_")[0] # NSIS_B  → NSIS
-    if clean_ticker != ticker:
-        logger.info("Stripped ticker suffix: %s → %s", ticker, clean_ticker)
-    ticker = clean_ticker
-
     primary = _resolve_exchange(exchange)
-    logger.info("Fetching fundamentals for %s (exchange: %s → %s)", ticker, exchange, primary)
+
+    # Strip share-class suffixes used on certain exchanges before EODHD lookup.
+    # Only apply for exchanges known to use these conventions:
+    #   - BMV (Mexico): VISTA/A, ARGX/N  → strip /suffix
+    #   - Nordic (CO, ST): NSIS_B         → strip _suffix
+    clean_ticker = ticker
+    exch_upper = exchange.strip().upper()
+    if "/" in ticker and exch_upper in ("BMV", "MX", "MEX"):
+        clean_ticker = ticker.split("/")[0]
+    if "_" in ticker and exch_upper in ("OMXCOP", "OMXSTO", "OMXHEX",
+                                         "CPH", "STO", "CO", "ST", "HE"):
+        clean_ticker = ticker.split("_")[0]
+    if clean_ticker != ticker:
+        logger.info("Stripped ticker suffix: %s → %s (exchange: %s)",
+                     ticker, clean_ticker, exchange)
+
+    logger.info("Fetching fundamentals for %s (exchange: %s → %s)",
+                clean_ticker, exchange, primary)
 
     # Retryable status codes: 404 (not found), 0 (network error),
     # -1 (200 OK but no usable financial data)
     RETRYABLE = (404, 0, -1)
     tried = {primary}
 
+    # Use clean_ticker for all EODHD API calls
+    t = clean_ticker
+
     # 1. Try primary exchange
-    data, status = _try_fetch_one(ticker, primary, api_key)
+    data, status = _try_fetch_one(t, primary, api_key)
     if data is not None:
         return data
     if status == -1:
-        logger.info("  %s.%s returned data but no financials — trying fallbacks", ticker, primary)
+        logger.info("  %s.%s returned data but no financials — trying fallbacks", t, primary)
     if status not in RETRYABLE:
-        logger.warning("EODHD HTTP %d for %s.%s, not retrying", status, ticker, primary)
+        logger.warning("EODHD HTTP %d for %s.%s, not retrying", status, t, primary)
         return None
 
     # 2. Try fallback exchanges (same ticker code, different exchange)
@@ -766,23 +786,23 @@ def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger,
         if alt in tried:
             continue
         tried.add(alt)
-        logger.info("  Trying fallback %s.%s", ticker, alt)
+        logger.info("  Trying fallback %s.%s", t, alt)
         time.sleep(0.3)
-        data, status = _try_fetch_one(ticker, alt, api_key)
+        data, status = _try_fetch_one(t, alt, api_key)
         if data is not None:
-            logger.info("  Found %s on %s (fallback from %s)", ticker, alt, primary)
+            logger.info("  Found %s on %s (fallback from %s)", t, alt, primary)
             return data
         if status not in RETRYABLE:
             logger.warning("EODHD HTTP %d for %s.%s, stopping fallback chain",
-                           status, ticker, alt)
+                           status, t, alt)
             return None
 
     # 3. Search API — try by ticker code first
-    logger.info("  All fallbacks exhausted for %s, trying search API", ticker)
-    result = _search_eodhd(ticker, api_key, logger, original_ticker=ticker)
+    logger.info("  All fallbacks exhausted for %s, trying search API", t)
+    result = _search_eodhd(t, api_key, logger, original_ticker=t)
     if result:
         search_ticker, search_exchange = result
-        if search_exchange not in tried or search_ticker.upper() != ticker.upper():
+        if search_exchange not in tried or search_ticker.upper() != t.upper():
             time.sleep(0.3)
             data, status = _try_fetch_one(search_ticker, search_exchange, api_key)
             if data is not None:
@@ -793,15 +813,15 @@ def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger,
 
     # 3b. For OTC foreign tickers (ending in F or Y), strip suffix and
     #     search for the underlying ticker — e.g. ADYYF → ADYY → Adyen
-    if primary == "US" and len(ticker) > 2 and ticker[-1] in ("F", "Y"):
-        base_ticker = ticker[:-1]
-        if base_ticker.upper() != ticker.upper():
+    if primary == "US" and len(t) > 2 and t[-1] in ("F", "Y"):
+        base_ticker = t[:-1]
+        if base_ticker.upper() != t.upper():
             logger.info("  Trying OTC base ticker search: %s", base_ticker)
             time.sleep(0.3)
-            result = _search_eodhd(base_ticker, api_key, logger, original_ticker=ticker)
+            result = _search_eodhd(base_ticker, api_key, logger, original_ticker=t)
             if result:
                 search_ticker, search_exchange = result
-                if search_exchange not in tried or search_ticker.upper() != ticker.upper():
+                if search_exchange not in tried or search_ticker.upper() != t.upper():
                     time.sleep(0.3)
                     data, status = _try_fetch_one(search_ticker, search_exchange, api_key)
                     if data is not None:
@@ -818,10 +838,10 @@ def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger,
         search_name = " ".join(company.split()[:3])
         logger.info("  Searching by company name: '%s'", search_name)
         time.sleep(0.3)
-        result = _search_eodhd(search_name, api_key, logger, original_ticker=ticker)
+        result = _search_eodhd(search_name, api_key, logger, original_ticker=t)
         if result:
             search_ticker, search_exchange = result
-            if search_exchange not in tried or search_ticker.upper() != ticker.upper():
+            if search_exchange not in tried or search_ticker.upper() != t.upper():
                 time.sleep(0.3)
                 data, status = _try_fetch_one(search_ticker, search_exchange, api_key)
                 if data is not None:
@@ -830,7 +850,7 @@ def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger,
                     return data
 
     logger.warning("Could not find fundamentals for %s on any exchange "
-                   "(tried %s + search)", ticker, tried)
+                   "(tried %s + search)", ticker, tried)  # log original ticker
     return None
 
 
