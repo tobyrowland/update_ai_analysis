@@ -235,20 +235,6 @@ def load_ai_analysis(service, logger) -> tuple[list[dict], dict[str, int]]:
         for key, idx in col_map.items():
             entry[key] = padded[idx].strip() if idx < len(padded) else ""
 
-        # Detect red/yellow flags (🔴/🟡 markers on any column)
-        red_flags = []
-        yellow_flags = []
-        for col_name, col_idx in col_map.items():
-            if col_name in ("ticker", "status", "composite_score"):
-                continue
-            cell_val = padded[col_idx].strip() if col_idx < len(padded) else ""
-            if "🔴" in cell_val:
-                red_flags.append(col_name)
-            if "🟡" in cell_val:
-                yellow_flags.append(col_name)
-        entry["_red_flags"] = red_flags
-        entry["_yellow_flags"] = yellow_flags
-
         data.append(entry)
 
     logger.info("Loaded %d tickers from AI Analysis", len(data))
@@ -391,19 +377,13 @@ def _status_base(status_str):
 def compute_status(entry, ps_data, screened_tickers, manual_tickers):
     """Determine status for a single ticker."""
     ticker = entry["_ticker"]
-    red_flags = entry.get("_red_flags", [])
     has_ai = bool(entry.get("ai", "").strip())
     has_eodhd = bool(entry.get("data", "").strip())
     is_manual = ticker in manual_tickers
     is_screened = ticker in screened_tickers
     is_manual_only = is_manual and not is_screened
 
-    if red_flags:
-        flag_names = ", ".join(red_flags[:3])
-        if is_manual_only:
-            return f"📌❌ {flag_names}"
-        return f"❌ {flag_names}"
-
+    # Only hard exclusion: unprofitable Health Technology
     sector = entry.get("sector", "")
     net_margin = _safe_float(entry.get("net_margin%", ""))
     if sector == "Health Technology" and net_margin is not None and net_margin < 0:
