@@ -23,6 +23,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 from tv_screen import run_tradingview_screen, fetch_market_data
+from nightly_screen import ticker_hyperlink
 
 load_dotenv()
 
@@ -505,6 +506,14 @@ def write_sorted_sheet(service, entries: list[dict], col_map: dict, raw_rows: li
             row_data += [""] * (max_col - len(row_data))
         else:
             row_data = [""] * max_col
+
+        # Repair ticker cell: ensure it has a HYPERLINK formula
+        ticker_idx = col_map.get("ticker")
+        if ticker_idx is not None:
+            ticker_val = row_data[ticker_idx] if ticker_idx < len(row_data) else ""
+            if not str(ticker_val).startswith("=HYPERLINK"):
+                exchange = entry.get("exchange", "")
+                row_data[ticker_idx] = ticker_hyperlink(entry["_ticker"], exchange)
 
         # Update screening columns
         for col_name in SCREENING_COLS:
