@@ -507,13 +507,14 @@ def write_sorted_sheet(service, entries: list[dict], col_map: dict, raw_rows: li
         else:
             row_data = [""] * max_col
 
-        # Repair ticker cell: ensure it has a HYPERLINK formula
+        # Repair/regenerate ticker HYPERLINK formula
         ticker_idx = col_map.get("ticker")
         if ticker_idx is not None:
-            ticker_val = row_data[ticker_idx] if ticker_idx < len(row_data) else ""
-            if not str(ticker_val).startswith("=HYPERLINK"):
-                exchange = entry.get("exchange", "")
-                row_data[ticker_idx] = ticker_hyperlink(entry["_ticker"], exchange)
+            row_data[ticker_idx] = ticker_hyperlink(
+                entry["_ticker"],
+                entry.get("exchange", ""),
+                entry.get("company_name", ""),
+            )
 
         # Update screening columns
         for col_name in SCREENING_COLS:
