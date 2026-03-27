@@ -60,8 +60,6 @@ TV_TO_GF_EXCHANGE = {
     "TSXV": "CVE",
     "LSE": "LON",
     "LON": "LON",
-    "LSX": "LON",
-    "LSIN": "LON",
     "ASX": "ASX",
     "NSE": "NSE",
     "BSE": "BOM",
@@ -85,14 +83,11 @@ TV_TO_GF_EXCHANGE = {
     "OMXVSE": "VSE",
     "OMXRSE": "RSE",
     "XETR": "ETR",
-    "GETTEX": "ETR",
-    "DUS": "ETR",
     "FWB": "FRA",
     "SWX": "SWX",
     "SIX": "SWX",
     "VIE": "VIE",
     "EURONEXT": "EPA",
-    "EUROTLX": "BIT",
     "MIL": "BIT",
     "BME": "BME",
     "ATHEX": "ATH",
@@ -109,11 +104,25 @@ TV_TO_GF_EXCHANGE = {
     "PSE": "PSE",
 }
 
+# Exchanges where ticker symbols differ from the main exchange listing.
+# These use a Google Finance search URL instead of a direct quote link.
+SEARCH_FALLBACK_EXCHANGES = {
+    "GETTEX", "DUS", "LSX", "LSIN", "EUROTLX",
+}
 
-def ticker_hyperlink(ticker: str, exchange: str) -> str:
-    """Build a Google Sheets HYPERLINK formula pointing to Google Finance."""
-    gf_exchange = TV_TO_GF_EXCHANGE.get(exchange, exchange)
-    url = f"https://www.google.com/finance/quote/{ticker}:{gf_exchange}"
+
+def ticker_hyperlink(ticker: str, exchange: str, company_name: str = "") -> str:
+    """Build a Google Sheets HYPERLINK formula pointing to Google Finance.
+
+    For exchanges with non-standard ticker symbols (GETTEX, LSX, LSIN, etc.),
+    falls back to a Google Finance search using the company name.
+    """
+    if exchange in SEARCH_FALLBACK_EXCHANGES:
+        query = company_name or ticker
+        url = f"https://www.google.com/finance?q={query}"
+    else:
+        gf_exchange = TV_TO_GF_EXCHANGE.get(exchange, exchange)
+        url = f"https://www.google.com/finance/quote/{ticker}:{gf_exchange}"
     return f'=HYPERLINK("{url}", "{ticker}")'
 
 
@@ -331,7 +340,8 @@ def add_new_tickers(service, new_tickers: list[dict], col_map: dict, logger):
         row = [""] * max_col
         if "ticker" in col_map:
             row[col_map["ticker"]] = ticker_hyperlink(
-                eq["ticker"], eq.get("exchange", "")
+                eq["ticker"], eq.get("exchange", ""),
+                eq.get("company_name", ""),
             )
         if "exchange" in col_map:
             row[col_map["exchange"]] = eq.get("exchange", "")
