@@ -178,7 +178,8 @@ def _safe_float(val):
         return None
 
 
-def read_sheet(service, sheet_name: str, end_col: str = "AZ"):
+def read_sheet(service, sheet_name: str, end_col: str = "AZ",
+               value_render: str = "FORMATTED_VALUE"):
     """Read all rows from a sheet tab."""
     result = (
         service.spreadsheets()
@@ -186,7 +187,7 @@ def read_sheet(service, sheet_name: str, end_col: str = "AZ"):
         .get(
             spreadsheetId=SPREADSHEET_ID,
             range=f"'{sheet_name}'!A1:{end_col}",
-            valueRenderOption="FORMATTED_VALUE",
+            valueRenderOption=value_render,
         )
         .execute()
     )
@@ -558,8 +559,8 @@ def main():
     # Step 1: Load all data sources
     logger.info("Step 1: Loading data sources...")
 
-    # Read raw AI Analysis rows (we need them for the sorted rewrite)
-    raw_rows = read_sheet(service, AI_ANALYSIS_SHEET)
+    # Read raw AI Analysis rows with FORMULA to preserve HYPERLINK formulas
+    raw_rows = read_sheet(service, AI_ANALYSIS_SHEET, value_render="FORMULA")
 
     ai_entries, col_map = load_ai_analysis(service, logger)
     if not ai_entries:
