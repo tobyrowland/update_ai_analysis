@@ -1436,43 +1436,10 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
         result["one_time_events"] = None
 
     # ── R40 Score ─────────────────────────────────────────────────────
-    # Format: 💎💎 R40: 54 | FCF +27% | ⏳ ~12 qtrs GAAP
-    #
-    # Gem scale calibrated to screened universe (GM>45%, RevGr>20%):
-    #   no gems  = R40 < 20  (weakest in this universe)
-    #   💎       = R40 20–39
-    #   💎💎     = R40 40–59
-    #   💎💎💎   = R40 60+
+    # Plain numeric value (rule_of_40 rounded to nearest integer).
     r40 = result.get("rule_of_40")
     if r40 is not None:
-        if r40 >= 60:
-            gem_str = "\U0001f48e\U0001f48e\U0001f48e"   # 💎💎💎
-        elif r40 >= 40:
-            gem_str = "\U0001f48e\U0001f48e"              # 💎💎
-        elif r40 >= 20:
-            gem_str = "\U0001f48e"                        # 💎
-        else:
-            gem_str = ""                                  # no gems
-
-        # FCF segment
-        fcf = result.get("fcf_margin")
-        fcf_str = f"FCF {'+' if fcf >= 0 else ''}{fcf:.0f}%" if fcf is not None else None
-
-        # Profitability status segment
-        nm = result.get("net_margin")
-        qtrs = qtrs_to_prof
-        if nm is not None and nm >= 0:
-            profit_str = "\u2705"                          # ✅
-        elif qtrs is not None:
-            profit_str = f"\u23f3 ~{qtrs:.0f} qtrs GAAP"  # ⏳
-        else:
-            profit_str = "\u2753 path unclear"             # ❓
-
-        r40_parts = [f"{gem_str} R40: {r40:.0f}".strip()]
-        if fcf_str:
-            r40_parts.append(fcf_str)
-        r40_parts.append(profit_str)
-        result["r40_score"] = " | ".join(r40_parts)
+        result["r40_score"] = round(r40)
 
     # ── Fundamentals Snapshot ─────────────────────────────────────────
     # Format: Rev +27% YoY | 3Y CAGR +44% | GM 88% ↑ | Net -5% ⚡ FCF +27% | ⏳ ~12 qtrs GAAP
