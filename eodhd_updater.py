@@ -544,9 +544,26 @@ EXCHANGE_TO_EODHD = {
     "EPA":      "PA",
     "PAR":      "PA",
     "AMS":      "AS",
+    "EURONEXT": "AS",      # Generic Euronext → Amsterdam (fallback tries PA)
     "SWX":      "SW",
     "BIT":      "MI",
     "BME":      "MC",
+    "VIE":      "VIE",     # Vienna Stock Exchange
+    "WBAG":     "VIE",
+    "OMXCOP":   "CO",      # Copenhagen (Nasdaq Nordic)
+    "CPH":      "CO",
+    "OMXSTO":   "ST",      # Stockholm (Nasdaq Nordic)
+    "STO":      "ST",
+    "OMXHEX":   "HE",      # Helsinki (Nasdaq Nordic)
+    "OMXICE":   "IC",      # Iceland (Nasdaq Nordic)
+    "OMXTAL":   "TL",      # Tallinn
+    "OMXVIL":   "VS",      # Vilnius
+    "OMXRIG":   "RG",      # Riga
+    # Germany — Lang & Schwarz / Tradegate / misc
+    "LS":       "F",       # Lang & Schwarz → Frankfurt (EODHD has no LS)
+    "LSX":      "F",       # Lang & Schwarz Exchange
+    "LSIN":     "F",       # Lang & Schwarz Indicationen
+    "TRADEGATE":"F",       # Tradegate → Frankfurt
     # Asia-Pacific
     "HKG":      "HK",
     "HKEX":     "HK",
@@ -557,15 +574,25 @@ EXCHANGE_TO_EODHD = {
     "SGX":      "SG",
     "ASX":      "AU",
     "NZX":      "NZ",
+    # Malaysia
+    "MYX":      "KLSE",
+    "KLSE":     "KLSE",
+    # Vietnam
+    "HOSE":     "VN",
+    "HNX":      "VN",
     # Americas
     "TSX":      "TO",
     "TSXV":     "V",
     "SAO":      "SA",
     "BVMF":     "SA",
+    "BMV":      "MX",      # Mexico (Bolsa Mexicana de Valores)
+    "MEX":      "MX",
     # Africa / Middle East
     "JSE":      "JSE",
     "TADAWUL":  "SR",
     "SAU":      "SR",
+    "DFM":      "DFM",     # Dubai Financial Market
+    "ADX":      "ADX",     # Abu Dhabi Securities Exchange
     "NSENG":    "NSENG",   # Nigerian Stock Exchange (via EODHD code)
     "NGS":      "NSENG",
     "NGSE":     "NSENG",
@@ -616,6 +643,22 @@ EXCHANGE_FALLBACKS = {
     "KO":    ["US"],
     # Australia
     "AU":    ["US"],
+    # Nordics
+    "CO":    ["XETRA", "F", "US"],  # Copenhagen
+    "ST":    ["XETRA", "F", "US"],  # Stockholm
+    "HE":    ["XETRA", "F", "US"],  # Helsinki
+    "IC":    ["US"],                  # Iceland
+    # Vienna
+    "VIE":   ["XETRA", "F", "SW", "US"],
+    # Malaysia
+    "KLSE":  ["SG", "US"],
+    # Vietnam
+    "VN":    ["US"],
+    # Mexico
+    "MX":    ["US"],
+    # Middle East
+    "DFM":   ["US"],  # Dubai
+    "ADX":   ["US"],  # Abu Dhabi
     # Nigeria
     "NSENG": ["LSE", "US"],
 }
@@ -723,6 +766,14 @@ def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger,
     EXCHANGE_FALLBACKS, and finally falls back to the EODHD search API
     (searching by both ticker code and company name).
     """
+    # Strip share-class suffixes used on some exchanges (e.g. BMV: VISTA/A,
+    # ARGX/N; Copenhagen: NSIS_B).  These aren't part of the EODHD ticker.
+    clean_ticker = ticker.split("/")[0]       # VISTA/A → VISTA
+    clean_ticker = clean_ticker.split("_")[0] # NSIS_B  → NSIS
+    if clean_ticker != ticker:
+        logger.info("Stripped ticker suffix: %s → %s", ticker, clean_ticker)
+    ticker = clean_ticker
+
     primary = _resolve_exchange(exchange)
     logger.info("Fetching fundamentals for %s (exchange: %s → %s)", ticker, exchange, primary)
 
@@ -1614,10 +1665,13 @@ def main():
         if not exchange:
             exchange = "US"
 
-        # Skip if data is recent unless --force
+        # Skip if data is recent or previously flagged as unavailable
         if not args.force and fund_date_col is not None:
             fund_date_str = padded[fund_date_col].strip() if fund_date_col < len(padded) else ""
             if fund_date_str:
+                if fund_date_str == "No EODHD data":
+                    logger.info("Skipping %s — previously flagged as no EODHD data", ticker)
+                    continue
                 try:
                     last_date = dateparser.parse(fund_date_str).date()
                     if (date.today() - last_date) <= timedelta(days=STALENESS_DAYS):
@@ -1648,6 +1702,19 @@ def main():
                                             exchange=exchange, company=company)
             if eodhd_data is None:
                 errors += 1
+                # Flag the ticker so it's skipped on future runs and
+                # visibly marked in the sheet.
+                if not args.dry_run:
+                    data_col = key_col.get("data")
+                    snapshot_col = key_col.get("fundamentals_snapshot")
+                    flag_values = {}
+                    if data_col is not None:
+                        flag_values[_col_letter(data_col)] = "No EODHD data"
+                    if snapshot_col is not None:
+                        flag_values[_col_letter(snapshot_col)] = "No EODHD data"
+                    if flag_values:
+                        updates.append({"row": row_number, "values": flag_values})
+                        logger.info("Flagged %s as 'No EODHD data'", ticker)
                 continue
 
             if args.dry_run:
