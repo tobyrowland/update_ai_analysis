@@ -87,12 +87,11 @@ LAST ANALYSIS: ai, data
 ```
 
 **Status (auto-assigned):**
-- 🟢 Eligible — has dates in both `ai` and `data` columns, no 🔴 flags
+- 🟢 Eligible — has dates in both `ai` and `data` columns
 - 🏷️ Discount — P/S >20% below 12-month median
-- 📌 Manual — manual-only ticker (not in TradingView screen), no flags
-- 📌❌ Manual Excluded — manual ticker with 🔴 flags
+- 📌 Manual — manual-only ticker (not in TradingView screen)
 - 🆕 New — missing `ai` or `data` date
-- ❌ Excluded — 🔴 marker on any column; sorted to bottom with note of flagged columns
+- ❌ Unprofitable Health Tech — Health Technology sector with negative net margin (only hard exclusion)
 
 **Composite score:** `r40 × collar_multipliers`
 **Collars (multipliers on r40):**
