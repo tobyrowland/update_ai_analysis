@@ -130,6 +130,84 @@ HEADER_ALIASES = {
     "Sector": "sector",
 }
 
+# TradingView exchange → Google Finance exchange code for HYPERLINK URLs.
+# Google Finance URL format: https://www.google.com/finance/quote/TICKER:EXCHANGE
+TV_TO_GF_EXCHANGE = {
+    "NASDAQ": "NASDAQ",
+    "NYSE": "NYSE",
+    "NYSEARCA": "NYSEARCA",
+    "NYSEMKT": "NYSEAMERICAN",
+    "AMEX": "NYSEAMERICAN",
+    "OTC": "OTCMKTS",
+    "TSX": "TSE",
+    "TSXV": "CVE",
+    "LSE": "LON",
+    "LON": "LON",
+    "ASX": "ASX",
+    "NSE": "NSE",
+    "BSE": "BOM",
+    "NSENG": "NGM",
+    "TASE": "TLV",
+    "SGX": "SGX",
+    "KRX": "KRX",
+    "TWSE": "TPE",
+    "SET": "BKK",
+    "BURSA": "KLSE",
+    "IDX": "IDX",
+    "MOEX": "MCX",
+    "BOVESPA": "BVMF",
+    "BMV": "BMV",
+    "BCS": "SNSE",
+    "OMXSTO": "STO",
+    "OMXCOP": "CPH",
+    "OMXHEX": "HEL",
+    "OMXTSE": "TAL",
+    "OMXICE": "ICE",
+    "OMXVSE": "VSE",
+    "OMXRSE": "RSE",
+    "XETR": "ETR",
+    "FWB": "FRA",
+    "SWX": "SWX",
+    "SIX": "SWX",
+    "VIE": "VIE",
+    "EURONEXT": "EPA",
+    "MIL": "BIT",
+    "BME": "BME",
+    "ATHEX": "ATH",
+    "BIST": "IST",
+    "WSE": "WSE",
+    "JSE": "JSE",
+    "TADAWUL": "TADAWUL",
+    "QSE": "DSM",
+    "ADX": "ADX",
+    "DFM": "DFM",
+    "NZX": "NZE",
+    "TSE": "TYO",
+    "HOSE": "HM",
+    "PSE": "PSE",
+}
+
+# Exchanges where ticker symbols differ from the main exchange listing.
+# These use a Google Finance search URL instead of a direct quote link.
+SEARCH_FALLBACK_EXCHANGES = {
+    "GETTEX", "DUS", "LSX", "LSIN", "EUROTLX",
+}
+
+
+def ticker_hyperlink(ticker: str, exchange: str, company_name: str = "") -> str:
+    """Build a Google Sheets HYPERLINK formula pointing to Google Finance.
+
+    For exchanges with non-standard ticker symbols (GETTEX, LSX, LSIN, etc.),
+    falls back to a Google Finance search using the company name.
+    """
+    if exchange in SEARCH_FALLBACK_EXCHANGES:
+        query = company_name or ticker
+        url = f"https://www.google.com/finance?q={query}"
+    else:
+        gf_exchange = TV_TO_GF_EXCHANGE.get(exchange, exchange)
+        url = f"https://www.google.com/finance/quote/{ticker}:{gf_exchange}"
+    return f'=HYPERLINK("{url}", "{ticker}")'
+
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -345,8 +423,10 @@ def add_new_tickers(service, new_tickers: list[dict], col_map: dict, logger):
     for eq in new_tickers:
         row = [""] * max_col
         if "ticker" in col_map:
-            exchange = eq.get("exchange", "")
-            row[col_map["ticker"]] = _ticker_hyperlink(eq["ticker"], exchange) if exchange else eq["ticker"]
+            row[col_map["ticker"]] = ticker_hyperlink(
+                eq["ticker"], eq.get("exchange", ""),
+                eq.get("company_name", ""),
+            )
         if "exchange" in col_map:
             row[col_map["exchange"]] = eq.get("exchange", "")
         if "company_name" in col_map:
