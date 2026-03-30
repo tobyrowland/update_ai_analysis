@@ -3,7 +3,8 @@
 Build Portfolio — Populate Portfolio sheet with dual-positive equities.
 
 Reads AI Analysis sheet, finds equities where both Bear and Bull columns
-have a \u2705, and writes them to the Portfolio sheet with relevant data.
+have a ✅, deduplicates by company (favouring ADRs/US listings), and writes
+them to the Portfolio sheet with relevant data.
 
 Schedule: Sundays 08:00 UTC (after bear + bull evaluations).
 """
@@ -35,6 +36,11 @@ PORTFOLIO_SHEET = "Portfolio"
 NULL_VALUE = "\u2014"
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+# US exchanges — ADRs and primary US listings live here
+US_EXCHANGES = {
+    "NYSE", "NASDAQ", "AMEX", "NYSEARCA", "BATS", "ARCA",
+}
 
 # Map AI Analysis headers to canonical keys
 HEADER_ALIASES = {
@@ -73,7 +79,6 @@ HEADER_ALIASES = {
 }
 
 # Columns to copy from AI Analysis -> Portfolio
-# Maps Portfolio column header -> AI Analysis canonical key
 PORTFOLIO_COLUMNS = [
     "ticker",
     "exchange",
@@ -179,6 +184,75 @@ def _safe_float(val):
         return None
 
 
+def _is_us_exchange(exchange_val):
+    """Check if exchange is a US exchange (ADR-friendly)."""
+    return exchange_val.strip().upper() in US_EXCHANGES
+
+
+# ---------------------------------------------------------------------------
+# Deduplication
+# ---------------------------------------------------------------------------
+
+
+def deduplicate_by_company(entries, exchange_idx, company_idx, score_idx, logger):
+    """
+    Deduplicate entries by company_name, favouring ADRs (US exchange listings).
+
+    For each company_name, pick:
+      1. The US-listed version (ADR) if available
+      2. Otherwise the one with the highest composite_score
+
+    entries: list of (ticker, padded_row)
+    Returns: deduplicated list of (ticker, padded_row)
+    """
+    # Group by normalised company name
+    groups = {}
+    for ticker, padded in entries:
+        company = padded[company_idx].strip().upper() if company_idx is not None else ticker
+        if not company:
+            company = ticker  # fallback to ticker if no company name
+        if company not in groups:
+            groups[company] = []
+        groups[company].append((ticker, padded))
+
+    deduped = []
+    for company, candidates in groups.items():
+        if len(candidates) == 1:
+            deduped.append(candidates[0])
+            continue
+
+        # Multiple listings for same company — pick best one
+        tickers = [t for t, _ in candidates]
+        logger.info("  Dedup: %s has %d listings: %s", company, len(candidates), tickers)
+
+        # Prefer US exchange (ADR)
+        us_candidates = [
+            (t, p) for t, p in candidates
+            if exchange_idx is not None and _is_us_exchange(p[exchange_idx])
+        ]
+
+        if us_candidates:
+            # Among US listings, pick highest composite_score
+            best = max(
+                us_candidates,
+                key=lambda x: _safe_float(x[1][score_idx]) or 0.0 if score_idx is not None else 0.0,
+            )
+            logger.info("    -> Picked ADR: %s (%s)", best[0],
+                        best[1][exchange_idx].strip() if exchange_idx is not None else "?")
+        else:
+            # No US listing — pick highest composite_score
+            best = max(
+                candidates,
+                key=lambda x: _safe_float(x[1][score_idx]) or 0.0 if score_idx is not None else 0.0,
+            )
+            logger.info("    -> Picked best score: %s (%s)", best[0],
+                        best[1][exchange_idx].strip() if exchange_idx is not None else "?")
+
+        deduped.append(best)
+
+    return deduped
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -216,10 +290,14 @@ def main():
         col_map[name] = idx
     logger.info("AI Analysis column map: %s", {k: v for k, v in col_map.items()})
 
-    # Verify bear and bull columns exist
+    # Verify required columns exist
     bear_idx = col_map.get("bear")
     bull_idx = col_map.get("bull")
     ticker_idx = col_map.get("ticker")
+    exchange_idx = col_map.get("exchange")
+    company_idx = col_map.get("company_name")
+    score_idx = col_map.get("composite_score")
+
     if bear_idx is None:
         logger.error("'bear' column not found in AI Analysis")
         sys.exit(1)
@@ -231,7 +309,7 @@ def main():
         sys.exit(1)
 
     # ---------------------------------------------------------------
-    # Find dual-positive equities (both bear and bull have \u2705)
+    # Find dual-positive equities (both bear and bull have ✅)
     # ---------------------------------------------------------------
     max_idx = max(col_map.values())
     dual_positive = []
@@ -247,13 +325,25 @@ def main():
                 continue
             dual_positive.append((ticker, padded))
 
-    logger.info("Found %d equities with both Bear \u2705 and Bull \u2705", len(dual_positive))
+    logger.info("Found %d equities with both Bear ✅ and Bull ✅", len(dual_positive))
 
     if not dual_positive:
         logger.warning("No dual-positive equities found. Portfolio will be cleared.")
 
+    # ---------------------------------------------------------------
+    # Deduplicate by company name (favour ADR / US listing)
+    # ---------------------------------------------------------------
+    if dual_positive and company_idx is not None:
+        before_count = len(dual_positive)
+        dual_positive = deduplicate_by_company(
+            dual_positive, exchange_idx, company_idx, score_idx, logger,
+        )
+        after_count = len(dual_positive)
+        if before_count != after_count:
+            logger.info("Deduplicated: %d -> %d (removed %d duplicates)",
+                        before_count, after_count, before_count - after_count)
+
     # Sort by composite_score descending
-    score_idx = col_map.get("composite_score")
     if score_idx is not None:
         dual_positive.sort(
             key=lambda x: _safe_float(x[1][score_idx]) or 0.0,
@@ -291,7 +381,6 @@ def main():
     # Write to Portfolio sheet
     # ---------------------------------------------------------------
     # First, clear existing data rows (keep header row 1)
-    # Read portfolio to find how many rows to clear
     portfolio_data = read_sheet(service, PORTFOLIO_SHEET, end_col="L")
     existing_rows = len(portfolio_data)
     logger.info("Portfolio sheet currently has %d rows (including header)", existing_rows)
