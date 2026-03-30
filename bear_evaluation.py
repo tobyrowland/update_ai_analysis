@@ -80,7 +80,8 @@ HEADER_ALIASES = {
 EXCLUDED_COLUMNS = {
     "status", "composite_score", "price", "ps_now",
     "price_pct_of_52w_high", "price_%_of_52w_high",
-    "perf_52w_vs_spy", "rating", "ai", "data", "scoring", "bear",
+    "perf_52w_vs_spy", "rating", "ai", "data", "scoring", "price data",
+    "price_data", "bear",
 }
 
 # ---------------------------------------------------------------------------
@@ -376,7 +377,16 @@ def call_gemini_bear(prompt, api_key, logger):
                 raise Exception(
                     f"{data['error'].get('code')} {data['error'].get('message', '')}"
                 )
-            text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            # Thinking models (gemini-2.5-pro) return multiple parts:
+            # thought parts first, then the actual response.
+            parts = data["candidates"][0]["content"]["parts"]
+            text_parts = [p["text"] for p in parts if not p.get("thought")]
+            if not text_parts:
+                # Fallback: use all parts if none lack the thought flag
+                text_parts = [p["text"] for p in parts]
+            text = text_parts[-1].strip() if text_parts else ""
+            if not text:
+                raise Exception("Empty response from Gemini")
             return text
 
         except Exception as exc:
