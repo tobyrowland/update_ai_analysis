@@ -1,0 +1,39 @@
+name: Bear Evaluation
+
+on:
+  schedule:
+    # Runs at 07:00 UTC every Sunday (after score_ai_analysis)
+    - cron: "0 7 * * 0"
+  workflow_dispatch: # Allow manual trigger from GitHub UI
+
+jobs:
+  bear-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Bear Evaluation
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python bear_evaluation.py
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bear-eval-logs-${{ github.run_id }}
+          path: logs/
+          retention-days: 30
