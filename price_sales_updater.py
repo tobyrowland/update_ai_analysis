@@ -416,14 +416,27 @@ def update_rows_by_ticker(service, sheet_name: str, updates: list[dict], logger)
         logger.info("Updated %d rows in %s", len(batch_data), sheet_name)
 
 
-def update_ai_analysis_ps_now(service, all_results: list[dict], logger):
-    """Write ps_now values back to the AI Analysis sheet's ps_now column.
+def update_ai_analysis_price_sales(service, all_results: list[dict], logger):
+    """Write price-sales data back to the AI Analysis sheet.
 
-    Reads the AI Analysis header row to find the ps_now column dynamically,
-    then batch-updates every ticker that was processed.
+    Syncs ps_now, 52w_high, 52w_low, 12m_median, ath, %_of_ath,
+    history_json, and the 'price data' date column.
+    Reads the AI Analysis header row to find columns dynamically.
     """
     if not all_results:
         return
+
+    # Columns to sync: result dict key → AI Analysis header name
+    SYNC_COLUMNS = {
+        "ps_now":       "ps_now",
+        "52w_high":     "52w_high",
+        "52w_low":      "52w_low",
+        "12m_median":   "12m_median",
+        "ath":          "ath",
+        "%_of_ath":     "%_of_ath",
+        "history_json": "history_json",
+        "last_updated": "price_data",  # maps to the "price data" date column
+    }
 
     # Read header row (row 2 has column names; row 1 is group headers)
     result = sheets_execute(
@@ -436,27 +449,37 @@ def update_ai_analysis_ps_now(service, all_results: list[dict], logger):
         )
     )
     headers = result.get("values", [[]])[0]
-    ps_col_idx = None
-    for i, h in enumerate(headers):
-        if h.strip().lower() == "ps_now":
-            ps_col_idx = i
-            break
 
-    if ps_col_idx is None:
-        logger.warning("ps_now column not found in AI Analysis headers — skipping sync")
+    # Build header → column index map (normalize: lowercase, strip, spaces→underscores)
+    def normalize(h):
+        return h.strip().lower().replace(" ", "_")
+
+    header_map = {}
+    for i, h in enumerate(headers):
+        header_map[normalize(h)] = i
+
+    # Resolve each sync column to its sheet column index
+    col_indices = {}
+    for result_key, header_name in SYNC_COLUMNS.items():
+        idx = header_map.get(normalize(header_name))
+        if idx is not None:
+            col_indices[result_key] = idx
+        else:
+            logger.warning("Column '%s' not found in AI Analysis headers", header_name)
+
+    if not col_indices:
+        logger.warning("No price-sales columns found in AI Analysis — skipping sync")
         return
 
     # Convert column index to letter (A=0, B=1, ..., Z=25, AA=26, ...)
     def col_letter(idx):
-        result = ""
+        letters = ""
         while True:
-            result = chr(65 + idx % 26) + result
+            letters = chr(65 + idx % 26) + letters
             idx = idx // 26 - 1
             if idx < 0:
                 break
-        return result
-
-    ps_col = col_letter(ps_col_idx)
+        return letters
 
     # Read ticker column (A) starting at data row 3 to build ticker→row map
     result = sheets_execute(
@@ -474,26 +497,34 @@ def update_ai_analysis_ps_now(service, all_results: list[dict], logger):
         if row and row[0].strip():
             ticker_to_row[row[0].strip()] = i + 3  # data starts at row 3
 
-    # Build batch update
+    # Build batch update — one cell per column per ticker
     batch_data = []
+    synced = 0
     for r in all_results:
         ticker = r.get("ticker", "")
-        ps_now = r.get("ps_now", "")
         row_num = ticker_to_row.get(ticker)
-        if row_num and ps_now != "":
+        if not row_num:
+            continue
+
+        for result_key, col_idx in col_indices.items():
+            value = r.get(result_key, "")
+            if value == "" or value is None:
+                continue
             batch_data.append({
-                "range": f"'{SOURCE_SHEET}'!{ps_col}{row_num}",
-                "values": [[ps_now]],
+                "range": f"'{SOURCE_SHEET}'!{col_letter(col_idx)}{row_num}",
+                "values": [[value]],
             })
+        synced += 1
 
     if batch_data:
         sheets_execute(service.spreadsheets().values().batchUpdate(
             spreadsheetId=SPREADSHEET_ID,
             body={"valueInputOption": "USER_ENTERED", "data": batch_data},
         ))
-        logger.info("Updated ps_now for %d tickers in %s", len(batch_data), SOURCE_SHEET)
+        logger.info("Synced price-sales data for %d tickers (%d cells) to %s",
+                     synced, len(batch_data), SOURCE_SHEET)
     else:
-        logger.info("No ps_now values to sync to %s", SOURCE_SHEET)
+        logger.info("No price-sales data to sync to %s", SOURCE_SHEET)
 
 
 def cleanup_duplicate_rows(service, logger):
@@ -1080,9 +1111,9 @@ def main():
     if update_rows:
         update_rows_by_ticker(service, PS_SHEET, update_rows, logger)
 
-    # Sync ps_now back to the AI Analysis sheet
+    # Sync all price-sales columns back to the AI Analysis sheet
     all_processed = new_rows + update_rows
-    update_ai_analysis_ps_now(service, all_processed, logger)
+    update_ai_analysis_price_sales(service, all_processed, logger)
 
     # Write log entry
     duration = round(time.time() - start_time, 1)
