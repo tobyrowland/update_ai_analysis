@@ -416,6 +416,86 @@ def update_rows_by_ticker(service, sheet_name: str, updates: list[dict], logger)
         logger.info("Updated %d rows in %s", len(batch_data), sheet_name)
 
 
+def update_ai_analysis_ps_now(service, all_results: list[dict], logger):
+    """Write ps_now values back to the AI Analysis sheet's ps_now column.
+
+    Reads the AI Analysis header row to find the ps_now column dynamically,
+    then batch-updates every ticker that was processed.
+    """
+    if not all_results:
+        return
+
+    # Read header row (row 2 has column names; row 1 is group headers)
+    result = sheets_execute(
+        service.spreadsheets()
+        .values()
+        .get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"'{SOURCE_SHEET}'!A2:AZ2",
+            valueRenderOption="FORMATTED_VALUE",
+        )
+    )
+    headers = result.get("values", [[]])[0]
+    ps_col_idx = None
+    for i, h in enumerate(headers):
+        if h.strip().lower() == "ps_now":
+            ps_col_idx = i
+            break
+
+    if ps_col_idx is None:
+        logger.warning("ps_now column not found in AI Analysis headers — skipping sync")
+        return
+
+    # Convert column index to letter (A=0, B=1, ..., Z=25, AA=26, ...)
+    def col_letter(idx):
+        result = ""
+        while True:
+            result = chr(65 + idx % 26) + result
+            idx = idx // 26 - 1
+            if idx < 0:
+                break
+        return result
+
+    ps_col = col_letter(ps_col_idx)
+
+    # Read ticker column (A) starting at data row 3 to build ticker→row map
+    result = sheets_execute(
+        service.spreadsheets()
+        .values()
+        .get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"'{SOURCE_SHEET}'!A3:A",
+            valueRenderOption="FORMATTED_VALUE",
+        )
+    )
+    ticker_rows = result.get("values", [])
+    ticker_to_row = {}
+    for i, row in enumerate(ticker_rows):
+        if row and row[0].strip():
+            ticker_to_row[row[0].strip()] = i + 3  # data starts at row 3
+
+    # Build batch update
+    batch_data = []
+    for r in all_results:
+        ticker = r.get("ticker", "")
+        ps_now = r.get("ps_now", "")
+        row_num = ticker_to_row.get(ticker)
+        if row_num and ps_now != "":
+            batch_data.append({
+                "range": f"'{SOURCE_SHEET}'!{ps_col}{row_num}",
+                "values": [[ps_now]],
+            })
+
+    if batch_data:
+        sheets_execute(service.spreadsheets().values().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID,
+            body={"valueInputOption": "USER_ENTERED", "data": batch_data},
+        ))
+        logger.info("Updated ps_now for %d tickers in %s", len(batch_data), SOURCE_SHEET)
+    else:
+        logger.info("No ps_now values to sync to %s", SOURCE_SHEET)
+
+
 def cleanup_duplicate_rows(service, logger):
     """One-time cleanup: delete duplicate ticker rows, keeping the FIRST (original).
 
@@ -999,6 +1079,10 @@ def main():
     # Update existing rows
     if update_rows:
         update_rows_by_ticker(service, PS_SHEET, update_rows, logger)
+
+    # Sync ps_now back to the AI Analysis sheet
+    all_processed = new_rows + update_rows
+    update_ai_analysis_ps_now(service, all_processed, logger)
 
     # Write log entry
     duration = round(time.time() - start_time, 1)
