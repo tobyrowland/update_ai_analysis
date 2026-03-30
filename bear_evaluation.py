@@ -3,7 +3,7 @@
 Bear Evaluation — Risk Audit for Top Equities.
 
 Sends the top 100 green-eligible equities from AI Analysis to Gemini 2.5 Flash
-for a bear/risk audit. Each equity receives a ✅ (pass) or ❌ (fail) verdict.
+for a bear/risk audit. Each equity receives a pass or fail verdict.
 Results are written to the 'Bear' column in the AI Analysis sheet.
 
 Schedule: Sundays 07:00 UTC (after score_ai_analysis).
@@ -35,7 +35,7 @@ SPREADSHEET_ID = os.environ.get(
 )
 SHEET_NAME = "AI Analysis"
 GEMINI_MODEL = "gemini-2.5-flash"
-GEMINI_TIMEOUT = 300  # seconds — large prompt with thinking needs time
+GEMINI_TIMEOUT = 300  # seconds
 MAX_RETRIES = 3
 RETRY_DELAY = 15
 DELAY_BETWEEN_CALLS = 2
@@ -97,11 +97,11 @@ Your Objective: This is a RELATIVE exercise. You are comparing these {count} equ
 against each other. You must select exactly 40 equities that are the strongest \
 relative holds, and flag the remaining as relative sells.
 
-Assign a Green Tick (\u2705) to the 40 BEST equities — those with the strongest \
+Assign a Green Tick (\u2705) to the 40 BEST equities \u2014 those with the strongest \
 fundamentals, most concrete AI analysis, and fewest risk factors RELATIVE to the \
 others in this list.
 
-Assign a Red Cross (\u274c) to the remaining equities — those that are relatively \
+Assign a Red Cross (\u274c) to the remaining equities \u2014 those that are relatively \
 weaker compared to the top 40.
 
 How to decide the relative ranking:
@@ -122,13 +122,15 @@ WEAKEST signals (favour \u274c):
 IMPORTANT: You MUST assign exactly 40 \u2705 and the rest \u274c. Count carefully.
 
 Output Format:
-For every stock in the list, provide the result in this exact format:
+For every stock in the list, provide the result in this exact format. \
+Use the EXACT ticker as shown in the data header (including numbers and slashes):
 
-[TICKER]: \u2705 (Relatively strongest — one brief reason)
+TICKER: \u2705 (Relatively strongest \u2014 one brief reason)
 
-[TICKER]: \u274c (Relatively weaker — one brief reason)
+TICKER: \u274c (Relatively weaker \u2014 one brief reason)
 
-Constraint: Do not provide a summary. Go through the list one by one.
+Constraint: Do not provide a summary. Go through the list one by one. \
+You MUST output a verdict for ALL {count} equities.
 
 === EQUITIES TO EVALUATE ({count}) ===
 
@@ -137,7 +139,7 @@ Constraint: Do not provide a summary. Go through the list one by one.
 === END OF DATA ===
 
 Now evaluate each equity above. Output ONLY the verdict lines, one per ticker. \
-Remember: exactly 40 must receive \u2705."""
+Remember: exactly 40 must receive \u2705. You must cover ALL {count} tickers."""
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +361,7 @@ def _call_gemini_text(prompt, api_key, model, timeout=GEMINI_TIMEOUT):
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0.2,
-            "maxOutputTokens": 8192,
+            "maxOutputTokens": 32768,
         },
     })
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -386,7 +388,6 @@ def call_gemini_bear(prompt, api_key, logger):
             if not raw or not raw.strip():
                 raise Exception("Empty response from curl (possible timeout)")
             logger.info("Raw API response length: %d chars", len(raw))
-            logger.info("Raw API response preview: %s", raw[:500])
             data = json.loads(raw)
             if "error" in data:
                 raise Exception(
@@ -436,12 +437,15 @@ def parse_bear_results(response_text):
     """
     Parse Gemini response into {ticker: verdict_string} dict.
 
-    Expected lines like:
-        NVDA: check_mark Strong margins, accelerating revenue
-        SNOW: cross_mark Persistent negative FCF margin
+    Handles tickers that start with letters, numbers, or contain slashes.
+    Examples: NVDA, 6857, VISTA/A, A3EGAB, 896047
     """
     results = {}
-    pattern = re.compile(r'^([A-Z][A-Z0-9.]{0,10}):\s*([\u2705\u274c].*)$', re.MULTILINE)
+    # Match tickers: letters, digits, dots, slashes — at least 1 char
+    pattern = re.compile(
+        r'^([A-Z0-9][A-Z0-9./]*?):\s*([\u2705\u274c].*)$',
+        re.MULTILINE,
+    )
     for match in pattern.finditer(response_text):
         ticker = match.group(1).strip()
         verdict = match.group(2).strip()
