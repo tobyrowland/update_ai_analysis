@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-from tv_screen import run_tradingview_screen
+from tv_screen import run_tradingview_screen, fetch_sector_data
 
 load_dotenv()
 
@@ -36,7 +36,90 @@ AI_ANALYSIS_SHEET = "AI Analysis"
 MANUAL_SHEET = "Manual"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-# Map alternative/legacy header names → canonical lowercase keys.
+# Map TradingView exchange codes → Google Finance exchange codes.
+TV_TO_GOOGLE_FINANCE = {
+    # United States
+    "NASDAQ": "NASDAQ", "NYSE": "NYSE", "NYSEARCA": "NYSEARCA",
+    "NYSEMKT": "NYSEAMERICAN", "AMEX": "NYSEAMERICAN", "OTC": "OTCMKTS",
+    "BATS": "BATS",
+    # Canada
+    "TSX": "TSE", "TSXV": "CVE",
+    # United Kingdom
+    "LSE": "LON", "LON": "LON", "LSIN": "LON",
+    # Germany (many alternative exchanges → map to primary ETR/FRA)
+    "XETRA": "ETR", "XETR": "ETR", "FRA": "FRA", "ETR": "ETR",
+    "FWB": "FRA", "GETTEX": "ETR", "TRADEGATE": "ETR",
+    "MU": "ETR", "STU": "ETR", "BE": "ETR", "DU": "ETR",
+    "DUS": "ETR", "HM": "ETR", "HA": "ETR",
+    # France
+    "EPA": "EPA", "PAR": "EPA",
+    # Netherlands
+    "AMS": "AMS",
+    # Switzerland
+    "SWX": "SWX",
+    # Italy
+    "BIT": "BIT", "MIL": "BIT", "EUROTLX": "BIT",
+    # Spain
+    "BME": "BME",
+    # Sweden
+    "STO": "STO",
+    # Norway
+    "OSL": "OSL",
+    # Denmark
+    "CSE": "CPH",
+    # Finland
+    "HEL": "HEL",
+    # Japan
+    "TSE": "TYO", "JPX": "TYO", "TYO": "TYO",
+    # India
+    "NSE": "NSE", "BSE": "BOM", "NSEI": "NSE",
+    # South Korea
+    "KRX": "KRX", "KOSDAQ": "KRX",
+    # Australia
+    "ASX": "ASX",
+    # New Zealand
+    "NZX": "NZE",
+    # Singapore
+    "SGX": "SGX",
+    # Hong Kong
+    "HKG": "HKG", "HKEX": "HKG",
+    # Brazil
+    "SAO": "BVMF", "BVMF": "BVMF",
+    # South Africa
+    "JSE": "JSE",
+    # Saudi Arabia
+    "TADAWUL": "TADAWUL", "SAU": "TADAWUL",
+    # Israel
+    "TASE": "TLV",
+    # Turkey
+    "BIST": "IST",
+    # Indonesia
+    "IDX": "IDX",
+    # Thailand
+    "SET": "BKK",
+    # Malaysia
+    "MYX": "KLSE",
+    # Philippines
+    "PSE": "PSE",
+    # Mexico
+    "BMV": "BMV",
+    # Poland
+    "GPW": "WSE",
+}
+
+
+def _google_finance_url(ticker: str, exchange: str) -> str:
+    """Build a Google Finance URL for a ticker."""
+    gf_exchange = TV_TO_GOOGLE_FINANCE.get(exchange.upper(), exchange)
+    return f"https://www.google.com/finance/quote/{ticker}:{gf_exchange}"
+
+
+def _ticker_hyperlink(ticker: str, exchange: str) -> str:
+    """Build a =HYPERLINK() formula pointing to Google Finance."""
+    url = _google_finance_url(ticker, exchange)
+    return f'=HYPERLINK("{url}", "{ticker}")'
+
+
 HEADER_ALIASES = {
     "Ticker": "ticker",
     "ticker_clean": "ticker",
@@ -231,6 +314,7 @@ def load_ai_analysis_tickers(service, logger) -> tuple[set[str], dict[str, int],
 
     # Row 1 = group headers, Row 2 = column headers, Row 3+ = data
     raw_headers = [str(h).strip() for h in rows[1]]
+    logger.info("Raw headers (row 2): %s", raw_headers[:10])
     col_map = {}
     for idx, h in enumerate(raw_headers):
         key = HEADER_ALIASES.get(h, h.lower())
@@ -365,6 +449,54 @@ def add_new_tickers(service, new_tickers: list[dict], col_map: dict, logger):
     logger.info("Appended %d new tickers to AI Analysis", len(append_rows))
 
 
+def linkify_tickers(service, col_map: dict, ticker_rows: dict, logger):
+    """Convert plain-text tickers to =HYPERLINK() formulas pointing to Google Finance."""
+    if "ticker" not in col_map:
+        return
+
+    ticker_col = _col_letter(col_map["ticker"])
+    # Read ticker column with FORMULA render to see raw cell values
+    result = (
+        service.spreadsheets()
+        .values()
+        .get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"'{AI_ANALYSIS_SHEET}'!{ticker_col}3:{ticker_col}",
+            valueRenderOption="FORMULA",
+        )
+        .execute()
+    )
+    raw_cells = result.get("values", [])
+
+    data = []
+    for row_offset, cell in enumerate(raw_cells):
+        val = str(cell[0]) if cell else ""
+        if not val or val.startswith("="):
+            continue  # already a formula or empty
+        # Plain text ticker — convert to HYPERLINK
+        ticker = val.strip().upper()
+        info = ticker_rows.get(ticker, {})
+        exchange = info.get("exchange", "")
+        if not exchange:
+            continue  # can't build URL without exchange
+        sheet_row = row_offset + 3
+        formula = _ticker_hyperlink(ticker, exchange)
+        data.append({
+            "range": f"'{AI_ANALYSIS_SHEET}'!{ticker_col}{sheet_row}",
+            "values": [[formula]],
+        })
+
+    if not data:
+        logger.info("All tickers already have HYPERLINK formulas")
+        return
+
+    service.spreadsheets().values().batchUpdate(
+        spreadsheetId=SPREADSHEET_ID,
+        body={"valueInputOption": "USER_ENTERED", "data": data},
+    ).execute()
+    logger.info("Linked %d tickers to Google Finance", len(data))
+
+
 def update_missing_fields(service, updates: list[dict], col_map: dict, logger):
     """Fill in country/sector for existing tickers where those fields are empty."""
     if not updates:
@@ -429,6 +561,20 @@ def main():
         logger.error("Could not read AI Analysis column map — aborting")
         return
 
+    logger.info("col_map keys: %s", sorted(col_map.keys()))
+    if "sector" in col_map:
+        logger.info("sector column index: %d (col %s)", col_map["sector"],
+                     _col_letter(col_map["sector"]))
+    else:
+        logger.warning("'sector' NOT found in col_map!")
+
+    # Count tickers missing sector in the sheet
+    total_missing_sector = sum(
+        1 for info in ticker_rows.values() if not info.get("sector")
+    )
+    logger.info("Tickers missing sector in sheet: %d / %d",
+                total_missing_sector, len(ticker_rows))
+
     # Step 4: Identify new tickers and missing fields
     new_tickers = []
     field_updates = []
@@ -452,12 +598,54 @@ def main():
                     "fields": missing_fields,
                 })
 
+    sector_via_screen = sum(1 for u in field_updates if "sector" in u["fields"])
     logger.info("New tickers to add: %d", len(new_tickers))
-    logger.info("Existing tickers with missing fields to update: %d", len(field_updates))
+    logger.info("Existing tickers with missing fields to update: %d (%d with sector)",
+                len(field_updates), sector_via_screen)
 
     # Step 5: Write changes
     add_new_tickers(service, new_tickers, col_map, logger)
     update_missing_fields(service, field_updates, col_map, logger)
+
+    # Step 6: Backfill sector from TradingView for ALL tickers still missing it
+    # Re-read which tickers still need sector (not covered by Step 5)
+    tickers_needing_sector = []
+    updated_rows = {u["row"] for u in field_updates if "sector" in u["fields"]}
+    for ticker, info in ticker_rows.items():
+        if not info.get("sector") and info["row"] not in updated_rows:
+            tickers_needing_sector.append((ticker, info.get("exchange", "")))
+
+    logger.info("Tickers still missing sector after screen merge: %d", len(tickers_needing_sector))
+
+    if tickers_needing_sector:
+        if len(tickers_needing_sector) <= 20:
+            logger.info("Missing sector tickers: %s",
+                         [(t, e) for t, e in tickers_needing_sector])
+
+        sector_data = fetch_sector_data(tickers_needing_sector, logger)
+        logger.info("TradingView returned sector for %d / %d tickers",
+                     len(sector_data), len(tickers_needing_sector))
+
+        sector_updates = []
+        for ticker, exchange in tickers_needing_sector:
+            sector = sector_data.get(ticker.upper(), "")
+            if sector:
+                sector_updates.append({
+                    "row": ticker_rows[ticker]["row"],
+                    "fields": {"sector": sector},
+                })
+            else:
+                logger.debug("No sector found for %s (exchange=%s)", ticker, exchange)
+
+        if sector_updates:
+            update_missing_fields(service, sector_updates, col_map, logger)
+            logger.info("Backfilled sector for %d tickers via TradingView lookup",
+                         len(sector_updates))
+        else:
+            logger.info("No sector data returned from TradingView for any missing ticker")
+
+    # Step 7: Linkify plain-text tickers to Google Finance
+    linkify_tickers(service, col_map, ticker_rows, logger)
 
     # Log new tickers
     if new_tickers:
@@ -470,4 +658,47 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "--backfill-sector" in sys.argv:
+        logger = setup_logging()
+        logger.info("=" * 60)
+        logger.info("Sector Backfill Only — %s", date.today().isoformat())
+        logger.info("=" * 60)
+        service = get_sheets_service()
+        existing_tickers, col_map, ticker_rows = load_ai_analysis_tickers(service, logger)
+        if "sector" not in col_map:
+            logger.error("'sector' column not found in headers! col_map: %s", sorted(col_map.keys()))
+            sys.exit(1)
+        logger.info("sector column: index %d (col %s)", col_map["sector"],
+                     _col_letter(col_map["sector"]))
+
+        missing = [(t, info.get("exchange", ""))
+                    for t, info in ticker_rows.items() if not info.get("sector")]
+        logger.info("Tickers missing sector: %d / %d", len(missing), len(ticker_rows))
+        if not missing:
+            logger.info("All tickers already have sector — nothing to do")
+            sys.exit(0)
+
+        for t, e in missing[:10]:
+            logger.info("  e.g. %s (exchange=%r)", t, e)
+
+        sector_data = fetch_sector_data(missing, logger)
+        logger.info("TradingView returned sector for %d / %d", len(sector_data), len(missing))
+
+        updates = []
+        for ticker, exchange in missing:
+            sector = sector_data.get(ticker.upper(), "")
+            if sector:
+                updates.append({
+                    "row": ticker_rows[ticker]["row"],
+                    "fields": {"sector": sector},
+                })
+        logger.info("Updates to write: %d", len(updates))
+        if updates:
+            for u in updates[:10]:
+                logger.info("  row %d → %s", u["row"], u["fields"]["sector"])
+            update_missing_fields(service, updates, col_map, logger)
+            logger.info("Done — backfilled sector for %d tickers", len(updates))
+        else:
+            logger.info("TradingView had no sector data for any of the missing tickers")
+    else:
+        main()
