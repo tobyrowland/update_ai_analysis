@@ -6,6 +6,9 @@ Reads AI Analysis sheet, finds equities where both Bear and Bull columns
 have a ✅, deduplicates by company (favouring ADRs/US listings), and writes
 them to the Portfolio sheet with relevant data.
 
+ps_now is written as a live GOOGLEFINANCE formula:
+  =GOOGLEFINANCE("EXCHANGE:TICKER","marketcap") / TTM_REVENUE
+
 Schedule: Sundays 08:00 UTC (after bear + bull evaluations).
 """
 
@@ -35,13 +38,84 @@ SPREADSHEET_ID = os.environ.get(
 AI_ANALYSIS_SHEET = "AI Analysis"
 PORTFOLIO_SHEET = "Portfolio"
 NULL_VALUE = "\u2014"
-FUZZY_THRESHOLD = 0.80  # similarity ratio to consider names as same company
+FUZZY_THRESHOLD = 0.80
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 # US exchanges — ADRs and primary US listings live here
 US_EXCHANGES = {
     "NYSE", "NASDAQ", "AMEX", "NYSEARCA", "BATS", "ARCA",
+}
+
+# TradingView exchange → Google Finance exchange code for GOOGLEFINANCE()
+TV_TO_GOOGLE_FINANCE = {
+    # United States
+    "NASDAQ": "NASDAQ", "NYSE": "NYSE", "NYSEARCA": "NYSEARCA",
+    "NYSEMKT": "NYSEAMERICAN", "AMEX": "NYSEAMERICAN", "OTC": "OTCMKTS",
+    "BATS": "BATS",
+    # Canada
+    "TSX": "TSE", "TSXV": "CVE",
+    # United Kingdom
+    "LSE": "LON", "LON": "LON", "LSIN": "LON",
+    # Germany
+    "XETRA": "ETR", "XETR": "ETR", "FRA": "FRA", "ETR": "ETR",
+    "FWB": "FRA", "GETTEX": "ETR", "TRADEGATE": "ETR",
+    "MU": "ETR", "STU": "ETR", "BE": "ETR", "DU": "ETR",
+    "DUS": "ETR", "HM": "ETR", "HA": "ETR",
+    # France
+    "EPA": "EPA", "PAR": "EPA",
+    # Netherlands
+    "AMS": "AMS",
+    # Switzerland
+    "SWX": "SWX",
+    # Italy
+    "BIT": "BIT", "MIL": "BIT", "EUROTLX": "BIT",
+    # Spain
+    "BME": "BME",
+    # Sweden
+    "STO": "STO",
+    # Norway
+    "OSL": "OSL",
+    # Denmark
+    "CSE": "CPH",
+    # Finland
+    "HEL": "HEL",
+    # Japan
+    "TSE": "TYO", "JPX": "TYO", "TYO": "TYO",
+    # India
+    "NSE": "NSE", "BSE": "BOM", "NSEI": "NSE",
+    # South Korea
+    "KRX": "KRX", "KOSDAQ": "KRX",
+    # Australia
+    "ASX": "ASX",
+    # New Zealand
+    "NZX": "NZE",
+    # Singapore
+    "SGX": "SGX",
+    # Hong Kong
+    "HKG": "HKG", "HKEX": "HKG",
+    # Brazil
+    "SAO": "BVMF", "BVMF": "BVMF",
+    # South Africa
+    "JSE": "JSE",
+    # Saudi Arabia
+    "TADAWUL": "TADAWUL", "SAU": "TADAWUL",
+    # Israel
+    "TASE": "TLV",
+    # Turkey
+    "BIST": "IST",
+    # Indonesia
+    "IDX": "IDX",
+    # Thailand
+    "SET": "BKK",
+    # Malaysia
+    "MYX": "KLSE",
+    # Philippines
+    "PSE": "PSE",
+    # Mexico
+    "BMV": "BMV",
+    # Poland
+    "GPW": "WSE",
 }
 
 # Corporate suffixes to strip when normalising company names
@@ -92,6 +166,8 @@ HEADER_ALIASES = {
     "Bull":                 "bull",
     "Bull Eval":            "bull",
     "12m_median":           "12m_median",
+    "Quarterly Revenue":    "quarterly_revenue",
+    "quarterly_revenue":    "quarterly_revenue",
 }
 
 # Columns to copy from AI Analysis -> Portfolio
@@ -104,7 +180,7 @@ PORTFOLIO_COLUMNS = [
     "composite_score",
     "perf_52w_vs_spy",
     "price_pct_of_52w_high",
-    "ps_now",
+    "ps_now",       # will be replaced with GOOGLEFINANCE formula
     "12m_median",
     "bear",
     "bull",
@@ -206,6 +282,71 @@ def _is_us_exchange(exchange_val):
 
 
 # ---------------------------------------------------------------------------
+# Revenue parsing & GOOGLEFINANCE formula
+# ---------------------------------------------------------------------------
+
+
+def _parse_revenue_amount(s):
+    """
+    Parse a formatted revenue string like '$5.2B', '$480M', '$1.5K' into a float.
+    Returns the value in dollars or None.
+    """
+    s = s.strip()
+    match = re.match(r'^-?\$?([\d.]+)\s*([BMK])?$', s, re.IGNORECASE)
+    if not match:
+        return None
+    num = float(match.group(1))
+    suffix = (match.group(2) or "").upper()
+    if suffix == "B":
+        return num * 1e9
+    elif suffix == "M":
+        return num * 1e6
+    elif suffix == "K":
+        return num * 1e3
+    return num
+
+
+def _compute_ttm_revenue(quarterly_revenue_str):
+    """
+    Parse quarterly_revenue column and sum last 4 quarters for TTM revenue.
+
+    Format: "$5.2B (2026-03-31) | $4.8B (2025-12-31) | $4.5B (2025-09-30) | ..."
+    Returns TTM revenue in dollars or None.
+    """
+    if not quarterly_revenue_str or quarterly_revenue_str == NULL_VALUE:
+        return None
+
+    parts = quarterly_revenue_str.split("|")
+    revenues = []
+    for part in parts[:4]:  # take first 4 (most recent)
+        # Extract the dollar amount before the parenthesised date
+        part = part.strip()
+        amount_match = re.match(r'^(-?\$?[\d.]+[BMK]?)', part, re.IGNORECASE)
+        if amount_match:
+            rev = _parse_revenue_amount(amount_match.group(1))
+            if rev is not None:
+                revenues.append(rev)
+
+    if len(revenues) < 4:
+        return None  # not enough quarters for TTM
+
+    return sum(revenues)
+
+
+def _build_ps_formula(ticker, exchange, ttm_revenue):
+    """
+    Build a GOOGLEFINANCE formula for live P/S ratio.
+
+    =GOOGLEFINANCE("EXCHANGE:TICKER","marketcap") / TTM_REVENUE
+    """
+    gf_exchange = TV_TO_GOOGLE_FINANCE.get(exchange.upper(), exchange.upper())
+    gf_ticker = f"{gf_exchange}:{ticker}"
+    # Round TTM revenue to avoid floating point noise in formula
+    ttm_int = round(ttm_revenue)
+    return f'=GOOGLEFINANCE("{gf_ticker}","marketcap")/{ttm_int}'
+
+
+# ---------------------------------------------------------------------------
 # Company name normalisation & fuzzy matching
 # ---------------------------------------------------------------------------
 
@@ -213,39 +354,27 @@ def _is_us_exchange(exchange_val):
 def _normalise_company(name):
     """
     Normalise a company name for dedup comparison.
-
-    Strips corporate suffixes (Inc, Corp, Ltd, SA, SE, NV, AG, PLC, etc.),
-    punctuation, and extra whitespace. Returns uppercase.
     """
     s = name.strip().upper()
-    # Strip corporate suffixes
     s = CORPORATE_SUFFIXES.sub("", s)
-    # Remove punctuation and extra whitespace
     s = re.sub(r'[^\w\s]', ' ', s)
     s = re.sub(r'\s+', ' ', s).strip()
     return s
 
 
 def _names_match(name_a, name_b):
-    """
-    Check if two company names refer to the same company.
-
-    Uses normalised exact match first, then fuzzy similarity.
-    """
+    """Check if two company names refer to the same company."""
     norm_a = _normalise_company(name_a)
     norm_b = _normalise_company(name_b)
 
-    # Exact match after normalisation
     if norm_a == norm_b:
         return True
 
-    # One is a prefix/substring of the other (e.g. "ASML" vs "ASML HOLDING")
     if norm_a and norm_b:
         shorter, longer = sorted([norm_a, norm_b], key=len)
         if longer.startswith(shorter) and len(shorter) >= 3:
             return True
 
-    # Fuzzy similarity
     ratio = SequenceMatcher(None, norm_a, norm_b).ratio()
     return ratio >= FUZZY_THRESHOLD
 
@@ -264,7 +393,6 @@ def _pick_best(candidates, exchange_idx, score_idx, logger):
     names = [p[2].strip() if len(p) > 2 else "?" for _, p in candidates]
     logger.info("  Dedup: [%s] tickers: %s", names[0], tickers)
 
-    # Prefer US exchange (ADR)
     us_candidates = [
         (t, p) for t, p in candidates
         if exchange_idx is not None and _is_us_exchange(p[exchange_idx])
@@ -284,26 +412,16 @@ def _pick_best(candidates, exchange_idx, score_idx, logger):
 def deduplicate_by_company(entries, exchange_idx, company_idx, score_idx, logger):
     """
     Deduplicate entries by company name using fuzzy matching.
-
-    1. Normalise names and group exact matches
-    2. Merge groups whose normalised names are fuzzy-similar (>=80%)
-    3. For each group, pick the ADR (US exchange) or highest score
-
-    entries: list of (ticker, padded_row)
-    Returns: deduplicated list of (ticker, padded_row)
     """
     if company_idx is None:
         return entries
 
-    # Step 1: Build list with normalised names
     items = []
     for ticker, padded in entries:
         raw_name = padded[company_idx].strip() if company_idx < len(padded) else ""
         norm = _normalise_company(raw_name) if raw_name else ticker
         items.append((ticker, padded, raw_name, norm))
 
-    # Step 2: Group by fuzzy-matching normalised names
-    # Each group is a list of (ticker, padded, raw_name, norm)
     groups = []
     assigned = [False] * len(items)
 
@@ -320,7 +438,6 @@ def deduplicate_by_company(entries, exchange_idx, company_idx, score_idx, logger
                 assigned[j] = True
         groups.append(group)
 
-    # Step 3: Pick best from each group
     deduped = []
     for group in groups:
         candidates = [(t, p) for t, p, _, _ in group]
@@ -374,6 +491,7 @@ def main():
     exchange_idx = col_map.get("exchange")
     company_idx = col_map.get("company_name")
     score_idx = col_map.get("composite_score")
+    qrev_idx = col_map.get("quarterly_revenue")
 
     if bear_idx is None:
         logger.error("'bear' column not found in AI Analysis")
@@ -384,6 +502,10 @@ def main():
     if ticker_idx is None:
         logger.error("'ticker' column not found in AI Analysis")
         sys.exit(1)
+    if qrev_idx is not None:
+        logger.info("quarterly_revenue column found at index %d", qrev_idx)
+    else:
+        logger.warning("quarterly_revenue column not found — ps_now will use static values")
 
     # ---------------------------------------------------------------
     # Find dual-positive equities (both bear and bull have ✅)
@@ -432,32 +554,43 @@ def main():
     # ---------------------------------------------------------------
     portfolio_rows = []
     for ticker, padded in dual_positive:
+        exchange = padded[exchange_idx].strip() if exchange_idx is not None else ""
+
+        # Compute TTM revenue for live P/S formula
+        ttm_revenue = None
+        if qrev_idx is not None:
+            qrev_str = padded[qrev_idx].strip() if qrev_idx < len(padded) else ""
+            ttm_revenue = _compute_ttm_revenue(qrev_str)
+
         row_data = []
         for col_key in PORTFOLIO_COLUMNS:
-            src_idx = col_map.get(col_key)
-            if src_idx is not None and src_idx < len(padded):
-                val = padded[src_idx].strip()
-                # For ticker column, use plain text (not HYPERLINK formula)
-                if col_key == "ticker":
-                    val = ticker
-                row_data.append(val)
+            if col_key == "ticker":
+                row_data.append(ticker)
+            elif col_key == "ps_now" and ttm_revenue is not None and ttm_revenue > 0:
+                # Write live GOOGLEFINANCE formula instead of static value
+                formula = _build_ps_formula(ticker, exchange, ttm_revenue)
+                row_data.append(formula)
+                logger.info("    %s: live P/S formula (TTM rev: $%.0f)", ticker, ttm_revenue)
             else:
-                row_data.append("")
+                src_idx = col_map.get(col_key)
+                if src_idx is not None and src_idx < len(padded):
+                    row_data.append(padded[src_idx].strip())
+                else:
+                    row_data.append("")
         portfolio_rows.append(row_data)
-        logger.info("  %s (score: %s)", ticker,
+        logger.info("  %s (%s) score: %s", ticker, exchange,
                     padded[score_idx].strip() if score_idx is not None else "?")
 
     if args.dry_run:
         logger.info("[DRY RUN] Would write %d rows to Portfolio sheet", len(portfolio_rows))
         for row in portfolio_rows:
-            logger.info("  %s", row[:3])
+            logger.info("  %s", row[:3] + [row[8]] if len(row) > 8 else row)
         logger.info("[DRY RUN] Complete. No writes performed.")
         return
 
     # ---------------------------------------------------------------
     # Write to Portfolio sheet
     # ---------------------------------------------------------------
-    # First, clear existing data rows (keep header row 1)
     portfolio_data = read_sheet(service, PORTFOLIO_SHEET, end_col="L")
     existing_rows = len(portfolio_data)
     logger.info("Portfolio sheet currently has %d rows (including header)", existing_rows)
