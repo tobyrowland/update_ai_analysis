@@ -18,6 +18,7 @@ import re
 import sys
 import time
 from datetime import date
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -34,6 +35,7 @@ SPREADSHEET_ID = os.environ.get(
 AI_ANALYSIS_SHEET = "AI Analysis"
 PORTFOLIO_SHEET = "Portfolio"
 NULL_VALUE = "\u2014"
+FUZZY_THRESHOLD = 0.80  # similarity ratio to consider names as same company
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -41,6 +43,20 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 US_EXCHANGES = {
     "NYSE", "NASDAQ", "AMEX", "NYSEARCA", "BATS", "ARCA",
 }
+
+# Corporate suffixes to strip when normalising company names
+CORPORATE_SUFFIXES = re.compile(
+    r'\b('
+    r'inc|incorporated|corp|corporation|ltd|limited|llc|plc|'
+    r'sa|s\.a\.|se|s\.e\.|nv|n\.v\.|ag|a\.g\.|'
+    r'co|company|group|holdings|holding|enterprises|'
+    r'international|intl|technologies|technology|tech|'
+    r'systems|solutions|therapeutics|pharmaceuticals|pharma|'
+    r'biosciences|biopharma|medical|healthcare|'
+    r'class\s*[a-z]|cl\s*[a-z]|adr'
+    r')\b',
+    re.IGNORECASE,
+)
 
 # Map AI Analysis headers to canonical keys
 HEADER_ALIASES = {
@@ -190,64 +206,125 @@ def _is_us_exchange(exchange_val):
 
 
 # ---------------------------------------------------------------------------
+# Company name normalisation & fuzzy matching
+# ---------------------------------------------------------------------------
+
+
+def _normalise_company(name):
+    """
+    Normalise a company name for dedup comparison.
+
+    Strips corporate suffixes (Inc, Corp, Ltd, SA, SE, NV, AG, PLC, etc.),
+    punctuation, and extra whitespace. Returns uppercase.
+    """
+    s = name.strip().upper()
+    # Strip corporate suffixes
+    s = CORPORATE_SUFFIXES.sub("", s)
+    # Remove punctuation and extra whitespace
+    s = re.sub(r'[^\w\s]', ' ', s)
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+
+def _names_match(name_a, name_b):
+    """
+    Check if two company names refer to the same company.
+
+    Uses normalised exact match first, then fuzzy similarity.
+    """
+    norm_a = _normalise_company(name_a)
+    norm_b = _normalise_company(name_b)
+
+    # Exact match after normalisation
+    if norm_a == norm_b:
+        return True
+
+    # One is a prefix/substring of the other (e.g. "ASML" vs "ASML HOLDING")
+    if norm_a and norm_b:
+        shorter, longer = sorted([norm_a, norm_b], key=len)
+        if longer.startswith(shorter) and len(shorter) >= 3:
+            return True
+
+    # Fuzzy similarity
+    ratio = SequenceMatcher(None, norm_a, norm_b).ratio()
+    return ratio >= FUZZY_THRESHOLD
+
+
+# ---------------------------------------------------------------------------
 # Deduplication
 # ---------------------------------------------------------------------------
 
 
+def _pick_best(candidates, exchange_idx, score_idx, logger):
+    """From a list of candidates for the same company, pick the best one."""
+    if len(candidates) == 1:
+        return candidates[0]
+
+    tickers = [t for t, _ in candidates]
+    names = [p[2].strip() if len(p) > 2 else "?" for _, p in candidates]
+    logger.info("  Dedup: [%s] tickers: %s", names[0], tickers)
+
+    # Prefer US exchange (ADR)
+    us_candidates = [
+        (t, p) for t, p in candidates
+        if exchange_idx is not None and _is_us_exchange(p[exchange_idx])
+    ]
+
+    pool = us_candidates if us_candidates else candidates
+    best = max(
+        pool,
+        key=lambda x: _safe_float(x[1][score_idx]) or 0.0 if score_idx is not None else 0.0,
+    )
+    label = "ADR" if us_candidates else "best score"
+    logger.info("    -> Picked %s: %s (%s)", label, best[0],
+                best[1][exchange_idx].strip() if exchange_idx is not None else "?")
+    return best
+
+
 def deduplicate_by_company(entries, exchange_idx, company_idx, score_idx, logger):
     """
-    Deduplicate entries by company_name, favouring ADRs (US exchange listings).
+    Deduplicate entries by company name using fuzzy matching.
 
-    For each company_name, pick:
-      1. The US-listed version (ADR) if available
-      2. Otherwise the one with the highest composite_score
+    1. Normalise names and group exact matches
+    2. Merge groups whose normalised names are fuzzy-similar (>=80%)
+    3. For each group, pick the ADR (US exchange) or highest score
 
     entries: list of (ticker, padded_row)
     Returns: deduplicated list of (ticker, padded_row)
     """
-    # Group by normalised company name
-    groups = {}
+    if company_idx is None:
+        return entries
+
+    # Step 1: Build list with normalised names
+    items = []
     for ticker, padded in entries:
-        company = padded[company_idx].strip().upper() if company_idx is not None else ticker
-        if not company:
-            company = ticker  # fallback to ticker if no company name
-        if company not in groups:
-            groups[company] = []
-        groups[company].append((ticker, padded))
+        raw_name = padded[company_idx].strip() if company_idx < len(padded) else ""
+        norm = _normalise_company(raw_name) if raw_name else ticker
+        items.append((ticker, padded, raw_name, norm))
 
-    deduped = []
-    for company, candidates in groups.items():
-        if len(candidates) == 1:
-            deduped.append(candidates[0])
+    # Step 2: Group by fuzzy-matching normalised names
+    # Each group is a list of (ticker, padded, raw_name, norm)
+    groups = []
+    assigned = [False] * len(items)
+
+    for i in range(len(items)):
+        if assigned[i]:
             continue
+        group = [items[i]]
+        assigned[i] = True
+        for j in range(i + 1, len(items)):
+            if assigned[j]:
+                continue
+            if _names_match(items[i][2], items[j][2]):
+                group.append(items[j])
+                assigned[j] = True
+        groups.append(group)
 
-        # Multiple listings for same company — pick best one
-        tickers = [t for t, _ in candidates]
-        logger.info("  Dedup: %s has %d listings: %s", company, len(candidates), tickers)
-
-        # Prefer US exchange (ADR)
-        us_candidates = [
-            (t, p) for t, p in candidates
-            if exchange_idx is not None and _is_us_exchange(p[exchange_idx])
-        ]
-
-        if us_candidates:
-            # Among US listings, pick highest composite_score
-            best = max(
-                us_candidates,
-                key=lambda x: _safe_float(x[1][score_idx]) or 0.0 if score_idx is not None else 0.0,
-            )
-            logger.info("    -> Picked ADR: %s (%s)", best[0],
-                        best[1][exchange_idx].strip() if exchange_idx is not None else "?")
-        else:
-            # No US listing — pick highest composite_score
-            best = max(
-                candidates,
-                key=lambda x: _safe_float(x[1][score_idx]) or 0.0 if score_idx is not None else 0.0,
-            )
-            logger.info("    -> Picked best score: %s (%s)", best[0],
-                        best[1][exchange_idx].strip() if exchange_idx is not None else "?")
-
+    # Step 3: Pick best from each group
+    deduped = []
+    for group in groups:
+        candidates = [(t, p) for t, p, _, _ in group]
+        best = _pick_best(candidates, exchange_idx, score_idx, logger)
         deduped.append(best)
 
     return deduped
@@ -325,13 +402,13 @@ def main():
                 continue
             dual_positive.append((ticker, padded))
 
-    logger.info("Found %d equities with both Bear ✅ and Bull ✅", len(dual_positive))
+    logger.info("Found %d equities with both Bear \u2705 and Bull \u2705", len(dual_positive))
 
     if not dual_positive:
         logger.warning("No dual-positive equities found. Portfolio will be cleared.")
 
     # ---------------------------------------------------------------
-    # Deduplicate by company name (favour ADR / US listing)
+    # Deduplicate by company name (fuzzy match, favour ADR / US listing)
     # ---------------------------------------------------------------
     if dual_positive and company_idx is not None:
         before_count = len(dual_positive)
