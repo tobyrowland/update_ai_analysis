@@ -2,7 +2,7 @@
 """
 Bear Evaluation — Risk Audit for Top Equities.
 
-Sends the top 100 green-eligible equities from AI Analysis to Gemini 2.5 Pro
+Sends the top 100 green-eligible equities from AI Analysis to Gemini 2.5 Flash
 for a bear/risk audit. Each equity receives a ✅ (pass) or ❌ (fail) verdict.
 Results are written to the 'Bear' column in the AI Analysis sheet.
 
@@ -93,32 +93,42 @@ Role: You are a strictly objective Risk Auditor. Your task is to evaluate a list
 of equities based exclusively on the provided data and AI analysis. You are not \
 allowed to use outside knowledge or "hallucinate" external market trends.
 
-Your Objective: Review every ticker. Assign either a Green Tick (\u2705) or a Red Cross (\u274c) to each one.
+Your Objective: This is a RELATIVE exercise. You are comparing these {count} equities \
+against each other. You must select exactly 40 equities that are the strongest \
+relative holds, and flag the remaining as relative sells.
 
-The "Red Cross" (\u274c) Criteria:
-You must assign a \u274c if the provided data or AI analysis shows any of the following:
+Assign a Green Tick (\u2705) to the 40 BEST equities — those with the strongest \
+fundamentals, most concrete AI analysis, and fewest risk factors RELATIVE to the \
+others in this list.
 
-Fundamental Weakness: High debt, declining margins, or poor cash flow mentioned in the text.
+Assign a Red Cross (\u274c) to the remaining equities — those that are relatively \
+weaker compared to the top 40.
 
-AI 'Fluff': If the AI analysis mentions "potential" or "future growth" without citing \
-specific current revenue or structural advantages.
+How to decide the relative ranking:
 
-Risk Factors: Any mention of regulatory hurdles, supply chain vulnerability, or intense competition.
+STRONGEST signals (favour \u2705):
+- Consistently growing revenue with improving or stable margins
+- Concrete, data-backed AI analysis citing specific structural advantages
+- Strong cash flow and healthy balance sheet relative to peers
+- Clear competitive moat described with specifics, not vague language
 
-Valuation Warnings: If the data suggests the stock is "overextended," "expensive," or at a "premium."
+WEAKEST signals (favour \u274c):
+- Declining or inconsistent margins relative to peers
+- AI analysis that relies on "potential" or "future growth" without current evidence
+- High debt, poor cash flow, or profitability concerns relative to peers
+- Regulatory, supply chain, or competitive risks that are more severe than peers
+- Valuation that appears stretched relative to fundamentals compared to peers
 
-The "Green Tick" (\u2705) Criteria:
-Assign a \u2705 only if the stock passes the audit with stable fundamentals and the AI analysis \
-provides concrete, data-backed reasons for its strength with no significant "Bear" warnings.
+IMPORTANT: You MUST assign exactly 40 \u2705 and the rest \u274c. Count carefully.
 
 Output Format:
 For every stock in the list, provide the result in this exact format:
 
-[TICKER]: \u2705 (Only if it passes all risk checks)
+[TICKER]: \u2705 (Relatively strongest — one brief reason)
 
-[TICKER]: \u274c [Brief, blunt reason why it failed based only on the provided data.]
+[TICKER]: \u274c (Relatively weaker — one brief reason)
 
-Constraint: Do not rank these. Do not provide a summary. Simply go through the list one by one.
+Constraint: Do not provide a summary. Go through the list one by one.
 
 === EQUITIES TO EVALUATE ({count}) ===
 
@@ -126,7 +136,8 @@ Constraint: Do not rank these. Do not provide a summary. Simply go through the l
 
 === END OF DATA ===
 
-Now evaluate each equity above. Output ONLY the verdict lines, one per ticker."""
+Now evaluate each equity above. Output ONLY the verdict lines, one per ticker. \
+Remember: exactly 40 must receive \u2705."""
 
 
 # ---------------------------------------------------------------------------
