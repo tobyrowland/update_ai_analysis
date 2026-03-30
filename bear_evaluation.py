@@ -39,7 +39,7 @@ GEMINI_TIMEOUT = 180  # seconds — large prompt needs more time
 MAX_RETRIES = 2
 RETRY_DELAY = 15
 DELAY_BETWEEN_CALLS = 2
-TOP_N = 40
+TOP_N = 100
 NULL_VALUE = "—"
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -184,7 +184,7 @@ def read_all_rows(service) -> list[list[str]]:
         .values()
         .get(
             spreadsheetId=SPREADSHEET_ID,
-            range=f"'{SHEET_NAME}'",
+            range=f"'{SHEET_NAME}'!A1:AZ",
             valueRenderOption="FORMATTED_VALUE",
         )
         .execute()
@@ -347,7 +347,7 @@ def _call_gemini_text(prompt, api_key, model, timeout=GEMINI_TIMEOUT):
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0.2,
-            "maxOutputTokens": 4096,
+            "maxOutputTokens": 8192,
         },
     })
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
