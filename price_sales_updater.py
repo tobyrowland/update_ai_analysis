@@ -874,9 +874,18 @@ def main():
         exchange = item["exchange"]
         existing = ps_map.get(ticker)
 
+        # If the ticker exists in AI Analysis but has no ps_now data yet,
+        # treat it as new (backfill)
+        has_ps_data = (
+            existing is not None
+            and existing.get("ps_now")
+            and str(existing["ps_now"]).strip() not in ("", "—")
+        )
+
         # Classify — run daily; skip only if already updated today
-        if existing is None:
+        if not has_ps_data:
             mode = "backfill"
+            existing = None  # force backfill path in compute_ps_for_ticker
         elif args.force:
             mode = "update"
         elif not existing.get("last_updated") or _normalize_date(existing["last_updated"]) < today_str:
