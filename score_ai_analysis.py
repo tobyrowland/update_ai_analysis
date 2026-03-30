@@ -15,7 +15,7 @@ import math
 import os
 import re
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -78,6 +78,9 @@ HEADER_ALIASES = {
     "Fundamentals Date": "data",
     "Scoring": "scoring",
     "scoring": "scoring",
+    "price data": "price_data",
+    "price_data": "price_data",
+    "Price Data": "price_data",
 }
 
 # Status priority for sorting (❌ Excluded always at bottom)
@@ -152,6 +155,16 @@ def _col_letter(idx: int) -> str:
         if idx < 0:
             break
     return result
+
+
+def _parse_date(val):
+    """Parse an ISO date string like '2026-03-27' → date object, or None."""
+    if not val or not str(val).strip():
+        return None
+    try:
+        return datetime.strptime(str(val).strip(), "%Y-%m-%d").date()
+    except ValueError:
+        return None
 
 
 def _extract_ticker(val):
@@ -397,6 +410,20 @@ def compute_status(entry, ps_data, screened_tickers, manual_tickers):
         return "📌 Manual"
 
     if has_ai and has_eodhd:
+        # Check data freshness — all three dates must be recent
+        today = date.today()
+        ai_date = _parse_date(entry.get("ai", ""))
+        data_date = _parse_date(entry.get("data", ""))
+        price_date = _parse_date(entry.get("price_data", ""))
+
+        stale = (
+            ai_date is None or (today - ai_date).days > 100
+            or data_date is None or (today - data_date).days > 100
+            or price_date is None or (today - price_date).days > 7
+        )
+        if stale:
+            return "❌ Incomplete Data"
+
         ps_row = ps_data.get(ticker, {})
         ps_now = ps_row.get("ps_now")
         median = ps_row.get("12m_median")

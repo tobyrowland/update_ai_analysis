@@ -87,10 +87,11 @@ LAST ANALYSIS: ai, data
 ```
 
 **Status (auto-assigned):**
-- 🟢 Eligible — has dates in both `ai` and `data` columns
-- 🏷️ Discount — P/S >20% below 12-month median
+- 🟢 Eligible — all data fresh (ai <100d, data <100d, price <7d)
+- 🏷️ Discount — Eligible + P/S >20% below 12-month median
 - 📌 Manual — manual-only ticker (not in TradingView screen)
 - 🆕 New — missing `ai` or `data` date
+- ❌ Incomplete Data — has ai+data dates but one or more are stale (ai >100d, data >100d, price >7d)
 - ❌ Unprofitable Health Tech — Health Technology sector with negative net margin (only hard exclusion)
 
 **Composite score:** `r40 × collar_multipliers`
