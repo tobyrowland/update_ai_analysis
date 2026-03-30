@@ -2,7 +2,7 @@
 """
 Bear Evaluation — Risk Audit for Top Equities.
 
-Sends the top 40 green-eligible equities from AI Analysis to Gemini 2.5 Pro
+Sends the top 100 green-eligible equities from AI Analysis to Gemini 2.5 Pro
 for a bear/risk audit. Each equity receives a ✅ (pass) or ❌ (fail) verdict.
 Results are written to the 'Bear' column in the AI Analysis sheet.
 
@@ -34,13 +34,13 @@ SPREADSHEET_ID = os.environ.get(
     "SPREADSHEET_ID", "1js3dUTJtKhY1dUcwzYUGBOdKDZXBurLtRGgcIV8msYk"
 )
 SHEET_NAME = "AI Analysis"
-GEMINI_MODEL = "gemini-2.5-pro"
-GEMINI_TIMEOUT = 180  # seconds — large prompt needs more time
-MAX_RETRIES = 2
+GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_TIMEOUT = 300  # seconds — large prompt with thinking needs time
+MAX_RETRIES = 3
 RETRY_DELAY = 15
 DELAY_BETWEEN_CALLS = 2
 TOP_N = 100
-NULL_VALUE = "—"
+NULL_VALUE = "\u2014"
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -93,10 +93,10 @@ Role: You are a strictly objective Risk Auditor. Your task is to evaluate a list
 of equities based exclusively on the provided data and AI analysis. You are not \
 allowed to use outside knowledge or "hallucinate" external market trends.
 
-Your Objective: Review every ticker. Assign either a Green Tick (✅) or a Red Cross (❌) to each one.
+Your Objective: Review every ticker. Assign either a Green Tick (\u2705) or a Red Cross (\u274c) to each one.
 
-The "Red Cross" (❌) Criteria:
-You must assign a ❌ if the provided data or AI analysis shows any of the following:
+The "Red Cross" (\u274c) Criteria:
+You must assign a \u274c if the provided data or AI analysis shows any of the following:
 
 Fundamental Weakness: High debt, declining margins, or poor cash flow mentioned in the text.
 
@@ -107,16 +107,16 @@ Risk Factors: Any mention of regulatory hurdles, supply chain vulnerability, or 
 
 Valuation Warnings: If the data suggests the stock is "overextended," "expensive," or at a "premium."
 
-The "Green Tick" (✅) Criteria:
-Assign a ✅ only if the stock passes the audit with stable fundamentals and the AI analysis \
+The "Green Tick" (\u2705) Criteria:
+Assign a \u2705 only if the stock passes the audit with stable fundamentals and the AI analysis \
 provides concrete, data-backed reasons for its strength with no significant "Bear" warnings.
 
 Output Format:
 For every stock in the list, provide the result in this exact format:
 
-[TICKER]: ✅ (Only if it passes all risk checks)
+[TICKER]: \u2705 (Only if it passes all risk checks)
 
-[TICKER]: ❌ [Brief, blunt reason why it failed based only on the provided data.]
+[TICKER]: \u274c [Brief, blunt reason why it failed based only on the provided data.]
 
 Constraint: Do not rank these. Do not provide a summary. Simply go through the list one by one.
 
@@ -219,7 +219,7 @@ def write_row_updates(service, updates: list[dict]):
 
 
 def _col_letter(idx: int) -> str:
-    """Convert 0-based column index to Excel-style letter(s). 0→A, 25→Z, 26→AA."""
+    """Convert 0-based column index to Excel-style letter(s). 0->A, 25->Z, 26->AA."""
     result = ""
     while True:
         result = chr(65 + idx % 26) + result
@@ -261,7 +261,7 @@ def _safe_float(val):
 
 def select_top_eligible(all_rows, col_map, top_n=TOP_N):
     """
-    Filter rows with 🟢 status, sort by composite_score desc, return top N.
+    Filter rows with green status, sort by composite_score desc, return top N.
 
     Returns list of (sheet_row_number, row_data, ticker) tuples.
     """
@@ -277,7 +277,7 @@ def select_top_eligible(all_rows, col_map, top_n=TOP_N):
     for row_offset, row in enumerate(all_rows[2:]):  # skip header rows
         padded = row + [""] * (max_idx + 1 - len(row))
         status = padded[status_idx].strip()
-        if not status.startswith("🟢"):
+        if "\U0001f7e2" not in status:  # green circle emoji
             continue
 
         ticker = _extract_ticker(padded[ticker_idx])
@@ -372,21 +372,29 @@ def call_gemini_bear(prompt, api_key, logger):
     for attempt in range(MAX_RETRIES):
         try:
             raw = _call_gemini_text(prompt, api_key, GEMINI_MODEL)
+            if not raw or not raw.strip():
+                raise Exception("Empty response from curl (possible timeout)")
+            logger.info("Raw API response length: %d chars", len(raw))
+            logger.info("Raw API response preview: %s", raw[:500])
             data = json.loads(raw)
             if "error" in data:
                 raise Exception(
                     f"{data['error'].get('code')} {data['error'].get('message', '')}"
                 )
-            # Thinking models (gemini-2.5-pro) return multiple parts:
+            # Thinking models return multiple parts:
             # thought parts first, then the actual response.
             parts = data["candidates"][0]["content"]["parts"]
+            logger.info("Response has %d parts", len(parts))
+            for i, p in enumerate(parts):
+                is_thought = p.get("thought", False)
+                logger.info("  Part %d: thought=%s, length=%d", i, is_thought, len(p.get("text", "")))
             text_parts = [p["text"] for p in parts if not p.get("thought")]
             if not text_parts:
                 # Fallback: use all parts if none lack the thought flag
                 text_parts = [p["text"] for p in parts]
             text = text_parts[-1].strip() if text_parts else ""
             if not text:
-                raise Exception("Empty response from Gemini")
+                raise Exception("Empty response text after parsing parts")
             return text
 
         except Exception as exc:
@@ -418,11 +426,11 @@ def parse_bear_results(response_text):
     Parse Gemini response into {ticker: verdict_string} dict.
 
     Expected lines like:
-        NVDA: ✅ Strong margins, accelerating revenue
-        SNOW: ❌ Persistent negative FCF margin
+        NVDA: check_mark Strong margins, accelerating revenue
+        SNOW: cross_mark Persistent negative FCF margin
     """
     results = {}
-    pattern = re.compile(r'^([A-Z][A-Z0-9.]{0,10}):\s*([✅❌].*)$', re.MULTILINE)
+    pattern = re.compile(r'^([A-Z][A-Z0-9.]{0,10}):\s*([\u2705\u274c].*)$', re.MULTILINE)
     for match in pattern.finditer(response_text):
         ticker = match.group(1).strip()
         verdict = match.group(2).strip()
@@ -438,7 +446,7 @@ def parse_bear_results(response_text):
 def main():
     load_dotenv()
 
-    parser = argparse.ArgumentParser(description="Bear Evaluation — Risk Audit")
+    parser = argparse.ArgumentParser(description="Bear Evaluation - Risk Audit")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print prompt and results without writing to the sheet")
     args = parser.parse_args()
@@ -452,6 +460,7 @@ def main():
     if not gemini_key:
         logger.error("GEMINI_API_KEY env var is not set")
         sys.exit(1)
+    logger.info("GEMINI_API_KEY is set (length=%d)", len(gemini_key))
 
     # Read sheet
     service = get_sheets_service()
@@ -468,7 +477,7 @@ def main():
         name = header.strip()
         name = HEADER_ALIASES.get(name, name.lower())
         col_map[name] = idx
-    logger.info("Column map keys: %s", list(col_map.keys()))
+    logger.info("Column map: %s", {k: v for k, v in col_map.items()})
 
     # Verify bear column exists
     bear_idx = col_map.get("bear")
@@ -479,12 +488,19 @@ def main():
     bear_col_letter = _col_letter(bear_idx)
     logger.info("Bear column: %s (index %d)", bear_col_letter, bear_idx)
 
-    # Select top 40 green-eligible equities
+    # Select top green-eligible equities
     top_equities = select_top_eligible(all_rows, col_map)
     logger.info("Selected %d green-eligible equities for bear evaluation", len(top_equities))
 
     if not top_equities:
         logger.warning("No green-eligible equities found. Nothing to do.")
+        # Log first 5 status values for debugging
+        status_idx = col_map.get("status")
+        if status_idx is not None:
+            for i, row in enumerate(all_rows[2:7]):
+                padded = row + [""] * (status_idx + 1 - len(row))
+                logger.info("  Row %d status: [%s] repr=%r", i + 3,
+                            padded[status_idx].strip(), padded[status_idx])
         return
 
     top_tickers = {t for _, _, t in top_equities}
@@ -511,6 +527,7 @@ def main():
         sys.exit(1)
 
     logger.info("Gemini response length: %d chars", len(response_text))
+    logger.info("Gemini response preview: %s", response_text[:1000])
 
     if args.dry_run:
         logger.info("[DRY RUN] Gemini response:\n%s", response_text)
@@ -519,9 +536,14 @@ def main():
     verdicts = parse_bear_results(response_text)
     logger.info("Parsed %d verdicts from Gemini response", len(verdicts))
 
-    passed = sum(1 for v in verdicts.values() if v.startswith("✅"))
-    failed = sum(1 for v in verdicts.values() if v.startswith("❌"))
-    logger.info("Results: %d ✅, %d ❌", passed, failed)
+    if not verdicts:
+        logger.error("No verdicts parsed! Response may not match expected format.")
+        logger.error("First 2000 chars of response:\n%s", response_text[:2000])
+        sys.exit(1)
+
+    passed = sum(1 for v in verdicts.values() if "\u2705" in v)
+    failed = sum(1 for v in verdicts.values() if "\u274c" in v)
+    logger.info("Results: %d pass, %d fail", passed, failed)
 
     if args.dry_run:
         for ticker, verdict in verdicts.items():
@@ -543,7 +565,7 @@ def main():
         else:
             logger.warning("No verdict found for %s (row %d)", ticker, sheet_row)
 
-    # Clear stale bear values for equities no longer in top 40
+    # Clear stale bear values for equities no longer in top list
     max_idx = max(col_map.values())
     ticker_idx = col_map.get("ticker")
     clears = 0
