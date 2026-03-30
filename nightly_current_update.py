@@ -35,7 +35,7 @@ TARGET_SHEET = "CURRENT"
 MANUAL_SHEET = "Manual"
 FIRST_SEEN_SHEETS = ["CURRENT_old", "current_old2"]  # Fallback sheets for first_seen
 AI_ANALYSIS_SHEET = "AI Analysis"
-PRICE_SALES_SHEET = "Price-Sales"
+# Price-sales data is now in AI Analysis directly (no separate sheet)
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 # Map alternative/legacy header names → canonical lowercase keys.
@@ -60,7 +60,7 @@ V2_HEADERS = [
     "fundamentals_snapshot",# J   9  — HYPERLINK to AI Analysis row
     "short_outlook",        # K  10  — From AI Analysis
     "price",                # L  11
-    "ps_now",               # M  12  — HYPERLINK to Price-Sales row
+    "ps_now",               # M  12
     "price_%_of_52w_high",  # N  13  — P/S Now / 52w High
     "r40_score",            # O  14  — From AI Analysis
     "perf_52w_vs_spy",      # P  15
@@ -495,31 +495,18 @@ def load_ai_analysis(service, logger) -> tuple[dict, dict]:
     return ai_data, ai_row_map
 
 
-def load_price_sales(service, logger) -> tuple[dict, dict]:
+def load_price_sales(service, logger) -> dict:
     """
-    Load Price-Sales tab into a dict keyed by ticker.
-    Also returns {ticker: row_number} for deep linking.
+    Load price-sales data from AI Analysis sheet columns, keyed by ticker.
     """
-    logger.info("Loading Price-Sales tab...")
-    rows = read_sheet(service, PRICE_SALES_SHEET, end_col="K")
-    if len(rows) < 2:
-        logger.warning("Price-Sales tab has fewer than 2 rows")
-        return {}, {}
+    logger.info("Loading price-sales data from AI Analysis...")
+    rows = read_sheet(service, AI_ANALYSIS_SHEET, end_col="AZ")
+    if len(rows) < 3:
+        logger.warning("AI Analysis has fewer than 3 rows")
+        return {}
 
-    # Detect header row
-    row1_lower = [str(h).strip().lower() for h in rows[0]]
-    if "ticker" in row1_lower:
-        headers = row1_lower
-        data_rows = rows[1:]
-        data_start_row = 2  # 1-indexed
-    elif len(rows) >= 3:
-        headers = [str(h).strip().lower() for h in rows[1]]
-        data_rows = rows[2:]
-        data_start_row = 3
-    else:
-        logger.warning("Price-Sales tab: cannot find column titles")
-        return {}, {}
-
+    # Row 2 = column headers
+    headers = [str(h).strip().lower().replace(" ", "_") for h in rows[1]]
     col_map = {h: i for i, h in enumerate(headers)}
 
     ticker_idx = col_map.get("ticker")
@@ -527,31 +514,25 @@ def load_price_sales(service, logger) -> tuple[dict, dict]:
     high_52w_idx = col_map.get("52w_high")
     median_12m_idx = col_map.get("12m_median")
 
-    if ticker_idx is None:
-        logger.error("Cannot find 'ticker' column in Price-Sales headers: %s", headers)
-        return {}, {}
-    if ps_now_idx is None:
-        logger.error("Cannot find 'ps_now' column in Price-Sales headers: %s", headers)
-        return {}, {}
+    if ticker_idx is None or ps_now_idx is None:
+        logger.warning("Cannot find ticker/ps_now columns in AI Analysis")
+        return {}
 
     ps_data = {}
-    ps_row_map = {}  # ticker -> 1-indexed sheet row number
-    max_idx = max(c for c in [ticker_idx, ps_now_idx, high_52w_idx, median_12m_idx] if c is not None)
-    for row_idx, row in enumerate(data_rows):
-        padded = row + [""] * (max_idx + 1 - len(row))
-        ticker = padded[ticker_idx].strip().upper()
-        if not ticker:
+    for row in rows[2:]:
+        if not row or ticker_idx >= len(row) or not row[ticker_idx].strip():
             continue
+        ticker = row[ticker_idx].strip().upper()
+        padded = row + [""] * (max(c for c in [ps_now_idx, high_52w_idx, median_12m_idx] if c is not None) + 1 - len(row))
 
-        ps_now = _safe_float(padded[ps_now_idx])
-        high_52w = _safe_float(padded[high_52w_idx]) if high_52w_idx is not None else None
-        median_12m = _safe_float(padded[median_12m_idx]) if median_12m_idx is not None else None
+        ps_data[ticker] = {
+            "ps_now": _safe_float(padded[ps_now_idx]),
+            "52w_high": _safe_float(padded[high_52w_idx]) if high_52w_idx is not None else None,
+            "12m_median": _safe_float(padded[median_12m_idx]) if median_12m_idx is not None else None,
+        }
 
-        ps_data[ticker] = {"ps_now": ps_now, "52w_high": high_52w, "12m_median": median_12m}
-        ps_row_map[ticker] = data_start_row + row_idx
-
-    logger.info("Loaded %d tickers from Price-Sales", len(ps_data))
-    return ps_data, ps_row_map
+    logger.info("Loaded price-sales data for %d tickers from AI Analysis", len(ps_data))
+    return ps_data
 
 
 def load_first_seen_data(service, logger) -> dict:
@@ -825,7 +806,6 @@ def upsert_v2(
     ai_data: dict,
     ai_row_map: dict,
     ps_data: dict,
-    ps_row_map: dict,
     days_map: dict,
     existing: dict,
     sheet_gids: dict,
@@ -837,7 +817,6 @@ def upsert_v2(
     """
     today_str = date.today().isoformat()
     ai_gid = sheet_gids.get(AI_ANALYSIS_SHEET, 0)
-    ps_gid = sheet_gids.get(PRICE_SALES_SHEET, 0)
 
     # Start with all existing tickers (we never delete rows)
     merged = dict(existing)
@@ -891,12 +870,7 @@ def upsert_v2(
         # -- Price-Sales enrichment --
         ps_row = ps_data.get(ticker, {})
         ps_now_val = ps_row.get("ps_now")
-        if ps_now_val is not None and ticker in ps_row_map:
-            ps_sheet_row = ps_row_map[ticker]
-            row["ps_now"] = (
-                f'=HYPERLINK("#gid={ps_gid}&range=A{ps_sheet_row}", "{ps_now_val:.2f}")'
-            )
-        elif ps_now_val is not None:
+        if ps_now_val is not None:
             row["ps_now"] = ps_now_val
 
         # price_%_of_52w_high = P/S Now / 52w High
@@ -998,12 +972,7 @@ def upsert_v2(
         # Price-Sales enrichment
         ps_row = ps_data.get(ticker, {})
         ps_now_val = ps_row.get("ps_now")
-        if ps_now_val is not None and ticker in ps_row_map:
-            ps_sheet_row = ps_row_map[ticker]
-            row["ps_now"] = (
-                f'=HYPERLINK("#gid={ps_gid}&range=A{ps_sheet_row}", "{ps_now_val:.2f}")'
-            )
-        elif ps_now_val is not None:
+        if ps_now_val is not None:
             row["ps_now"] = ps_now_val
         high_52w = ps_row.get("52w_high")
         if ps_now_val is not None and high_52w is not None and high_52w > 0:
@@ -1091,11 +1060,8 @@ def upsert_v2(
 
         ps_row = ps_data.get(ticker, {})
         ps_now_val = ps_row.get("ps_now")
-        if ps_now_val is not None and ticker in ps_row_map:
-            ps_sheet_row = ps_row_map[ticker]
-            row["ps_now"] = (
-                f'=HYPERLINK("#gid={ps_gid}&range=A{ps_sheet_row}", "{ps_now_val:.2f}")'
-            )
+        if ps_now_val is not None:
+            row["ps_now"] = ps_now_val
         high_52w = ps_row.get("52w_high")
         if ps_now_val is not None and high_52w is not None and high_52w > 0:
             row["price_%_of_52w_high"] = ps_now_val / high_52w
@@ -1276,7 +1242,7 @@ def main():
     logger.info("Sheet GIDs: %s", sheet_gids)
 
     ai_data, ai_row_map = load_ai_analysis(service, logger)
-    ps_data, ps_row_map = load_price_sales(service, logger)
+    ps_data = load_price_sales(service, logger)
     days_map = load_first_seen_data(service, logger)
     manual = load_manual_tickers(service, logger)
 
@@ -1285,7 +1251,7 @@ def main():
 
     # Step 3: Upsert
     final_rows = upsert_v2(
-        screened, manual, ai_data, ai_row_map, ps_data, ps_row_map,
+        screened, manual, ai_data, ai_row_map, ps_data,
         days_map, existing, sheet_gids, logger,
     )
 

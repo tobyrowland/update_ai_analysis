@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-Price-Sales Weekly Updater.
+Price-Sales Updater.
 
 Reads tickers from the 'AI Analysis' sheet, fetches market cap and revenue data
-from EODHD, computes Price-to-Sales ratios, and maintains a rolling 52-week P/S
-history table in the 'Price-Sales' sheet tab.
+from EODHD, computes Price-to-Sales ratios, and writes the results directly back
+to the price-sales columns in the 'AI Analysis' sheet.
 
 For backfill (new tickers), fetches 52 weeks of weekly closing prices and
 combines with revenue TTM to build historical P/S.  For weekly updates, fetches
 the current fundamentals snapshot for a single new data point.
 
-Runs every Sunday at 02:00 UTC via GitHub Actions.
+Runs daily at 06:00 UTC via GitHub Actions.
 """
 
 import argparse
@@ -34,8 +34,7 @@ from googleapiclient.discovery import build
 # ---------------------------------------------------------------------------
 
 SPREADSHEET_ID = "1js3dUTJtKhY1dUcwzYUGBOdKDZXBurLtRGgcIV8msYk"
-SOURCE_SHEET = "AI Analysis"
-PS_SHEET = "Price-Sales"
+SHEET_NAME = "AI Analysis"
 LOGS_SHEET = "Logs"
 
 EODHD_BASE_URL = "https://eodhd.com/api"
@@ -44,12 +43,17 @@ EODHD_API_KEY = os.environ.get("EODHD_API_KEY", "")
 DELAY_BETWEEN_CALLS = 0.5  # seconds between EODHD API calls
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-# Price-Sales sheet column order (matches header row)
-PS_COLUMNS = [
-    "ticker", "company_name", "ps_now", "52w_high", "52w_low",
-    "12m_median", "ath", "%_of_ath", "history_json", "last_updated",
-    "first_recorded",
-]
+# Price-sales columns written to AI Analysis (result dict key → sheet header)
+PS_SYNC_COLUMNS = {
+    "ps_now":       "ps_now",
+    "52w_high":     "52w_high",
+    "52w_low":      "52w_low",
+    "12m_median":   "12m_median",
+    "ath":          "ath",
+    "%_of_ath":     "%_of_ath",
+    "history_json": "history_json",
+    "last_updated": "price_data",
+}
 
 # Logs sheet column order
 LOG_COLUMNS = [
@@ -193,6 +197,37 @@ def get_sheets_service():
     return build("sheets", "v4", credentials=creds)
 
 
+def _col_letter(idx: int) -> str:
+    """Convert a 0-based column index to a spreadsheet column letter (A, B, ..., Z, AA, ...)."""
+    letters = ""
+    while True:
+        letters = chr(65 + idx % 26) + letters
+        idx = idx // 26 - 1
+        if idx < 0:
+            break
+    return letters
+
+
+def _read_ai_analysis_headers(service, logger) -> tuple[list[str], dict[str, int]]:
+    """Read AI Analysis row 2 headers, return (headers_list, {normalised_name: col_index})."""
+    result = sheets_execute(
+        service.spreadsheets()
+        .values()
+        .get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"'{SHEET_NAME}'!A2:AZ2",
+            valueRenderOption="FORMATTED_VALUE",
+        )
+    )
+    headers = result.get("values", [[]])[0]
+
+    def normalize(h):
+        return h.strip().lower().replace(" ", "_")
+
+    header_map = {normalize(h): i for i, h in enumerate(headers)}
+    return headers, header_map
+
+
 def read_ticker_list(service, logger) -> list[dict]:
     """Read ticker + exchange from AI Analysis sheet, starting at row 3."""
     result = sheets_execute(
@@ -200,7 +235,7 @@ def read_ticker_list(service, logger) -> list[dict]:
         .values()
         .get(
             spreadsheetId=SPREADSHEET_ID,
-            range=f"'{SOURCE_SHEET}'!A3:B",
+            range=f"'{SHEET_NAME}'!A3:B",
             valueRenderOption="FORMATTED_VALUE",
         )
     )
@@ -211,111 +246,60 @@ def read_ticker_list(service, logger) -> list[dict]:
             tickers.append({"ticker": row[0].strip(), "exchange": row[1].strip()})
         elif len(row) >= 1 and row[0].strip():
             tickers.append({"ticker": row[0].strip(), "exchange": ""})
-    logger.info("Read %d tickers from %s", len(tickers), SOURCE_SHEET)
+    logger.info("Read %d tickers from %s", len(tickers), SHEET_NAME)
     return tickers
 
 
-def read_ps_sheet(service, logger) -> dict[str, dict]:
-    """Read all rows from Price-Sales sheet, return dict keyed by ticker.
+def read_existing_ps_data(service, header_map, logger) -> dict[str, dict]:
+    """Read existing price-sales data from AI Analysis columns, keyed by ticker.
 
-    Dynamically finds the header row (the one containing 'ticker') to handle
-    sheets that have group/merged header rows above the actual column names.
-    Uses PS_COLUMNS for column mapping (data is written in that order).
-    When duplicates exist, keeps the entry with the most recent last_updated.
+    Reads the PS-related columns (ps_now, 52w_high, etc.) plus the price_data
+    date column directly from AI Analysis, so no separate sheet is needed.
     """
+    # Find column indices for the PS fields we need to read back
+    read_keys = {
+        "ps_now": "ps_now", "52w_high": "52w_high", "52w_low": "52w_low",
+        "12m_median": "12m_median", "ath": "ath", "%_of_ath": "%_of_ath",
+        "history_json": "history_json", "last_updated": "price_data",
+    }
+    col_indices = {}
+    for key, header_name in read_keys.items():
+        norm = header_name.strip().lower().replace(" ", "_")
+        idx = header_map.get(norm)
+        if idx is not None:
+            col_indices[key] = idx
+
+    if not col_indices:
+        logger.warning("No price-sales columns found in AI Analysis headers")
+        return {}
+
+    # Read all data rows (row 3 onward) up to the last PS column
+    max_col = max(col_indices.values())
+    end_col = _col_letter(max_col)
     result = sheets_execute(
         service.spreadsheets()
         .values()
         .get(
             spreadsheetId=SPREADSHEET_ID,
-            range=f"'{PS_SHEET}'!A1:K",
+            range=f"'{SHEET_NAME}'!A3:{end_col}",
             valueRenderOption="FORMATTED_VALUE",
         )
     )
     rows = result.get("values", [])
-    if not rows:
-        logger.info("Price-Sales sheet is empty")
-        return {}
-
-    # Find the actual header row (contains "ticker") to know where data starts
-    header_idx = 0
-    for i, row in enumerate(rows):
-        if row and any(str(cell).strip().lower() == "ticker" for cell in row):
-            header_idx = i
-            break
-
-    logger.info("Found header row at index %d", header_idx)
 
     ps_map = {}
-    for row in rows[header_idx + 1:]:
-        if not row or not row[0]:
+    for row in rows:
+        if not row or not row[0].strip():
             continue
-        # Map columns by position using PS_COLUMNS (the order data was written)
+        ticker = row[0].strip()
         entry = {}
-        for i, col_name in enumerate(PS_COLUMNS):
-            entry[col_name] = row[i] if i < len(row) else ""
-        ticker = entry.get("ticker", "").strip()
-        if not ticker:
-            continue
-        # If duplicate, keep the one with the most recent last_updated
-        if ticker in ps_map:
-            existing_date = ps_map[ticker].get("last_updated", "")
-            new_date = entry.get("last_updated", "")
-            if new_date > existing_date:
-                ps_map[ticker] = entry
-            logger.warning("Duplicate ticker %s found in sheet, keeping most recent", ticker)
-        else:
-            ps_map[ticker] = entry
+        for key, col_idx in col_indices.items():
+            entry[key] = row[col_idx] if col_idx < len(row) else ""
+        ps_map[ticker] = entry
 
-    logger.info("Read %d unique tickers from %s", len(ps_map), PS_SHEET)
+    logger.info("Read existing price-sales data for %d tickers from %s",
+                len(ps_map), SHEET_NAME)
     return ps_map
-
-
-def ensure_ps_sheet_exists(service, logger):
-    """Create the Price-Sales sheet tab if it doesn't exist, with header row."""
-    meta = sheets_execute(
-        service.spreadsheets()
-        .get(spreadsheetId=SPREADSHEET_ID, fields="sheets.properties")
-    )
-    for sheet in meta.get("sheets", []):
-        if sheet["properties"]["title"] == PS_SHEET:
-            logger.info("Sheet '%s' already exists", PS_SHEET)
-            return
-
-    sheets_execute(service.spreadsheets().batchUpdate(
-        spreadsheetId=SPREADSHEET_ID,
-        body={
-            "requests": [
-                {"addSheet": {"properties": {"title": PS_SHEET}}}
-            ]
-        },
-    ))
-
-    sheets_execute(service.spreadsheets().values().update(
-        spreadsheetId=SPREADSHEET_ID,
-        range=f"'{PS_SHEET}'!A1",
-        valueInputOption="USER_ENTERED",
-        body={"values": [PS_COLUMNS]},
-    ))
-
-    sheet_id = _get_sheet_id(service, PS_SHEET)
-    sheets_execute(service.spreadsheets().batchUpdate(
-        spreadsheetId=SPREADSHEET_ID,
-        body={
-            "requests": [
-                {
-                    "updateSheetProperties": {
-                        "properties": {
-                            "sheetId": sheet_id,
-                            "gridProperties": {"frozenRowCount": 1},
-                        },
-                        "fields": "gridProperties.frozenRowCount",
-                    }
-                }
-            ]
-        },
-    ))
-    logger.info("Created sheet '%s' with header row", PS_SHEET)
 
 
 def ensure_logs_sheet_exists(service, logger):
@@ -346,18 +330,6 @@ def ensure_logs_sheet_exists(service, logger):
     logger.info("Created sheet '%s' with header row", LOGS_SHEET)
 
 
-def _get_sheet_id(service, sheet_name: str) -> int:
-    """Return the numeric sheet ID for a given sheet name."""
-    meta = sheets_execute(
-        service.spreadsheets()
-        .get(spreadsheetId=SPREADSHEET_ID, fields="sheets.properties")
-    )
-    for sheet in meta.get("sheets", []):
-        if sheet["properties"]["title"] == sheet_name:
-            return sheet["properties"]["sheetId"]
-    raise RuntimeError(f"Sheet '{sheet_name}' not found")
-
-
 def append_rows(service, sheet_name: str, rows: list[list], logger):
     """Append rows to a sheet."""
     if not rows:
@@ -372,114 +344,27 @@ def append_rows(service, sheet_name: str, rows: list[list], logger):
     logger.info("Appended %d rows to %s", len(rows), sheet_name)
 
 
-def update_rows_by_ticker(service, sheet_name: str, updates: list[dict], logger):
-    """Update existing rows by matching ticker in column A."""
-    if not updates:
-        return
+def write_ps_to_ai_analysis(service, all_results: list[dict], header_map, logger):
+    """Write price-sales results directly to AI Analysis columns.
 
-    result = sheets_execute(
-        service.spreadsheets()
-        .values()
-        .get(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"'{sheet_name}'!A:A",
-            valueRenderOption="FORMATTED_VALUE",
-        )
-    )
-    col_a = result.get("values", [])
-    ticker_to_row = {}
-    for i, row in enumerate(col_a):
-        if row and row[0]:
-            ticker_to_row[row[0]] = i + 1  # 1-indexed
-
-    batch_data = []
-    for upd in updates:
-        ticker = upd["ticker"]
-        row_num = ticker_to_row.get(ticker)
-        if not row_num:
-            logger.warning("Ticker %s not found in sheet for update, skipping", ticker)
-            continue
-
-        row_values = [upd.get(col, "") for col in PS_COLUMNS[1:]]
-        batch_data.append(
-            {
-                "range": f"'{sheet_name}'!B{row_num}",
-                "values": [row_values],
-            }
-        )
-
-    if batch_data:
-        sheets_execute(service.spreadsheets().values().batchUpdate(
-            spreadsheetId=SPREADSHEET_ID,
-            body={"valueInputOption": "USER_ENTERED", "data": batch_data},
-        ))
-        logger.info("Updated %d rows in %s", len(batch_data), sheet_name)
-
-
-def update_ai_analysis_price_sales(service, all_results: list[dict], logger):
-    """Write price-sales data back to the AI Analysis sheet.
-
-    Syncs ps_now, 52w_high, 52w_low, 12m_median, ath, %_of_ath,
-    history_json, and the 'price data' date column.
-    Reads the AI Analysis header row to find columns dynamically.
+    Uses PS_SYNC_COLUMNS to map result dict keys to the correct sheet columns.
     """
     if not all_results:
         return
 
-    # Columns to sync: result dict key → AI Analysis header name
-    SYNC_COLUMNS = {
-        "ps_now":       "ps_now",
-        "52w_high":     "52w_high",
-        "52w_low":      "52w_low",
-        "12m_median":   "12m_median",
-        "ath":          "ath",
-        "%_of_ath":     "%_of_ath",
-        "history_json": "history_json",
-        "last_updated": "price_data",  # maps to the "price data" date column
-    }
-
-    # Read header row (row 2 has column names; row 1 is group headers)
-    result = sheets_execute(
-        service.spreadsheets()
-        .values()
-        .get(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"'{SOURCE_SHEET}'!A2:AZ2",
-            valueRenderOption="FORMATTED_VALUE",
-        )
-    )
-    headers = result.get("values", [[]])[0]
-
-    # Build header → column index map (normalize: lowercase, strip, spaces→underscores)
-    def normalize(h):
-        return h.strip().lower().replace(" ", "_")
-
-    header_map = {}
-    for i, h in enumerate(headers):
-        header_map[normalize(h)] = i
-
     # Resolve each sync column to its sheet column index
     col_indices = {}
-    for result_key, header_name in SYNC_COLUMNS.items():
-        idx = header_map.get(normalize(header_name))
+    for result_key, header_name in PS_SYNC_COLUMNS.items():
+        norm = header_name.strip().lower().replace(" ", "_")
+        idx = header_map.get(norm)
         if idx is not None:
             col_indices[result_key] = idx
         else:
             logger.warning("Column '%s' not found in AI Analysis headers", header_name)
 
     if not col_indices:
-        logger.warning("No price-sales columns found in AI Analysis — skipping sync")
+        logger.warning("No price-sales columns found in AI Analysis — skipping write")
         return
-
-    # Convert column index to letter (A=0, B=1, ..., Z=25, AA=26, ...)
-    def col_letter(idx):
-        letters = ""
-        while True:
-            letters = chr(65 + idx % 26) + letters
-            idx = idx // 26 - 1
-            if idx < 0:
-                break
-        return letters
 
     # Read ticker column (A) starting at data row 3 to build ticker→row map
     result = sheets_execute(
@@ -487,7 +372,7 @@ def update_ai_analysis_price_sales(service, all_results: list[dict], logger):
         .values()
         .get(
             spreadsheetId=SPREADSHEET_ID,
-            range=f"'{SOURCE_SHEET}'!A3:A",
+            range=f"'{SHEET_NAME}'!A3:A",
             valueRenderOption="FORMATTED_VALUE",
         )
     )
@@ -499,7 +384,7 @@ def update_ai_analysis_price_sales(service, all_results: list[dict], logger):
 
     # Build batch update — one cell per column per ticker
     batch_data = []
-    synced = 0
+    written = 0
     for r in all_results:
         ticker = r.get("ticker", "")
         row_num = ticker_to_row.get(ticker)
@@ -511,91 +396,20 @@ def update_ai_analysis_price_sales(service, all_results: list[dict], logger):
             if value == "" or value is None:
                 continue
             batch_data.append({
-                "range": f"'{SOURCE_SHEET}'!{col_letter(col_idx)}{row_num}",
+                "range": f"'{SHEET_NAME}'!{_col_letter(col_idx)}{row_num}",
                 "values": [[value]],
             })
-        synced += 1
+        written += 1
 
     if batch_data:
         sheets_execute(service.spreadsheets().values().batchUpdate(
             spreadsheetId=SPREADSHEET_ID,
             body={"valueInputOption": "USER_ENTERED", "data": batch_data},
         ))
-        logger.info("Synced price-sales data for %d tickers (%d cells) to %s",
-                     synced, len(batch_data), SOURCE_SHEET)
+        logger.info("Wrote price-sales data for %d tickers (%d cells) to %s",
+                     written, len(batch_data), SHEET_NAME)
     else:
-        logger.info("No price-sales data to sync to %s", SOURCE_SHEET)
-
-
-def cleanup_duplicate_rows(service, logger):
-    """One-time cleanup: delete duplicate ticker rows, keeping the FIRST (original).
-
-    The old code (before the header-detection fix) appended every ticker as
-    a new row on each run, creating duplicates below the originals.  This
-    function removes those extra rows in a single batched API call.
-    """
-    result = sheets_execute(
-        service.spreadsheets()
-        .values()
-        .get(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"'{PS_SHEET}'!A:A",
-            valueRenderOption="FORMATTED_VALUE",
-        )
-    )
-    col_a = result.get("values", [])
-    if not col_a:
-        return
-
-    # Find header row
-    header_idx = 0
-    for i, row in enumerate(col_a):
-        if row and str(row[0]).strip().lower() == "ticker":
-            header_idx = i
-            break
-
-    # Track first occurrence of each ticker; mark later ones for deletion
-    seen: set[str] = set()
-    rows_to_delete: list[int] = []
-    for i in range(header_idx + 1, len(col_a)):
-        row = col_a[i]
-        if not row or not row[0]:
-            continue
-        ticker = str(row[0]).strip()
-        if not ticker:
-            continue
-        if ticker in seen:
-            rows_to_delete.append(i)  # 0-based sheet row index
-        else:
-            seen.add(ticker)
-
-    if not rows_to_delete:
-        logger.info("No duplicate rows to clean up")
-        return
-
-    logger.info("Cleaning up %d duplicate rows (keeping originals)", len(rows_to_delete))
-    sheet_id = _get_sheet_id(service, PS_SHEET)
-
-    # Build all deletes in one batch, bottom-up so indices stay valid
-    requests_list = [
-        {
-            "deleteDimension": {
-                "range": {
-                    "sheetId": sheet_id,
-                    "dimension": "ROWS",
-                    "startIndex": row_idx,
-                    "endIndex": row_idx + 1,
-                }
-            }
-        }
-        for row_idx in sorted(rows_to_delete, reverse=True)
-    ]
-
-    sheets_execute(service.spreadsheets().batchUpdate(
-        spreadsheetId=SPREADSHEET_ID,
-        body={"requests": requests_list},
-    ))
-    logger.info("Cleanup complete — removed %d duplicate rows", len(rows_to_delete))
+        logger.info("No price-sales data to write to %s", SHEET_NAME)
 
 
 
@@ -1027,16 +841,13 @@ def main():
 
     service = get_sheets_service()
 
-    # Ensure sheets exist
-    ensure_ps_sheet_exists(service, logger)
+    # Ensure logs sheet exists
     ensure_logs_sheet_exists(service, logger)
 
-    # Remove duplicate rows left by the old broken code (keeps originals)
-    cleanup_duplicate_rows(service, logger)
-
-    # Read inputs
+    # Read AI Analysis headers and existing price-sales data
+    _headers, header_map = _read_ai_analysis_headers(service, logger)
     ticker_list = read_ticker_list(service, logger)
-    ps_map = read_ps_sheet(service, logger)
+    ps_map = read_existing_ps_data(service, header_map, logger)
 
     # Filter to specific tickers if requested
     if args.tickers:
@@ -1096,24 +907,11 @@ def main():
         else:
             update_rows.append(result)
 
-    # Write results to sheet
+    # Write results directly to AI Analysis
+    all_processed = new_rows + update_rows
     logger.info("Writing results: %d new, %d updates, %d skipped, %d errors",
                 len(new_rows), len(update_rows), skipped, errors)
-
-    # Append new rows
-    if new_rows:
-        sheet_rows = []
-        for r in new_rows:
-            sheet_rows.append([r.get(col, "") for col in PS_COLUMNS])
-        append_rows(service, PS_SHEET, sheet_rows, logger)
-
-    # Update existing rows
-    if update_rows:
-        update_rows_by_ticker(service, PS_SHEET, update_rows, logger)
-
-    # Sync all price-sales columns back to the AI Analysis sheet
-    all_processed = new_rows + update_rows
-    update_ai_analysis_price_sales(service, all_processed, logger)
+    write_ps_to_ai_analysis(service, all_processed, header_map, logger)
 
     # Write log entry
     duration = round(time.time() - start_time, 1)

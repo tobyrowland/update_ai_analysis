@@ -2,7 +2,7 @@
 """
 Score & Rank AI Analysis Sheet.
 
-Reads AI Analysis, Price-Sales, Manual, and TradingView market data to compute
+Reads AI Analysis, Manual, and TradingView market data to compute
 status and composite_score for every ticker. Sorts the sheet by status priority
 then composite score descending, and writes the screening columns back.
 
@@ -35,7 +35,6 @@ SPREADSHEET_ID = os.environ.get(
     "SPREADSHEET_ID", "1js3dUTJtKhY1dUcwzYUGBOdKDZXBurLtRGgcIV8msYk"
 )
 AI_ANALYSIS_SHEET = "AI Analysis"
-PRICE_SALES_SHEET = "Price-Sales"
 MANUAL_SHEET = "Manual"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -247,55 +246,24 @@ def load_ai_analysis(service, logger) -> tuple[list[dict], dict[str, int]]:
     return data, col_map
 
 
-def load_price_sales(service, logger) -> dict[str, dict]:
-    """Read Price-Sales sheet, return {ticker: {ps_now, 52w_high, 12m_median}}."""
-    try:
-        rows = read_sheet(service, PRICE_SALES_SHEET, end_col="K")
-    except Exception as e:
-        logger.warning("Could not read Price-Sales sheet: %s", e)
-        return {}
+def load_price_sales(ai_entries, col_map, logger) -> dict[str, dict]:
+    """Extract price-sales data from AI Analysis entries (already loaded).
 
-    if len(rows) < 2:
-        return {}
-
-    # Detect headers
-    row1_lower = [str(h).strip().lower() for h in rows[0]]
-    if "ticker" in row1_lower or "ticker_clean" in row1_lower:
-        headers = row1_lower
-        data_rows = rows[1:]
-    elif len(rows) >= 3:
-        headers = [str(h).strip().lower() for h in rows[1]]
-        data_rows = rows[2:]
-    else:
-        headers = row1_lower
-        data_rows = rows[1:]
-
-    hmap = {h: i for i, h in enumerate(headers)}
-    ticker_idx = hmap.get("ticker")
-    if ticker_idx is None:
-        ticker_idx = hmap.get("ticker_clean")
-    ps_now_idx = hmap.get("ps_now")
-    high_idx = hmap.get("52w_high")
-    median_idx = hmap.get("12m_median")
-
-    if ticker_idx is None:
-        logger.warning("Price-Sales has no ticker column — headers found: %s", headers)
-        return {}
-
+    Returns {ticker: {ps_now, 52w_high, 12m_median}} using the columns
+    now embedded directly in AI Analysis.
+    """
     result = {}
-    for row in data_rows:
-        max_needed = max(c for c in [ticker_idx, ps_now_idx, high_idx, median_idx] if c is not None)
-        padded = row + [""] * (max_needed + 1 - len(row))
-        ticker = padded[ticker_idx].strip().upper()
+    for entry in ai_entries:
+        ticker = entry.get("_ticker", "")
         if not ticker:
             continue
         result[ticker] = {
-            "ps_now": _safe_float(padded[ps_now_idx]) if ps_now_idx is not None else None,
-            "52w_high": _safe_float(padded[high_idx]) if high_idx is not None else None,
-            "12m_median": _safe_float(padded[median_idx]) if median_idx is not None else None,
+            "ps_now": _safe_float(entry.get("ps_now")),
+            "52w_high": _safe_float(entry.get("52w_high")),
+            "12m_median": _safe_float(entry.get("12m_median")),
         }
 
-    logger.info("Loaded Price-Sales data for %d tickers", len(result))
+    logger.info("Loaded price-sales data for %d tickers from AI Analysis", len(result))
     return result
 
 
@@ -542,7 +510,7 @@ def main():
         logger.warning("Screening columns missing from AI Analysis headers (add them to row 2): %s",
                         missing_cols)
 
-    ps_data = load_price_sales(service, logger)
+    ps_data = load_price_sales(ai_entries, col_map, logger)
     manual_tickers = load_manual_tickers(service, logger)
 
     # Step 2: Run TradingView screen for market data
