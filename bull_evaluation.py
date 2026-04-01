@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Bull Evaluation — Growth Strategist Audit for Top Equities.
+Bull Evaluation — The Smash-Hit Scout.
 
 Sends the top 100 green-eligible equities from AI Analysis to Claude Opus 4.6
-for a bull/growth audit. Each equity receives a pass or fail verdict.
+for a growth/venture equity audit. Looks for companies with powerful fundamental
+trajectories in massive or rapidly expanding verticals.
 Results are written to the 'Bull' column in the AI Analysis sheet.
 
-Schedule: Sundays 07:30 UTC (after bear_evaluation).
+Schedule: Mondays 08:30 UTC (after bear_evaluation).
 """
 
 import argparse
@@ -78,7 +79,6 @@ HEADER_ALIASES = {
 }
 
 # Columns to EXCLUDE from the data sent to Claude
-# Same as bear exclusions + bear, bull, history_json
 EXCLUDED_COLUMNS = {
     "status", "composite_score", "price", "ps_now",
     "price_pct_of_52w_high", "price_%_of_52w_high",
@@ -87,53 +87,64 @@ EXCLUDED_COLUMNS = {
 }
 
 # ---------------------------------------------------------------------------
-# Bull prompt
+# Bull prompt — The Smash-Hit Scout
 # ---------------------------------------------------------------------------
 
 BULL_PROMPT_TEMPLATE = """\
-Role: You are a high-conviction Growth Strategist and Technology Analyst. Your task \
-is to evaluate the provided list of equities based exclusively on the provided data \
-and AI analysis. You are looking for winners that show the potential for significant \
-outperformance.
+Role: You are a Growth-Focused Venture Equity Analyst. Your mission is to find \
+"Smash Hits"\u2014companies with powerful fundamental trajectories operating in \
+massive or rapidly expanding verticals. You are looking for the next dominant \
+category leaders.
 
-Your Objective: Review every ticker. Assign either a Green Tick (\u2705) or a Red Cross (\u274c) to each one.
+Your Objective: Review every ticker. Assign either a Green Tick (\u2705) or a \
+Red Cross (\u274c) to each one.
+
+Evaluation Framework:
+
+The Internal Engine: Use only the provided data/analysis to evaluate the company's \
+specific trajectory (revenue acceleration, margin expansion, or competitive wins).
+
+The External Context: You may use your internal knowledge of industry sectors \
+(e.g., AdTech, SaaS, BioTech, Energy) to provide context on market size, sector \
+difficulty, and whether the vertical has "Smash Hit" potential.
 
 The "Green Tick" (\u2705) Criteria:
-Assign a \u2705 only if the provided data or AI analysis shows at least two of the following:
+Assign a \u2705 only if the company meets both of these requirements:
 
-Explosive AI Integration: The analysis cites specific, high-margin AI revenue or a \
-"widening moat" due to proprietary AI tech.
+Fundamental Velocity: The provided data shows a company "firing on all cylinders" \
+(e.g., accelerating sales, dominant product-market fit, or structural efficiency).
 
-Growth Momentum: High revenue growth, market share gains, or "best-in-class" status \
-mentioned in the text.
-
-Positive Catalyst: Mention of a specific upcoming product launch, partnership, or \
-structural tailwind that the AI analysis highlights as a major "Buy" signal.
-
-Efficiency: Mention of expanding margins or "operating leverage" (doing more with less).
+High-Ceiling Vertical: Based on your industry knowledge, the company operates in \
+a sector that is either massive or poised for a generational shift. It isn't just \
+a "good business"; it's a business that could be 10x larger in a decade.
 
 The "Red Cross" (\u274c) Criteria:
-Assign a \u274c if the provided data or AI analysis suggests any of the following:
+Assign a \u274c if:
 
-Stagnation: The text mentions "mature markets," "slowing growth," or "lack of innovation."
+Small Pond: The company is performing well but in a niche, stagnant, or "difficult" \
+sector with limited upside (e.g., high-competition/low-margin legacy industries).
 
-Commoditization: The company is described as a "price taker" or facing "intense margin \
-pressure" from competitors.
+Friction: The provided analysis mentions slowing momentum or "ceiling" effects.
 
-Laggard Status: Any mention of being "behind" in AI adoption or losing market share.
-
-Macro Drag: If the analysis suggests the company is "defensive" but lacks any real \
-growth engine.
+"Just a Business": The company is solid but lacks the "Smash Hit" DNA\u2014it's an \
+incremental grower, not a category disruptor.
 
 Output Format:
 For every stock in the list, provide the result in this exact format. \
 Use the EXACT ticker as shown in the data header (including numbers and slashes):
 
-TICKER: \u2705 (Brief reason citing which criteria it meets)
+TICKER: \u2705 (Briefly explain why this vertical/trajectory combo could be a \
+"Smash Hit")
 
-TICKER: \u274c (Brief, blunt reason why it lacks "Alpha" potential)
+TICKER: \u274c (Briefly explain why it lacks the "Smash Hit" potential, citing \
+sector headwinds or fundamental friction)
 
-Constraint: Do not rank these. Do not provide a summary. Use only the provided information. \
+Strict Constraints:
+
+AI is Secondary: Treat AI as just one possible tool for growth, not the sole requirement.
+
+Data Integrity: Do not invent company-specific data; use only what is provided.
+
 You MUST output a verdict for ALL {count} equities.
 
 === EQUITIES TO EVALUATE ({count}) ===
@@ -461,7 +472,7 @@ def parse_bull_results(response_text):
 def main():
     load_dotenv()
 
-    parser = argparse.ArgumentParser(description="Bull Evaluation - Growth Audit")
+    parser = argparse.ArgumentParser(description="Bull Evaluation - Smash-Hit Scout")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print prompt and results without writing to the sheet")
     args = parser.parse_args()
