@@ -2,8 +2,8 @@ name: Bull Evaluation
 
 on:
   schedule:
-    # Runs at 07:30 UTC every Sunday (after bear_evaluation)
-    - cron: "30 7 * * 0"
+    # Runs at 08:30 UTC every Monday (after bear_evaluation at 08:00)
+    - cron: "30 8 * * 1"
   workflow_dispatch: # Allow manual trigger from GitHub UI
 
 jobs:
