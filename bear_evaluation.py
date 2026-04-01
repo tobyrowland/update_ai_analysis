@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Bear Evaluation — Risk Audit for Top Equities.
+Bear Evaluation — Fundamental Sentinel for Top Equities.
 
 Sends the top 100 green-eligible equities from AI Analysis to Gemini 2.5 Flash
-for a bear/risk audit. Each equity receives a pass or fail verdict.
+for a forensic fundamental health audit. Each equity receives a pass or fail
+verdict based on operational integrity and financial trajectory.
 Results are written to the 'Bear' column in the AI Analysis sheet.
 
-Schedule: Sundays 07:00 UTC (after score_ai_analysis).
+Schedule: Mondays 08:00 UTC.
 """
 
 import argparse
@@ -87,51 +88,59 @@ EXCLUDED_COLUMNS = {
 }
 
 # ---------------------------------------------------------------------------
-# Bear prompt
+# Bear prompt — The Fundamental Sentinel
 # ---------------------------------------------------------------------------
 
 BEAR_PROMPT_TEMPLATE = """\
-Role: You are a strictly objective Risk Auditor. Your task is to evaluate a list \
-of equities based exclusively on the provided data and AI analysis. You are not \
-allowed to use outside knowledge or "hallucinate" external market trends.
+Role: You are a specialized Forensic Analyst. Your sole mission is to determine \
+if a company's fundamental health is likely to deteriorate over the next 12 months. \
+You are strictly prohibited from considering valuation (price, P/E ratios, or \
+whether a stock is "expensive"). You care only about the operational integrity \
+and financial trajectory of the business.
 
-Your Objective: This is a RELATIVE exercise. You are comparing these {count} equities \
-against each other. You must select exactly 40 equities that are the strongest \
-relative holds, and flag the remaining as relative sells.
+Your Objective: Review every ticker. Assign either a Green Tick (\u2705) or a \
+Red Cross (\u274c) to each one based exclusively on the provided text.
 
-Assign a Green Tick (\u2705) to the 40 BEST equities \u2014 those with the strongest \
-fundamentals, most concrete AI analysis, and fewest risk factors RELATIVE to the \
-others in this list.
+The "Red Cross" (\u274c) Criteria:
+Assign a \u274c if the provided data or AI analysis indicates a negative \
+trajectory in any of these areas:
 
-Assign a Red Cross (\u274c) to the remaining equities \u2014 those that are relatively \
-weaker compared to the top 40.
+Margin Erosion: Any mention of rising costs, thinning margins, or inability \
+to pass costs to consumers.
 
-How to decide the relative ranking:
+Debt & Liquidity Stress: Mention of high leverage, weakening interest coverage, \
+or "cash burn" concerns.
 
-STRONGEST signals (favour \u2705):
-- Consistently growing revenue with improving or stable margins
-- Concrete, data-backed AI analysis citing specific structural advantages
-- Strong cash flow and healthy balance sheet relative to peers
-- Clear competitive moat described with specifics, not vague language
+Revenue Quality: Evidence of slowing organic demand, reliance on one-off gains, \
+or "churn" issues.
 
-WEAKEST signals (favour \u274c):
-- Declining or inconsistent margins relative to peers
-- AI analysis that relies on "potential" or "future growth" without current evidence
-- High debt, poor cash flow, or profitability concerns relative to peers
-- Regulatory, supply chain, or competitive risks that are more severe than peers
-- Valuation that appears stretched relative to fundamentals compared to peers
+Operational Friction: Mention of supply chain breakdowns, management turnover, \
+or loss of market share.
 
-IMPORTANT: You MUST assign exactly 40 \u2705 and the rest \u274c. Count carefully.
+Obsolescence: The AI analysis suggests the company's core product is being \
+disrupted or losing its "moat."
+
+The "Green Tick" (\u2705) Criteria:
+Assign a \u2705 only if the fundamentals appear stable or improving. If the \
+data shows growing cash flows, stable/expanding margins, and a strengthening \
+competitive position, it passes.
 
 Output Format:
 For every stock in the list, provide the result in this exact format. \
 Use the EXACT ticker as shown in the data header (including numbers and slashes):
 
-TICKER: \u2705 (Relatively strongest \u2014 one brief reason)
+TICKER: \u2705 (Only if the fundamental trajectory is stable/improving)
 
-TICKER: \u274c (Relatively weaker \u2014 one brief reason)
+TICKER: \u274c (Brief, blunt reason why the business fundamentals are at risk \
+of deteriorating)
 
-Constraint: Do not provide a summary. Go through the list one by one. \
+Strict Constraints:
+
+IGNORE VALUATION: Even if a stock is described as "expensive" or "overvalued," \
+do not mark it Red if the fundamentals are strong.
+
+DATA ONLY: Use only the provided information. No outside market knowledge.
+
 You MUST output a verdict for ALL {count} equities.
 
 === EQUITIES TO EVALUATE ({count}) ===
@@ -141,7 +150,7 @@ You MUST output a verdict for ALL {count} equities.
 === END OF DATA ===
 
 Now evaluate each equity above. Output ONLY the verdict lines, one per ticker. \
-Remember: exactly 40 must receive \u2705. You must cover ALL {count} tickers."""
+You must cover ALL {count} tickers."""
 
 
 # ---------------------------------------------------------------------------
@@ -463,7 +472,7 @@ def parse_bear_results(response_text):
 def main():
     load_dotenv()
 
-    parser = argparse.ArgumentParser(description="Bear Evaluation - Risk Audit")
+    parser = argparse.ArgumentParser(description="Bear Evaluation - Fundamental Sentinel")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print prompt and results without writing to the sheet")
     args = parser.parse_args()
