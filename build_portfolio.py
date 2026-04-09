@@ -346,6 +346,35 @@ def _build_ps_formula(ticker, exchange, ttm_revenue):
     return f'=GOOGLEFINANCE("{gf_ticker}","marketcap")/{ttm_int}'
 
 
+def _google_finance_url(ticker: str, exchange: str) -> str:
+    """Build a Google Finance URL for a ticker."""
+    gf_exchange = TV_TO_GOOGLE_FINANCE.get(exchange.upper(), exchange)
+    return f"https://www.google.com/finance/quote/{ticker}:{gf_exchange}"
+
+
+def _ticker_hyperlink(ticker: str, exchange: str) -> str:
+    """Build a =HYPERLINK() formula pointing to Google Finance."""
+    url = _google_finance_url(ticker, exchange)
+    return f'=HYPERLINK("{url}", "{ticker}")'
+
+
+def _get_sheet_gid(service, sheet_name: str) -> int:
+    """Return the numeric sheetId (gid) for a named sheet tab."""
+    meta = service.spreadsheets().get(
+        spreadsheetId=SPREADSHEET_ID, fields="sheets.properties"
+    ).execute()
+    for sheet in meta.get("sheets", []):
+        if sheet["properties"]["title"] == sheet_name:
+            return sheet["properties"]["sheetId"]
+    raise RuntimeError(f"Sheet '{sheet_name}' not found")
+
+
+def _company_name_hyperlink(company_name: str, gid: int, sheet_row: int) -> str:
+    """Build a =HYPERLINK() formula linking to the AI Analysis row."""
+    safe_name = company_name.replace('"', '""')
+    return f'=HYPERLINK("#gid={gid}&range=A{sheet_row}", "{safe_name}")'
+
+
 # ---------------------------------------------------------------------------
 # Company name normalisation & fuzzy matching
 # ---------------------------------------------------------------------------
@@ -389,12 +418,12 @@ def _pick_best(candidates, exchange_idx, score_idx, logger):
     if len(candidates) == 1:
         return candidates[0]
 
-    tickers = [t for t, _ in candidates]
-    names = [p[2].strip() if len(p) > 2 else "?" for _, p in candidates]
+    tickers = [t for t, _, _ in candidates]
+    names = [p[2].strip() if len(p) > 2 else "?" for _, p, _ in candidates]
     logger.info("  Dedup: [%s] tickers: %s", names[0], tickers)
 
     us_candidates = [
-        (t, p) for t, p in candidates
+        (t, p, sr) for t, p, sr in candidates
         if exchange_idx is not None and _is_us_exchange(p[exchange_idx])
     ]
 
@@ -417,10 +446,10 @@ def deduplicate_by_company(entries, exchange_idx, company_idx, score_idx, logger
         return entries
 
     items = []
-    for ticker, padded in entries:
+    for ticker, padded, sheet_row in entries:
         raw_name = padded[company_idx].strip() if company_idx < len(padded) else ""
         norm = _normalise_company(raw_name) if raw_name else ticker
-        items.append((ticker, padded, raw_name, norm))
+        items.append((ticker, padded, sheet_row, raw_name, norm))
 
     groups = []
     assigned = [False] * len(items)
@@ -433,14 +462,14 @@ def deduplicate_by_company(entries, exchange_idx, company_idx, score_idx, logger
         for j in range(i + 1, len(items)):
             if assigned[j]:
                 continue
-            if _names_match(items[i][2], items[j][2]):
+            if _names_match(items[i][3], items[j][3]):
                 group.append(items[j])
                 assigned[j] = True
         groups.append(group)
 
     deduped = []
     for group in groups:
-        candidates = [(t, p) for t, p, _, _ in group]
+        candidates = [(t, p, sr) for t, p, sr, _, _ in group]
         best = _pick_best(candidates, exchange_idx, score_idx, logger)
         deduped.append(best)
 
@@ -522,7 +551,8 @@ def main():
             ticker = _extract_ticker(padded[ticker_idx])
             if not ticker:
                 continue
-            dual_positive.append((ticker, padded))
+            sheet_row = row_offset + 3  # 2 header rows, 1-indexed
+            dual_positive.append((ticker, padded, sheet_row))
 
     logger.info("Found %d equities with both Bear \u2705 and Bull \u2705", len(dual_positive))
 
@@ -552,8 +582,10 @@ def main():
     # ---------------------------------------------------------------
     # Build Portfolio rows
     # ---------------------------------------------------------------
+    ai_gid = _get_sheet_gid(service, AI_ANALYSIS_SHEET)
+
     portfolio_rows = []
-    for ticker, padded in dual_positive:
+    for ticker, padded, sheet_row in dual_positive:
         exchange = padded[exchange_idx].strip() if exchange_idx is not None else ""
 
         # Compute TTM revenue for live P/S formula
@@ -565,7 +597,18 @@ def main():
         row_data = []
         for col_key in PORTFOLIO_COLUMNS:
             if col_key == "ticker":
-                row_data.append(ticker)
+                row_data.append(
+                    _ticker_hyperlink(ticker, exchange) if exchange else ticker
+                )
+            elif col_key == "company_name":
+                company_name = ""
+                src_idx = col_map.get(col_key)
+                if src_idx is not None and src_idx < len(padded):
+                    company_name = padded[src_idx].strip()
+                row_data.append(
+                    _company_name_hyperlink(company_name, ai_gid, sheet_row)
+                    if company_name else ""
+                )
             elif col_key == "ps_now" and ttm_revenue is not None and ttm_revenue > 0:
                 # Write live GOOGLEFINANCE formula instead of static value
                 formula = _build_ps_formula(ticker, exchange, ttm_revenue)
