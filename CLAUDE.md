@@ -6,7 +6,7 @@ Automated equity screening and analysis pipeline that tracks ~400+ global stocks
 Integrates TradingView screening, EODHD fundamentals, AI narratives (Gemini),
 and Supabase (PostgreSQL) as the primary data store.
 
-**Supabase Project:** `https://szslfkmcxrerofaesork.supabase.co`
+**Supabase Project:** `https://nojoooddiadyrduikgsk.supabase.co`
 
 ## Architecture
 
