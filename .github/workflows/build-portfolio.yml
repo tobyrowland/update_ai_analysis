@@ -1,0 +1,39 @@
+name: Build Portfolio
+
+on:
+  schedule:
+    # Runs at 08:00 UTC every Sunday (after bear + bull evaluations)
+    - cron: "0 8 * * 0"
+  workflow_dispatch: # Allow manual trigger from GitHub UI
+
+jobs:
+  build-portfolio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build Portfolio
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python build_portfolio.py
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-portfolio-logs-${{ github.run_id }}
+          path: logs/
+          retention-days: 30
