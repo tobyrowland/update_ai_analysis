@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-AI Narrative Updater for EJ2N Spreadsheet.
+AI Narrative Updater — Supabase edition.
 
-Reads the 'AI Analysis' sheet, identifies stale/unanalysed companies,
+Reads the companies table, identifies stale/unanalysed companies,
 generates fresh narrative content via Gemini + SerpAPI web search,
-and writes results back to the sheet.
+and writes results back to the database.
 """
 
 import argparse
@@ -20,15 +20,13 @@ from pathlib import Path
 import requests
 from dateutil import parser as dateparser
 from dotenv import load_dotenv
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
+
+from db import SupabaseDB
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-SPREADSHEET_ID = "1js3dUTJtKhY1dUcwzYUGBOdKDZXBurLtRGgcIV8msYk"
-SHEET_NAME = "AI Analysis"
 STALENESS_DAYS = 90
 SERPAPI_ENDPOINT = "https://serpapi.com/search"
 GEMINI_MODEL = "gemini-2.5-flash"
@@ -36,67 +34,32 @@ DELAY_BETWEEN_CALLS = 2  # seconds between tickers
 RETRY_DELAY = 10  # seconds between retries
 MAX_RETRIES = 2  # total attempts per ticker
 
-# Header names used to locate columns dynamically from row 2.
-# The script reads actual sheet headers rather than relying on hardcoded positions.
-HEADER_TICKER = "ticker"
-HEADER_COMPANY = "company_name"
-HEADER_DESCRIPTION = "description"
-HEADER_SHORT_OUTLOOK = "short_outlook"
-HEADER_OUTLOOK = "full_outlook"
-HEADER_RISKS = "key_risks"
-HEADER_ANALYZED = "ai"
-HEADER_ONE_TIME_EVENTS = "one_time_events"
-HEADER_EVENT_IMPACT = "event_impact"
+NULL_VALUE = "\u2014"  # em-dash for missing data
 
-# Map legacy/alternative sheet headers → current lowercase underscore keys.
-HEADER_ALIASES = {
-    "Ticker":               "ticker",
-    "ticker_clean":         "ticker",
-    "Company":              "company_name",
-    "Company Name":         "company_name",
-    "Short Outlook":        "short_outlook",
-    "Outlook":              "full_outlook",
-    "Full Outlook":         "full_outlook",
-    "Key Risks":            "key_risks",
-    "AI":                   "ai",
-    "Analyzed":             "ai",
-    "AI Analyzed":          "ai",
-    "Data":                 "data",
-    "Data As Of":           "data",
-    "Fundamentals Date":    "data",
-    "One Time Events":      "one_time_events",
-    "One-Time Events":      "one_time_events",
-    "Event Impact":         "event_impact",
-}
-
-NULL_VALUE = "—"  # must match eodhd_updater.py
-
-# Financial column labels for prompt context (order doesn't matter for lookup).
-# These are the lowercase underscore column keys used in the sheet.
+# Financial column keys used to build prompt context.
+# These are the Supabase column names.
 FINANCIAL_HEADERS = [
     "r40_score",
     "fundamentals_snapshot",
     "annual_revenue_5y",
     "quarterly_revenue",
-    "rev_growth_ttm%",
-    "rev_growth_qoq%",
-    "rev_cagr%",
+    "rev_growth_ttm_pct",
+    "rev_growth_qoq_pct",
+    "rev_cagr_pct",
     "rev_consistency_score",
-    "gross_margin%",
-    "gm_trend%",
-    "operating_margin%",
-    "net_margin%",
-    "net_margin_yoy%",
-    "fcf_margin%",
-    "opex_%_of_revenue",
-    "s&m+r&d_%_of_revenue",
+    "gross_margin_pct",
+    "gm_trend_pct",
+    "operating_margin_pct",
+    "net_margin_pct",
+    "net_margin_yoy_pct",
+    "fcf_margin_pct",
+    "opex_pct_of_revenue",
+    "sm_rd_pct_of_revenue",
     "rule_of_40",
     "qrtrs_to_profitability",
     "eps_only",
-    "eps_yoy%",
+    "eps_yoy_pct",
 ]
-
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -124,102 +87,6 @@ def setup_logging() -> logging.Logger:
     logger.addHandler(sh)
 
     return logger
-
-
-# ---------------------------------------------------------------------------
-# Google Sheets helpers
-# ---------------------------------------------------------------------------
-
-
-def get_sheets_service():
-    sa_value = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
-    if not sa_value:
-        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON env var is not set")
-
-    # Support both a file path and raw JSON content (for GitHub Actions secrets)
-    if sa_value.strip().startswith("{"):
-        import json as _json
-        info = _json.loads(sa_value)
-        creds = service_account.Credentials.from_service_account_info(
-            info, scopes=SCOPES
-        )
-    else:
-        creds = service_account.Credentials.from_service_account_file(
-            sa_value, scopes=SCOPES
-        )
-    return build("sheets", "v4", credentials=creds)
-
-
-def read_all_rows(service) -> list[list[str]]:
-    """Return all rows from the AI Analysis sheet (including header rows)."""
-    result = (
-        service.spreadsheets()
-        .values()
-        .get(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"'{SHEET_NAME}'",
-            valueRenderOption="FORMATTED_VALUE",
-        )
-        .execute()
-    )
-    return result.get("values", [])
-
-
-def write_row_updates(service, updates: list[dict]):
-    """
-    Batch-write updates to the sheet.
-
-    Each entry in `updates` is:
-        {"row": <1-indexed row number>, "values": {col_letter: value, ...}}
-    """
-    if not updates:
-        return
-
-    data = []
-    for upd in updates:
-        row = upd["row"]
-        for col_letter, value in upd["values"].items():
-            data.append({
-                "range": f"'{SHEET_NAME}'!{col_letter}{row}",
-                "values": [[value]],
-            })
-
-    body = {"valueInputOption": "USER_ENTERED", "data": data}
-    service.spreadsheets().values().batchUpdate(
-        spreadsheetId=SPREADSHEET_ID, body=body
-    ).execute()
-
-
-# ---------------------------------------------------------------------------
-# Staleness check
-# ---------------------------------------------------------------------------
-
-
-def needs_update(row: list[str], col_map: dict) -> bool:
-    """Return True if this row should be re-analysed."""
-    ticker_idx = col_map.get(HEADER_TICKER, 0)
-    analyzed_idx = col_map.get(HEADER_ANALYZED)
-
-    max_idx = max(ticker_idx, analyzed_idx or 0)
-    padded = row + [""] * (max_idx + 1 - len(row))
-
-    ticker = padded[ticker_idx].strip()
-    if not ticker:
-        return False
-
-    if analyzed_idx is None:
-        return True  # column doesn't exist yet → treat as stale
-
-    analyzed_str = padded[analyzed_idx].strip()
-    if not analyzed_str:
-        return True
-
-    try:
-        analyzed_date = dateparser.parse(analyzed_str).date()
-    except (ValueError, TypeError):
-        return True  # unparseable date → treat as stale
-
-    return (date.today() - analyzed_date) > timedelta(days=STALENESS_DAYS)
 
 
 # ---------------------------------------------------------------------------
@@ -283,10 +150,10 @@ _MONTH_TO_QUARTER = {
 def _build_event_search_query(company: str, ticker: str, event_text: str) -> str:
     """Turn terse analyst flag text into a useful Google search query.
 
-    Flags look like: '⬇ margin swing -22pp vs norm (2025-09)'
+    Flags look like: '\u2b07 margin swing -22pp vs norm (2025-09)'
     We want: 'Celsius Holdings CELH one-time charge margin impact Q3 2025'
     """
-    # Extract date if present — formats like (2025-09) or (2024-12)
+    # Extract date if present -- formats like (2025-09) or (2024-12)
     date_match = re.search(r"\((\d{4})-(\d{2})\)", event_text)
     quarter_str = ""
     if date_match:
@@ -358,19 +225,19 @@ FINANCIAL DATA FROM SPREADSHEET:
 EXAMPLES OF THE DESIRED FORMAT (use these as style guides):
 
 --- EXAMPLE 1 (STEP - StepStone Group) ---
-Short Outlook: 🟢 Strong fundraising and fee growth driving record assets under management.
+Short Outlook: \U0001f7e2 Strong fundraising and fee growth driving record assets under management.
 Full Outlook: Reported Q3 FY26 earnings on Feb 5, 2026, showing strong fee-related earnings growth driven by record AUM from robust fundraising. As an established, profitable asset manager, GAAP earnings can be volatile due to performance fees. However, the consistent expansion of management fees from sticky, long-term capital provides a stable and growing earnings base, supporting a positive fundamental outlook.
-Key Risks: 🟡 Performance fee volatility and fundraising slowdown in an economic downturn.
+Key Risks: \U0001f7e1 Performance fee volatility and fundraising slowdown in an economic downturn.
 
 --- EXAMPLE 2 (GTLB - GitLab) ---
-Short Outlook: 🟢 Strong revenue growth and high margins; enterprise adoption is key.
+Short Outlook: \U0001f7e2 Strong revenue growth and high margins; enterprise adoption is key.
 Full Outlook: Latest earnings (Dec 4, 2025) showed strong 30% YoY revenue growth. Exceptional 91% gross margins are funding growth, with operating leverage improving. While still unprofitable on a GAAP basis due to high R&D and S&M spend (incl. SBC), losses are narrowing. Adoption of AI features and enterprise tiers should drive the company towards GAAP profitability within the next 1-2 years.
-Key Risks: 🟡 Intense competition from Microsoft/GitHub and macroeconomic spending pressures.
+Key Risks: \U0001f7e1 Intense competition from Microsoft/GitHub and macroeconomic spending pressures.
 
 --- EXAMPLE 3 (ADI - Analog Devices, cautious) ---
-Short Outlook: 🟡 Cautious guidance as industrial market weakness and inventory correction persists.
+Short Outlook: \U0001f7e1 Cautious guidance as industrial market weakness and inventory correction persists.
 Full Outlook: Analog Devices' Q1 FY26 earnings (Feb 18, 2026) beat lowered expectations but Q2 guidance points to continued decline. Revenue is pressured by a broad-based cyclical downturn, particularly in industrial and communications, with inventory digestion taking longer than expected. While historically strong gross margins (>60%) have compressed due to lower factory utilization, the company remains highly profitable. Recovery hinges on a second-half 2026 market rebound.
-Key Risks: 🟡 Prolonged cyclical downturn and continued inventory digestion in key markets.
+Key Risks: \U0001f7e1 Prolonged cyclical downturn and continued inventory digestion in key markets.
 
 ---
 
@@ -386,11 +253,11 @@ DESCRIPTION RULES:
 
 SHORT OUTLOOK RULES:
 - One sentence, max 15 words
-- Start with 🟢 (positive), 🟡 (cautious/mixed), or 🔴 (negative) emoji
+- Start with \U0001f7e2 (positive), \U0001f7e1 (cautious/mixed), or \U0001f534 (negative) emoji
 - Reference the single most important recent development
 
 FULL OUTLOOK RULES:
-- 3–5 sentences
+- 3\u20135 sentences
 - Reference the most recent earnings report by date if available in web search results
 - Explain the fundamental earnings quality story
 - Mention path to profitability if not yet profitable, or sustainability of profits if already profitable
@@ -398,8 +265,8 @@ FULL OUTLOOK RULES:
 
 KEY RISKS RULES:
 - One sentence, max 15 words
-- Start with 🟡 or 🔴 emoji
-- Name the 1–2 most specific risks
+- Start with \U0001f7e1 or \U0001f534 emoji
+- Name the 1\u20132 most specific risks
 
 Respond ONLY with a JSON object in this exact format, no markdown, no preamble:
 {{
@@ -415,9 +282,9 @@ EVENT_IMPACT_SECTION = """\
 ONE-TIME EVENT FLAGGED BY ANALYST:
 {one_time_event}
 
-ADDITIONAL TASK — EVENT IMPACT ANALYSIS:
+ADDITIONAL TASK \u2014 EVENT IMPACT ANALYSIS:
 The analyst has flagged the one-time event above. Your job is to ADD VALUE beyond
-what the flag already says. Do NOT just restate or paraphrase the event — the reader
+what the flag already says. Do NOT just restate or paraphrase the event \u2014 the reader
 can already see it. Instead:
 
 1. USE THE WEB SEARCH RESULTS (especially the "ONE-TIME EVENT SEARCH" section) to
@@ -435,17 +302,17 @@ financial data. If you cannot identify the specific cause, focus on the quantifi
 impact and say the cause is unclear.
 
 EVENT IMPACT RULES:
-- Start with 🔴 if it flatters (inflates) metrics — this is a warning
-- Start with 🟢 if it understates (depresses) metrics — hidden upside
-- Start with 🟡 if neutral or mixed impact
+- Start with \U0001f534 if it flatters (inflates) metrics \u2014 this is a warning
+- Start with \U0001f7e2 if it understates (depresses) metrics \u2014 hidden upside
+- Start with \U0001f7e1 if neutral or mixed impact
 - Then briefly name the real-world cause (from web results) and quantify the effect
 - 2-3 sentences max
-- Do NOT repeat back the analyst's flag text — add new information
+- Do NOT repeat back the analyst's flag text \u2014 add new information
 
 Example outputs:
-  "🔴 Flatters margins +4pp — one-off $120M patent licensing payment from Samsung in Q3 boosted GM to 52% vs ~48% normalised. Already lapsed; Q4 margins will revert."
-  "🟢 Understates EPS by ~$0.35 — $45M restructuring charge relates to closure of Austin fab announced Oct 2025. Non-recurring; adj. EPS ~$1.20 vs reported $0.85. Charge completes Q1 2026."
-  "🟡 Mixed — Kinaxis acquisition (closed Aug 2025) adds ~$80M/qtr revenue but $25M integration costs depress margins ~2pp. Costs expected to taper over 3 quarters."
+  "\U0001f534 Flatters margins +4pp \u2014 one-off $120M patent licensing payment from Samsung in Q3 boosted GM to 52% vs ~48% normalised. Already lapsed; Q4 margins will revert."
+  "\U0001f7e2 Understates EPS by ~$0.35 \u2014 $45M restructuring charge relates to closure of Austin fab announced Oct 2025. Non-recurring; adj. EPS ~$1.20 vs reported $0.85. Charge completes Q1 2026."
+  "\U0001f7e1 Mixed \u2014 Kinaxis acquisition (closed Aug 2025) adds ~$80M/qtr revenue but $25M integration costs depress margins ~2pp. Costs expected to taper over 3 quarters."
 """
 
 EVENT_IMPACT_JSON_ADDITION = """\
@@ -454,17 +321,13 @@ Include this additional field in your JSON response:
 """
 
 
-def build_financial_summary(row: list[str], col_map: dict) -> str:
-    """Format financial columns into readable text for the prompt."""
-    max_idx = max(col_map.values()) if col_map else 0
-    padded = row + [""] * (max_idx + 1 - len(row))
+def build_financial_summary(company: dict) -> str:
+    """Format financial columns from a company dict into readable text for the prompt."""
     lines = []
-    for label in FINANCIAL_HEADERS:
-        col_idx = col_map.get(label)
-        if col_idx is not None and col_idx < len(padded):
-            val = padded[col_idx].strip()
-            if val and val != NULL_VALUE:
-                lines.append(f"  {label}: {val}")
+    for col_name in FINANCIAL_HEADERS:
+        val = company.get(col_name)
+        if val is not None and str(val).strip() and str(val).strip() != NULL_VALUE:
+            lines.append(f"  {col_name}: {val}")
     return "\n".join(lines) if lines else "  (no financial data available)"
 
 
@@ -552,52 +415,31 @@ def call_gemini(prompt: str, api_key: str, logger: logging.Logger) -> dict | Non
 # ---------------------------------------------------------------------------
 
 
-def _col_letter(idx: int) -> str:
-    """Convert 0-based column index to Excel-style letter(s). 0→A, 25→Z, 26→AA."""
-    result = ""
-    while True:
-        result = chr(65 + idx % 26) + result
-        idx = idx // 26 - 1
-        if idx < 0:
-            break
-    return result
-
-
 def process_company(
-    row: list[str],
-    row_number: int,
+    company: dict,
     serpapi_key: str,
     dry_run: bool,
     logger: logging.Logger,
-    col_map: dict | None = None,
 ) -> dict | None:
     """
-    Process a single company row. Returns an update dict for writing,
+    Process a single company dict. Returns the update fields dict for writing,
     or None on failure.
     """
-    col_map = col_map or {}
-    ticker_idx = col_map.get(HEADER_TICKER, 0)
-    company_idx = col_map.get(HEADER_COMPANY, 1)
-    max_idx = max(col_map.values()) if col_map else 1
-    padded = row + [""] * (max_idx + 1 - len(row))
-    ticker = padded[ticker_idx].strip()
-    company = padded[company_idx].strip()
+    ticker = company.get("ticker", "").strip()
+    company_name = company.get("company_name", "").strip()
 
-    logger.info("Processing %s (%s) — row %d", ticker, company, row_number)
+    logger.info("Processing %s (%s)", ticker, company_name)
 
     # Check for one-time events (before web search so we can target the search)
-    one_time_events_idx = col_map.get(HEADER_ONE_TIME_EVENTS)
-    one_time_event_text = ""
-    if one_time_events_idx is not None and one_time_events_idx < len(padded):
-        one_time_event_text = padded[one_time_events_idx].strip()
-        if one_time_event_text == NULL_VALUE:
-            one_time_event_text = ""
+    one_time_event_text = (company.get("one_time_events") or "").strip()
+    if one_time_event_text == NULL_VALUE:
+        one_time_event_text = ""
 
     # Web search (includes targeted event search when one_time_event is present)
     web_context = ""
     if serpapi_key:
         web_context = gather_web_context(
-            company, ticker, serpapi_key, logger,
+            company_name, ticker, serpapi_key, logger,
             one_time_event=one_time_event_text,
         )
 
@@ -605,12 +447,12 @@ def process_company(
     if web_context:
         web_section = f"RECENT WEB SEARCH RESULTS:\n{web_context}"
     else:
-        web_section = "(No recent web search results available — rely on financial data.)"
+        web_section = "(No recent web search results available \u2014 rely on financial data.)"
 
     # Build prompt
-    fin_summary = build_financial_summary(row, col_map)
+    fin_summary = build_financial_summary(company)
     prompt = PROMPT_TEMPLATE.format(
-        company_name=company,
+        company_name=company_name,
         ticker=ticker,
         financial_data_summary=fin_summary,
         web_section=web_section,
@@ -647,43 +489,23 @@ def process_company(
 
     today_str = date.today().isoformat()
 
-    # Map output fields to sheet columns dynamically
-    field_to_header = {
-        "description": HEADER_DESCRIPTION,
-        "short_outlook": HEADER_SHORT_OUTLOOK,
-        "full_outlook": HEADER_OUTLOOK,
-        "key_risks": HEADER_RISKS,
+    # Build the update payload for Supabase
+    update_fields = {
+        "description": result["description"],
+        "short_outlook": result["short_outlook"],
+        "full_outlook": result["full_outlook"],
+        "key_risks": result["key_risks"],
+        "ai_analyzed_at": today_str,
     }
-    values = {}
-    for field, header in field_to_header.items():
-        idx = col_map.get(header)
-        if idx is not None:
-            values[_col_letter(idx)] = result[field]
-        else:
-            logger.warning("Column '%s' not found in sheet, skipping field '%s'", header, field)
 
     # Write event_impact if we requested it and got a response
-    event_impact_idx = col_map.get(HEADER_EVENT_IMPACT)
-    if event_impact_idx is not None:
-        if has_event and result.get("event_impact"):
-            values[_col_letter(event_impact_idx)] = result["event_impact"]
-        elif not has_event:
-            # Clear stale event_impact if one_time_events is now empty
-            values[_col_letter(event_impact_idx)] = ""
+    if has_event and result.get("event_impact"):
+        update_fields["event_impact"] = result["event_impact"]
+    elif not has_event:
+        # Clear stale event_impact if one_time_events is now empty
+        update_fields["event_impact"] = None
 
-    # Write the analysis date
-    analyzed_idx = col_map.get(HEADER_ANALYZED)
-    if analyzed_idx is not None:
-        values[_col_letter(analyzed_idx)] = today_str
-
-    if not values:
-        logger.warning("No writable columns found for %s", ticker)
-        return None
-
-    return {
-        "row": row_number,
-        "values": values,
-    }
+    return update_fields
 
 
 def main():
@@ -691,7 +513,11 @@ def main():
 
     parser = argparse.ArgumentParser(description="AI Narrative Updater")
     parser.add_argument("--dry-run", action="store_true",
-                        help="Print prompts and results without writing to the sheet")
+                        help="Print prompts and results without writing to the database")
+    parser.add_argument("--ticker", type=str, default=None,
+                        help="Process only this specific ticker")
+    parser.add_argument("--force", action="store_true",
+                        help="Ignore staleness and refresh all tickers")
     args = parser.parse_args()
 
     logger = setup_logging()
@@ -708,72 +534,56 @@ def main():
     if not serpapi_key:
         logger.warning("SERPAPI_API_KEY not set — will skip web searches")
 
-    # Read sheet
-    service = get_sheets_service()
-    all_rows = read_all_rows(service)
-    logger.info("Read %d rows from sheet (including headers)", len(all_rows))
+    # Connect to Supabase
+    db = SupabaseDB()
 
-    # Build column map from row 2 headers
-    col_map = {}  # header_name → 0-based column index
-    if len(all_rows) >= 2:
-        for idx, header in enumerate(all_rows[1]):
-            name = header.strip()
-            name = HEADER_ALIASES.get(name, name)
-            col_map[name] = idx
-    logger.info("Column map: %s", {k: v for k, v in col_map.items()})
+    # Get companies needing update
+    if args.ticker:
+        company = db.get_company(args.ticker)
+        if not company:
+            logger.error("Ticker %s not found in database", args.ticker)
+            sys.exit(1)
+        companies_to_update = [company]
+        logger.info("Single-ticker mode: processing %s", args.ticker)
+    elif args.force:
+        companies_to_update = db.get_all_companies()
+        logger.info("Force mode: refreshing all %d companies", len(companies_to_update))
+    else:
+        companies_to_update = db.get_stale_companies("ai_analyzed_at", STALENESS_DAYS)
 
-    # Data starts at row 3 (index 2) — row 1 is group headers, row 2 is column headers
-    data_rows = all_rows[2:] if len(all_rows) > 2 else []
+    logger.info("Found %d companies needing update", len(companies_to_update))
 
-    # Find rows needing update
-    rows_to_update = []
-    for i, row in enumerate(data_rows):
-        row_number = i + 3  # 1-indexed sheet row
-        if needs_update(row, col_map):
-            rows_to_update.append((row_number, row))
-
-    logger.info("Found %d companies needing update", len(rows_to_update))
-
-    if not rows_to_update:
+    if not companies_to_update:
         logger.info("Nothing to do — all companies are up to date.")
         return
 
-    # Process each company — write in batches of 5 to avoid losing progress
-    updates = []
+    # Process each company
     total_written = 0
     errors = 0
-    BATCH_SIZE = 5
-    for idx, (row_number, row) in enumerate(rows_to_update):
+    for idx, company in enumerate(companies_to_update):
+        ticker = company.get("ticker", "?")
         try:
-            result = process_company(
-                row, row_number, serpapi_key, args.dry_run, logger, col_map
+            update_fields = process_company(
+                company, serpapi_key, args.dry_run, logger
             )
-            if result:
-                updates.append(result)
-            elif not args.dry_run:
+            if update_fields and not args.dry_run:
+                db.upsert_company(ticker, update_fields)
+                total_written += 1
+                logger.info("  Wrote update for %s", ticker)
+            elif not update_fields and not args.dry_run:
                 errors += 1
         except Exception as exc:
-            ticker_idx = col_map.get(HEADER_TICKER, 0)
-            padded = row + [""] * (ticker_idx + 1 - len(row))
-            logger.error("Error processing %s: %s", padded[ticker_idx], exc,
-                         exc_info=True)
+            logger.error("Error processing %s: %s", ticker, exc, exc_info=True)
             errors += 1
 
-        # Write batch every BATCH_SIZE tickers (or at the end)
-        if updates and not args.dry_run and (len(updates) >= BATCH_SIZE or idx == len(rows_to_update) - 1):
-            logger.info("Writing batch of %d updates to sheet...", len(updates))
-            write_row_updates(service, updates)
-            total_written += len(updates)
-            updates = []
-
         # Delay between API calls (skip after last)
-        if idx < len(rows_to_update) - 1:
+        if idx < len(companies_to_update) - 1:
             time.sleep(DELAY_BETWEEN_CALLS)
 
     elapsed = time.time() - start_time
     if args.dry_run:
         logger.info("=== DRY RUN complete. %d companies processed in %.1fs ===",
-                     len(rows_to_update), elapsed)
+                     len(companies_to_update), elapsed)
     else:
         logger.info(
             "=== Updated %d companies. Skipped %d due to errors. (%.1fs) ===",

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-EODHD Financial Data Updater for EJ2N Spreadsheet.
+EODHD Financial Data Updater.
 
-Reads tickers from the 'AI Analysis' sheet, fetches fundamental financial data
-from the EODHD API, calculates key metrics (including r40_score and
-fundamentals_snapshot), and writes results back to the spreadsheet.
+Reads tickers from the companies table (Supabase), fetches fundamental financial
+data from the EODHD API, calculates key metrics (including r40_score and
+fundamentals_snapshot), and writes results back to the database.
 """
 
 import argparse
@@ -20,223 +20,55 @@ from pathlib import Path
 import requests
 from dateutil import parser as dateparser
 from dotenv import load_dotenv
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
+
+from db import SupabaseDB
+from exchanges import resolve_eodhd_exchange, EXCHANGE_FALLBACKS
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-SPREADSHEET_ID = "1js3dUTJtKhY1dUcwzYUGBOdKDZXBurLtRGgcIV8msYk"
-SHEET_NAME = "AI Analysis"
-CRITERIA_SHEET = "Criteria"
 EODHD_BASE_URL = "https://eodhd.com/api/fundamentals"
 DELAY_BETWEEN_CALLS = 1  # seconds between EODHD API calls
 BATCH_SIZE = 5
 STALENESS_DAYS = 7  # re-fetch if data older than this
 
-NULL_VALUE = "—"  # consistent placeholder for missing/unavailable data
+NULL_VALUE = "\u2014"  # em-dash — consistent placeholder for missing data
 
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-
-# ---------------------------------------------------------------------------
-# Sheet layout — column groups, display names, widths
-# ---------------------------------------------------------------------------
-
-# Each group: (group_name, header_bg_hex, [column_keys...])
-GROUPS = [
-    ("COMPANY", "1B3A4B", [
-        "ticker", "exchange", "company_name", "country", "sector", "description",
-    ]),
-    ("SCREENING", "2E4057", [
-        "status", "composite_score", "price", "ps_now",
-        "price_pct_of_52w_high", "perf_52w_vs_spy", "rating",
-    ]),
-    ("OVERVIEW", "2E4057", [
-        "r40_score", "fundamentals_snapshot", "short_outlook",
-    ]),
-    ("REVENUE", "1B3A4B", [
-        "annual_revenue_5y", "quarterly_revenue",
-        "rev_growth_ttm", "rev_growth_qoq", "rev_cagr", "rev_consistency_score",
-    ]),
-    ("MARGINS", "1B3A4B", [
-        "gross_margin", "gm_trend",
-        "operating_margin", "net_margin", "net_margin_yoy",
-        "fcf_margin",
-    ]),
-    ("EFFICIENCY", "1B3A4B", [
-        "opex_pct_revenue", "sm_rd_pct_revenue",
-        "rule_of_40", "qrtrs_to_profitability",
-    ]),
-    ("EARNINGS", "1B3A4B", [
-        "eps_only", "eps_yoy",
-    ]),
-    ("DATA QUALITY", "5B3A1B", [
-        "one_time_events",
-    ]),
-    ("AI NARRATIVE", "2E4057", [
-        "full_outlook", "key_risks",
-    ]),
-    ("LAST ANALYSIS", "1B3A4B", [
-        "ai", "data",
-    ]),
-]
-
-# Maps internal column keys to the header text shown in the sheet.
-# The sheet now uses lowercase underscore names as headers.
-DISPLAY_NAMES = {
-    "ticker":               "ticker",
-    "exchange":             "exchange",
-    "company_name":         "company_name",
-    "country":              "country",
-    "sector":               "sector",
-    "description":          "description",
-    "status":               "status",
-    "composite_score":      "composite_score",
-    "price":                "price",
-    "ps_now":               "ps_now",
-    "price_pct_of_52w_high": "price_%_of_52w_high",
-    "perf_52w_vs_spy":      "perf_52w_vs_spy",
-    "rating":               "rating",
-    "annual_revenue_5y":    "annual_revenue_5y",
-    "quarterly_revenue":    "quarterly_revenue",
-    "rev_growth_ttm":       "rev_growth_ttm%",
-    "rev_growth_qoq":       "rev_growth_qoq%",
-    "rev_cagr":             "rev_cagr%",
-    "rev_consistency_score": "rev_consistency_score",
-    "gross_margin":         "gross_margin%",
-    "gm_trend":             "gm_trend%",
-    "operating_margin":     "operating_margin%",
-    "net_margin":           "net_margin%",
-    "net_margin_yoy":       "net_margin_yoy%",
-    "fcf_margin":           "fcf_margin%",
-    "opex_pct_revenue":     "opex_%_of_revenue",
-    "sm_rd_pct_revenue":    "s&m+r&d_%_of_revenue",
-    "rule_of_40":           "rule_of_40",
-    "qrtrs_to_profitability": "qrtrs_to_profitability",
-    "eps_only":             "eps_only",
-    "eps_yoy":              "eps_yoy%",
-    "r40_score":            "r40_score",
-    "fundamentals_snapshot": "fundamentals_snapshot",
-    "short_outlook":        "short_outlook",
-    "full_outlook":         "full_outlook",
-    "key_risks":            "key_risks",
-    "one_time_events":      "one_time_events",
-    "ai":                   "ai",
-    "data":                 "data",
+# Column name mapping: fetch_eodhd_data() keys -> DB column names
+EODHD_TO_DB = {
+    "rev_growth_ttm": "rev_growth_ttm_pct",
+    "rev_growth_qoq": "rev_growth_qoq_pct",
+    "rev_cagr": "rev_cagr_pct",
+    "gross_margin": "gross_margin_pct",
+    "operating_margin": "operating_margin_pct",
+    "net_margin": "net_margin_pct",
+    "net_margin_yoy": "net_margin_yoy_pct",
+    "fcf_margin": "fcf_margin_pct",
+    "eps_yoy": "eps_yoy_pct",
+    "data": "data_updated_at",
 }
 
-# Map legacy/alternative sheet headers → current header names.
-HEADER_ALIASES = {
-    "Company":              "company_name",
-    "Company Name":         "company_name",
-    "Ticker":               "ticker",
-    "ticker_clean":         "ticker",
-    "Country":              "country",
-    "Sector":               "sector",
-    "Status":               "status",
-    "Composite Score":      "composite_score",
-    "Price":                "price",
-    "PS Now":               "ps_now",
-    "price_%_of_52w_high":  "price_pct_of_52w_high",
-    "Perf 52W vs SPY":      "perf_52w_vs_spy",
-    "Rating":               "rating",
-    "Exchange":             "exchange",
-    "Description":          "description",
-    "Annual Revenue (5Y)":  "annual_revenue_5y",
-    "Quarterly Revenue":    "quarterly_revenue",
-    "Rev Growth TTM %":     "rev_growth_ttm",
-    "Rev Growth QoQ %":     "rev_growth_qoq",
-    "Rev CAGR 3Y %":       "rev_cagr",
-    "Rev Consistency Score": "rev_consistency_score",
-    "Gross Margin %":       "gross_margin",
-    "GM Trend (Qtly)":      "gm_trend",
-    "Operating Margin %":   "operating_margin",
-    "Net Margin %":         "net_margin",
-    "Net Margin YoY Δ":     "net_margin_yoy",
-    "FCF Margin %":         "fcf_margin",
-    "Opex % of Revenue":    "opex_pct_revenue",
-    "S&M+R&D % of Revenue": "sm_rd_pct_revenue",
-    "Rule of 40":           "rule_of_40",
-    "Qtrs to Profitability": "qrtrs_to_profitability",
-    "EPS Qtrly":            "eps_only",
-    "EPS YoY %":            "eps_yoy",
-    "R40 Score":            "r40_score",
-    "Fundamentals Snapshot": "fundamentals_snapshot",
-    "Short Outlook":        "short_outlook",
-    "Outlook":              "full_outlook",
-    "Full Outlook":         "full_outlook",
-    "Key Risks":            "key_risks",
-    "AI":                   "ai",
-    "Analyzed":             "ai",
-    "AI Analyzed":          "ai",
-    "Data":                 "data",
-    "One-Time Events":      "one_time_events",
-    "One Time Events":      "one_time_events",
-    "Data As Of":           "data",
-    "Fundamentals Date":    "data",
-}
-
-COL_WIDTHS = {
-    "ticker": 10,
-    "exchange": 12,
-    "company_name": 25,
-    "country": 14,
-    "sector": 22,
-    "description": 40,
-    "status": 28,
-    "composite_score": 16,
-    "price": 12,
-    "ps_now": 10,
-    "price_pct_of_52w_high": 16,
-    "perf_52w_vs_spy": 16,
-    "rating": 10,
-    "annual_revenue_5y": 45,
-    "quarterly_revenue": 70,
-    "rev_growth_ttm": 18,
-    "rev_growth_qoq": 18,
-    "rev_cagr": 18,
-    "rev_consistency_score": 18,
-    "gross_margin": 18,
-    "gm_trend": 28,
-    "operating_margin": 18,
-    "net_margin": 18,
-    "net_margin_yoy": 18,
-    "fcf_margin": 18,
-    "opex_pct_revenue": 18,
-    "sm_rd_pct_revenue": 22,
-    "rule_of_40": 14,
-    "qrtrs_to_profitability": 18,
-    "eps_only": 14,
-    "eps_yoy": 14,
-    "r40_score": 22,
-    "fundamentals_snapshot": 55,
-    "short_outlook": 50,
-    "full_outlook": 80,
-    "key_risks": 50,
-    "one_time_events": 50,
-    "ai": 16,
-    "data": 16,
-}
-
-# Columns that should be formatted as percentages
-PCT_COLS = {
+# Metrics that can carry red/yellow/green flags from criteria evaluation
+FLAGGABLE_METRICS = [
     "rev_growth_ttm", "rev_growth_qoq", "rev_cagr",
     "gross_margin", "operating_margin", "net_margin",
     "net_margin_yoy", "fcf_margin",
-    "opex_pct_revenue", "sm_rd_pct_revenue", "eps_yoy",
-}
+    "opex_pct_revenue", "sm_rd_pct_revenue",
+    "rule_of_40", "eps_yoy",
+    "rev_consistency_score",
+]
 
-# Columns that should be formatted as decimals
-DECIMAL_COLS = set()  # no decimal-formatted columns currently
+# Default screening criteria (previously stored in a Criteria sheet)
+DEFAULT_CRITERIA = [
+    {"metric": "gross_margin", "operator": "<", "red": 30.0, "yellow": 45.0, "green": None},
+    {"metric": "rev_growth_ttm", "operator": "<", "red": 0.0, "yellow": 15.0, "green": None},
+    {"metric": "fcf_margin", "operator": "<", "red": -10.0, "yellow": 0.0, "green": None},
+    {"metric": "net_margin", "operator": "<", "red": -30.0, "yellow": -10.0, "green": None},
+    {"metric": "rule_of_40", "operator": "<", "red": 10.0, "yellow": 20.0, "green": None},
+]
 
-# Columns formatted as plain integers (no decimal, no % sign)
-INTEGER_COLS = {"rule_of_40"}
-
-# Columns that should be formatted as dollars
-DOLLAR_COLS = {"eps_only"}
-
-# Columns populated by EODHD (as opposed to AI narrative columns)
+# Columns populated by EODHD (keys as returned by fetch_eodhd_data)
 EODHD_COLUMNS = [
     "annual_revenue_5y", "quarterly_revenue",
     "rev_growth_ttm", "rev_growth_qoq", "rev_cagr", "rev_consistency_score",
@@ -249,14 +81,6 @@ EODHD_COLUMNS = [
     "one_time_events",
     "r40_score", "fundamentals_snapshot", "data",
 ]
-
-# ---------------------------------------------------------------------------
-# Flat column list derived from GROUPS
-# ---------------------------------------------------------------------------
-
-ALL_COLUMNS = []
-for _, _, cols in GROUPS:
-    ALL_COLUMNS.extend(cols)
 
 
 # ---------------------------------------------------------------------------
@@ -288,389 +112,9 @@ def setup_logging() -> logging.Logger:
 
 
 # ---------------------------------------------------------------------------
-# Google Sheets helpers
+# EODHD API helpers & business logic
 # ---------------------------------------------------------------------------
 
-
-def get_sheets_service():
-    sa_value = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
-    if not sa_value:
-        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON env var is not set")
-
-    if sa_value.strip().startswith("{"):
-        info = json.loads(sa_value)
-        creds = service_account.Credentials.from_service_account_info(
-            info, scopes=SCOPES
-        )
-    else:
-        creds = service_account.Credentials.from_service_account_file(
-            sa_value, scopes=SCOPES
-        )
-    return build("sheets", "v4", credentials=creds)
-
-
-def read_all_rows(service) -> list[list[str]]:
-    """Return all rows from the AI Analysis sheet."""
-    result = (
-        service.spreadsheets()
-        .values()
-        .get(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"'{SHEET_NAME}'",
-            valueRenderOption="FORMATTED_VALUE",
-        )
-        .execute()
-    )
-    return result.get("values", [])
-
-
-def _get_sheet_id(service) -> int:
-    """Return the numeric sheet ID for SHEET_NAME."""
-    meta = service.spreadsheets().get(
-        spreadsheetId=SPREADSHEET_ID, fields="sheets.properties"
-    ).execute()
-    for sheet in meta.get("sheets", []):
-        if sheet["properties"]["title"] == SHEET_NAME:
-            return sheet["properties"]["sheetId"]
-    raise RuntimeError(f"Sheet '{SHEET_NAME}' not found")
-
-
-def clear_data_row_formatting(service, logger: logging.Logger):
-    """Reset background color and text color on all data rows (row 3+)."""
-    sheet_id = _get_sheet_id(service)
-    num_cols = len(ALL_COLUMNS)
-    service.spreadsheets().batchUpdate(
-        spreadsheetId=SPREADSHEET_ID,
-        body={"requests": [{
-            "repeatCell": {
-                "range": {
-                    "sheetId": sheet_id,
-                    "startRowIndex": 2,  # row 3 (0-indexed)
-                    "startColumnIndex": 0,
-                    "endColumnIndex": num_cols,
-                },
-                "cell": {
-                    "userEnteredFormat": {
-                        "backgroundColor": {"red": 1, "green": 1, "blue": 1},
-                        "textFormat": {
-                            "foregroundColor": {"red": 0, "green": 0, "blue": 0},
-                            "bold": False,
-                        },
-                    }
-                },
-                "fields": "userEnteredFormat.backgroundColor,userEnteredFormat.textFormat",
-            }
-        }]},
-    ).execute()
-    logger.info("Reset formatting on data rows (row 3+)")
-
-
-def ensure_sheet_columns(service, needed: int, logger):
-    """Expand sheet column count if it currently has fewer than `needed` columns."""
-    meta = service.spreadsheets().get(
-        spreadsheetId=SPREADSHEET_ID, fields="sheets.properties"
-    ).execute()
-    for sheet in meta.get("sheets", []):
-        props = sheet["properties"]
-        if props["title"] == SHEET_NAME:
-            current = props["gridProperties"]["columnCount"]
-            if current >= needed:
-                return
-            logger.info("Expanding sheet from %d to %d columns", current, needed)
-            service.spreadsheets().batchUpdate(
-                spreadsheetId=SPREADSHEET_ID,
-                body={"requests": [{
-                    "updateSheetProperties": {
-                        "properties": {
-                            "sheetId": props["sheetId"],
-                            "gridProperties": {"columnCount": needed},
-                        },
-                        "fields": "gridProperties.columnCount",
-                    }
-                }]},
-            ).execute()
-            return
-
-
-def write_row_updates(service, updates: list[dict], logger=None):
-    """Batch-write updates. Each entry: {"row": 1-indexed, "values": {col_letter: value}}."""
-    if not updates:
-        return
-
-    data = []
-    max_col_idx = 0
-    for upd in updates:
-        row = upd["row"]
-        for col_letter, value in upd["values"].items():
-            # Track the highest column index referenced
-            idx = 0
-            for ch in col_letter:
-                idx = idx * 26 + (ord(ch) - ord('A') + 1)
-            if idx > max_col_idx:
-                max_col_idx = idx
-            data.append({
-                "range": f"'{SHEET_NAME}'!{col_letter}{row}",
-                "values": [[value]],
-            })
-
-    # Ensure the sheet has enough columns before writing
-    ensure_sheet_columns(service, max_col_idx, logger or logging.getLogger(__name__))
-
-    body = {"valueInputOption": "USER_ENTERED", "data": data}
-    service.spreadsheets().values().batchUpdate(
-        spreadsheetId=SPREADSHEET_ID, body=body
-    ).execute()
-
-
-def _col_letter(idx: int) -> str:
-    """Convert 0-based column index to Excel-style letter(s). 0→A, 25→Z, 26→AA."""
-    result = ""
-    while True:
-        result = chr(65 + idx % 26) + result
-        idx = idx // 26 - 1
-        if idx < 0:
-            break
-    return result
-
-
-def _col_index(key: str) -> int:
-    """Return the 0-based column index for a column key."""
-    return ALL_COLUMNS.index(key)
-
-
-def _col_letter_for_key(key: str) -> str:
-    """Return the Excel column letter for a column key."""
-    return _col_letter(_col_index(key))
-
-
-# ---------------------------------------------------------------------------
-# Sheet writing — headers, formatting, data
-# ---------------------------------------------------------------------------
-
-
-def write_ai_analysis_sheet(service, rows: list[dict], logger: logging.Logger):
-    """Write the full AI Analysis sheet: group headers, column headers, data rows.
-
-    `rows` is a list of dicts keyed by column keys from ALL_COLUMNS.
-    """
-    sheet_data = []
-
-    # Row 1: Group headers
-    group_header = []
-    for group_name, _, cols in GROUPS:
-        group_header.append(group_name)
-        group_header.extend([""] * (len(cols) - 1))
-    sheet_data.append(group_header)
-
-    # Row 2: Column headers (display names)
-    col_header = [DISPLAY_NAMES.get(c, c) for c in ALL_COLUMNS]
-    sheet_data.append(col_header)
-
-    # Data rows
-    for row in rows:
-        data_row = []
-        for col_key in ALL_COLUMNS:
-            val = row.get(col_key, "")
-            if val is None:
-                val = ""
-            # Format percentage columns
-            if col_key in PCT_COLS and isinstance(val, (int, float)):
-                val = f"{val:.1f}%"
-            elif col_key in INTEGER_COLS and isinstance(val, (int, float)):
-                val = f"{val:.0f}"
-            elif col_key in DOLLAR_COLS and isinstance(val, (int, float)):
-                val = f"${val:.2f}"
-            data_row.append(val)
-        sheet_data.append(data_row)
-
-    # Write all at once
-    end_col = _col_letter(len(ALL_COLUMNS) - 1)
-    end_row = len(sheet_data)
-    range_str = f"'{SHEET_NAME}'!A1:{end_col}{end_row}"
-
-    service.spreadsheets().values().update(
-        spreadsheetId=SPREADSHEET_ID,
-        range=range_str,
-        valueInputOption="USER_ENTERED",
-        body={"values": sheet_data},
-    ).execute()
-
-    logger.info("Wrote %d rows (incl. 2 header rows) to %s", len(sheet_data), range_str)
-
-    # Ensure data rows have no background color (only header rows should be colored)
-    clear_data_row_formatting(service, logger)
-
-
-# ---------------------------------------------------------------------------
-# EODHD API
-# ---------------------------------------------------------------------------
-
-# Map common exchange names (as they appear in the spreadsheet) to the
-# suffix codes that EODHD expects.  Keys are compared case-insensitively.
-EXCHANGE_TO_EODHD = {
-    # United States
-    "NASDAQ":   "US",
-    "NYSE":     "US",
-    "NYSEARCA": "US",
-    "NYSEMKT":  "US",
-    "AMEX":     "US",
-    "OTC":      "US",
-    "BATS":     "US",
-    "US":       "US",
-    # United Kingdom
-    "LSE":      "LSE",
-    "LON":      "LSE",
-    "LONDON":   "LSE",
-    # India
-    "NSE":      "NSE",
-    "BSE":      "BSE",
-    "NSEI":     "NSE",
-    # Japan
-    "TSE":      "TSE",
-    "TYO":      "TSE",
-    "JPX":      "TSE",
-    # Germany
-    "XETRA":    "XETRA",
-    "FRA":      "F",
-    "ETR":      "XETRA",
-    "GETTEX":   "MU",
-    "MU":       "MU",
-    "STU":      "STU",
-    "BE":       "BE",
-    "DU":       "DU",
-    "HM":       "HM",
-    "HA":       "HA",
-    # Other Europe
-    "EPA":      "PA",
-    "PAR":      "PA",
-    "AMS":      "AS",
-    "EURONEXT": "AS",      # Generic Euronext → Amsterdam (fallback tries PA)
-    "SWX":      "SW",
-    "BIT":      "MI",
-    "BME":      "MC",
-    "VIE":      "VIE",     # Vienna Stock Exchange
-    "WBAG":     "VIE",
-    "OMXCOP":   "CO",      # Copenhagen (Nasdaq Nordic)
-    "CPH":      "CO",
-    "OMXSTO":   "ST",      # Stockholm (Nasdaq Nordic)
-    "STO":      "ST",
-    "OMXHEX":   "HE",      # Helsinki (Nasdaq Nordic)
-    "OMXICE":   "IC",      # Iceland (Nasdaq Nordic)
-    "OMXTAL":   "TL",      # Tallinn
-    "OMXVIL":   "VS",      # Vilnius
-    "OMXRIG":   "RG",      # Riga
-    # Germany — Lang & Schwarz / Tradegate / misc
-    "LS":       "F",       # Lang & Schwarz → Frankfurt (EODHD has no LS)
-    "LSX":      "F",       # Lang & Schwarz Exchange
-    "LSIN":     "F",       # Lang & Schwarz Indicationen
-    "TRADEGATE":"F",       # Tradegate → Frankfurt
-    # Asia-Pacific
-    "HKG":      "HK",
-    "HKEX":     "HK",
-    "KRX":      "KO",
-    "KOSDAQ":   "KO",
-    "TWSE":     "TW",
-    "TPE":      "TW",
-    "SGX":      "SG",
-    "ASX":      "AU",
-    "NZX":      "NZ",
-    # Malaysia
-    "MYX":      "KLSE",
-    "KLSE":     "KLSE",
-    # Vietnam
-    "HOSE":     "VN",
-    "HNX":      "VN",
-    # Americas
-    "TSX":      "TO",
-    "TSXV":     "V",
-    "SAO":      "SA",
-    "BVMF":     "SA",
-    "BMV":      "MX",      # Mexico (Bolsa Mexicana de Valores)
-    "MEX":      "MX",
-    # Africa / Middle East
-    "JSE":      "JSE",
-    "TADAWUL":  "SR",
-    "SAU":      "SR",
-    "DFM":      "DFM",     # Dubai Financial Market
-    "ADX":      "ADX",     # Abu Dhabi Securities Exchange
-    "NSENG":    "NSENG",   # Nigerian Stock Exchange (via EODHD code)
-    "NGS":      "NSENG",
-    "NGSE":     "NSENG",
-}
-
-
-def _resolve_exchange(exchange: str) -> str:
-    """Convert a spreadsheet exchange name to the EODHD suffix code."""
-    key = exchange.strip().upper()
-    return EXCHANGE_TO_EODHD.get(key, key)
-
-
-# Fallback exchange chains — when the primary exchange returns 404,
-# try these alternatives in order.  The idea is to cover cases where
-# the sheet lists a regional exchange but EODHD only has the ticker on
-# a major exchange (or vice-versa).
-EXCHANGE_FALLBACKS = {
-    # German regional exchanges → try XETRA, Frankfurt, then US
-    "MU":    ["XETRA", "F", "US"],
-    "STU":   ["XETRA", "F", "US"],
-    "BE":    ["XETRA", "F", "US"],
-    "DU":    ["XETRA", "F", "US"],
-    "HM":    ["XETRA", "F", "US"],
-    "HA":    ["XETRA", "F", "US"],
-    "XETRA": ["F", "US"],
-    "F":     ["XETRA", "US"],
-    # India — BSE symbols are often numeric; try NSE which uses names
-    "BSE":   ["NSE", "US"],
-    "NSE":   ["BSE", "US"],
-    # Japan — many TSE tickers have no US ADR, so search is key
-    "TSE":   ["US"],
-    # Switzerland
-    "SW":    ["US"],
-    # Netherlands / Euronext
-    "AS":    ["US", "PA"],
-    # Other Europe
-    "PA":    ["US", "AS"],
-    "MI":    ["US"],
-    "MC":    ["US"],
-    # UK
-    "LSE":   ["US"],
-    # Canada
-    "TO":    ["V", "US"],
-    "V":     ["TO", "US"],
-    # Hong Kong
-    "HK":    ["US"],
-    # Korea
-    "KO":    ["US"],
-    # Australia
-    "AU":    ["US"],
-    # Nordics
-    "CO":    ["XETRA", "F", "US"],  # Copenhagen
-    "ST":    ["XETRA", "F", "US"],  # Stockholm
-    "HE":    ["XETRA", "F", "US"],  # Helsinki
-    "IC":    ["US"],                  # Iceland
-    # Vienna
-    "VIE":   ["XETRA", "F", "SW", "US"],
-    # Malaysia
-    "KLSE":  ["SG", "US"],
-    # Vietnam
-    "VN":    ["US"],
-    # Mexico
-    "MX":    ["US"],
-    # Middle East
-    "DFM":   ["US"],  # Dubai
-    "ADX":   ["US"],  # Abu Dhabi
-    # Nigeria
-    "NSENG": ["LSE", "US"],
-}
-
-# Always append US as a last-ditch fallback (many international companies
-# have US-listed ADRs or cross-listings that carry fundamentals data).
-for _exc, _chain in EXCHANGE_FALLBACKS.items():
-    if "US" not in _chain:
-        _chain.append("US")
-
-
-def _has_financials(data: dict) -> bool:
     """Check whether an EODHD response contains usable financial data.
 
     Some tickers return 200 OK but have empty Financials / Earnings
@@ -766,15 +210,7 @@ def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger,
     EXCHANGE_FALLBACKS, and finally falls back to the EODHD search API
     (searching by both ticker code and company name).
     """
-    # Strip share-class suffixes used on some exchanges (e.g. BMV: VISTA/A,
-    # ARGX/N; Copenhagen: NSIS_B).  These aren't part of the EODHD ticker.
-    clean_ticker = ticker.split("/")[0]       # VISTA/A → VISTA
-    clean_ticker = clean_ticker.split("_")[0] # NSIS_B  → NSIS
-    if clean_ticker != ticker:
-        logger.info("Stripped ticker suffix: %s → %s", ticker, clean_ticker)
-    ticker = clean_ticker
-
-    primary = _resolve_exchange(exchange)
+    primary = resolve_eodhd_exchange(exchange)
     logger.info("Fetching fundamentals for %s (exchange: %s → %s)", ticker, exchange, primary)
 
     # Retryable status codes: 404 (not found), 0 (network error),
@@ -920,103 +356,6 @@ _CRITERIA_OPS = {
     ">":  lambda val, thresh: val > thresh,
     ">=": lambda val, thresh: val >= thresh,
 }
-
-
-def read_criteria(service, logger: logging.Logger) -> list[dict]:
-    """Read screening rules from the Criteria sheet.
-
-    Returns a list of rule dicts:
-        {"metric": str, "operator": str, "red": float|None,
-         "yellow": float|None, "green": float|None, "description": str}
-    """
-    try:
-        result = (
-            service.spreadsheets()
-            .values()
-            .get(
-                spreadsheetId=SPREADSHEET_ID,
-                range=f"'{CRITERIA_SHEET}'!A1:ZZ",
-                valueRenderOption="FORMATTED_VALUE",
-            )
-            .execute()
-        )
-        rows = result.get("values", [])
-    except Exception as exc:
-        logger.warning("Could not read Criteria sheet: %s", exc)
-        return []
-
-    if len(rows) < 2:
-        logger.info("Criteria sheet is empty or has no data rows")
-        return []
-
-    # Find the header row (first row containing "metric" in column A)
-    header_idx = None
-    for i, row in enumerate(rows):
-        if row and row[0].strip().lower() == "metric":
-            header_idx = i
-            break
-
-    if header_idx is None:
-        logger.warning("Criteria sheet: could not find header row with 'metric'")
-        return []
-
-    headers = [h.strip().lower() for h in rows[header_idx]]
-
-    def col(name):
-        try:
-            return headers.index(name)
-        except ValueError:
-            return None
-
-    metric_col = col("metric")
-    op_col = col("operator")
-    red_col = col("red")
-    yellow_col = col("yellow")
-    green_col = col("green")
-    desc_col = col("description")
-
-    if metric_col is None or op_col is None:
-        logger.warning("Criteria sheet missing required 'metric' or 'operator' column")
-        return []
-
-    # Build lookup tables for normalising metric names.
-    # Users may type display names (fcf_margin%) or legacy headers.
-    _display_to_key = {v.lower(): k for k, v in DISPLAY_NAMES.items()}
-    _alias_lower = {k.lower(): v for k, v in HEADER_ALIASES.items()}
-
-    rules = []
-    for row in rows[header_idx + 1:]:
-        if not row or not row[0].strip():
-            continue  # skip empty / section header rows
-        padded = row + [""] * (len(headers) - len(row))
-        raw_metric = padded[metric_col].strip()
-        operator = padded[op_col].strip()
-
-        if not raw_metric or operator not in _CRITERIA_OPS:
-            continue
-
-        # Normalise metric name to internal key
-        metric = raw_metric.lower()
-        if metric in _display_to_key:
-            metric = _display_to_key[metric]
-        elif metric in _alias_lower:
-            metric = _alias_lower[metric]
-
-        rules.append({
-            "metric": metric,
-            "operator": operator,
-            "red": safe_float(padded[red_col]) if red_col is not None else None,
-            "yellow": safe_float(padded[yellow_col]) if yellow_col is not None else None,
-            "green": safe_float(padded[green_col]) if green_col is not None else None,
-            "description": padded[desc_col].strip() if desc_col is not None else "",
-        })
-
-    logger.info("Loaded %d screening criteria from '%s' sheet", len(rules), CRITERIA_SHEET)
-    for r in rules:
-        logger.info("  %s %s red=%s yellow=%s green=%s — %s",
-                     r["metric"], r["operator"], r["red"], r["yellow"],
-                     r["green"], r["description"])
-    return rules
 
 
 def evaluate_criteria(value: float | None, metric: str,
@@ -1487,10 +826,43 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
         result["one_time_events"] = None
 
     # ── R40 Score ─────────────────────────────────────────────────────
-    # Plain numeric value (rule_of_40 rounded to nearest integer).
+    # Format: 💎💎 R40: 54 | FCF +27% | ⏳ ~12 qtrs GAAP
+    #
+    # Gem scale calibrated to screened universe (GM>45%, RevGr>20%):
+    #   no gems  = R40 < 20  (weakest in this universe)
+    #   💎       = R40 20–39
+    #   💎💎     = R40 40–59
+    #   💎💎💎   = R40 60+
     r40 = result.get("rule_of_40")
     if r40 is not None:
-        result["r40_score"] = round(r40)
+        if r40 >= 60:
+            gem_str = "\U0001f48e\U0001f48e\U0001f48e"   # 💎💎💎
+        elif r40 >= 40:
+            gem_str = "\U0001f48e\U0001f48e"              # 💎💎
+        elif r40 >= 20:
+            gem_str = "\U0001f48e"                        # 💎
+        else:
+            gem_str = ""                                  # no gems
+
+        # FCF segment
+        fcf = result.get("fcf_margin")
+        fcf_str = f"FCF {'+' if fcf >= 0 else ''}{fcf:.0f}%" if fcf is not None else None
+
+        # Profitability status segment
+        nm = result.get("net_margin")
+        qtrs = qtrs_to_prof
+        if nm is not None and nm >= 0:
+            profit_str = "\u2705"                          # ✅
+        elif qtrs is not None:
+            profit_str = f"\u23f3 ~{qtrs:.0f} qtrs GAAP"  # ⏳
+        else:
+            profit_str = "\u2753 path unclear"             # ❓
+
+        r40_parts = [f"{gem_str} R40: {r40:.0f}".strip()]
+        if fcf_str:
+            r40_parts.append(fcf_str)
+        r40_parts.append(profit_str)
+        result["r40_score"] = " | ".join(r40_parts)
 
     # ── Fundamentals Snapshot ─────────────────────────────────────────
     # Format: Rev +27% YoY | 3Y CAGR +44% | GM 88% ↑ | Net -5% ⚡ FCF +27% | ⏳ ~12 qtrs GAAP
@@ -1576,7 +948,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="EODHD Financial Data Updater")
     parser.add_argument("--dry-run", action="store_true",
-                        help="Fetch and calculate but don't write to sheet")
+                        help="Fetch and calculate but don't write to DB")
     parser.add_argument("--ticker", type=str, default=None,
                         help="Process only this ticker (for testing)")
     parser.add_argument("--force", action="store_true",
@@ -1595,206 +967,105 @@ def main():
         logger.error("EODHD_API_KEY env var is not set")
         sys.exit(1)
 
-    # Read current sheet data
-    service = get_sheets_service()
-    ensure_sheet_columns(service, len(ALL_COLUMNS), logger)
-    all_rows = read_all_rows(service)
-    logger.info("Read %d rows from sheet (including headers)", len(all_rows))
+    db = SupabaseDB()
 
-    # Load screening criteria from the Criteria sheet
-    criteria = read_criteria(service, logger)
+    # Load screening criteria
+    criteria = DEFAULT_CRITERIA
 
-    # ── Read sheet headers and build column mapping ─────────────────
-    # The sheet now uses lowercase underscore column keys as headers.
-    # We also support legacy display-name headers via HEADER_ALIASES.
-    all_keys = set(DISPLAY_NAMES.keys())
-    # Reverse map: display name → internal key (e.g. "gross_margin%" → "gross_margin")
-    display_to_key = {v: k for k, v in DISPLAY_NAMES.items()}
+    # Get tickers to process
+    if args.force:
+        all_companies = db.get_all_companies()
+    else:
+        all_companies = db.get_stale_companies("data_updated_at", STALENESS_DAYS)
 
-    key_col = {}  # column_key → 0-based column index
-    if len(all_rows) >= 2:
-        for idx, header in enumerate(all_rows[1]):
-            name = header.strip()
-            # Apply aliases first (maps legacy names → current keys)
-            name = HEADER_ALIASES.get(name, name)
-            # Check if the header matches a known column key directly
-            if name in all_keys:
-                col_key = name
-            # Check if it's a display name (e.g. "gross_margin%" → "gross_margin")
-            elif name in display_to_key:
-                col_key = display_to_key[name]
-            else:
-                col_key = None
-            if col_key and col_key not in key_col:
-                key_col[col_key] = idx
+    logger.info("Found %d companies to consider", len(all_companies))
 
-    missing = [k for k in EODHD_COLUMNS if k not in key_col]
-    if missing:
-        logger.warning("Columns not found in sheet (will skip): %s",
-                        [DISPLAY_NAMES.get(k, k) for k in missing])
+    # Filter by --ticker if specified
+    if args.ticker:
+        all_companies = [c for c in all_companies
+                         if c["ticker"].upper() == args.ticker.upper()]
 
-    # Data starts at row 3 (index 2)
-    data_rows = all_rows[2:] if len(all_rows) > 2 else []
-
-    # Build list of tickers to process
-    ticker_col = key_col.get("ticker", 0)
-    exchange_col = key_col.get("exchange")
-    company_col = key_col.get("company_name", 2)
-    fund_date_col = key_col.get("data")
-
-    # Determine the max column index we need to pad to
-    pad_cols = [ticker_col, company_col, fund_date_col or 0]
-    if exchange_col is not None:
-        pad_cols.append(exchange_col)
-
-    tickers_to_process = []
-    for i, row in enumerate(data_rows):
-        row_number = i + 3  # 1-indexed sheet row
-        padded = row + [""] * (max(pad_cols) + 1 - len(row))
-        ticker = padded[ticker_col].strip()
-        company = padded[company_col].strip()
-        exchange = padded[exchange_col].strip() if exchange_col is not None else ""
-
-        if not ticker:
-            continue
-
-        if args.ticker and ticker.upper() != args.ticker.upper():
-            continue
-
-        # Default exchange to US if not specified
-        if not exchange:
-            exchange = "US"
-
-        # Skip if data is recent or previously flagged as unavailable
-        if not args.force and fund_date_col is not None:
-            fund_date_str = padded[fund_date_col].strip() if fund_date_col < len(padded) else ""
-            if fund_date_str:
-                if fund_date_str == "No EODHD data":
-                    logger.info("Skipping %s — previously flagged as no EODHD data", ticker)
-                    continue
-                try:
-                    last_date = dateparser.parse(fund_date_str).date()
-                    if (date.today() - last_date) <= timedelta(days=STALENESS_DAYS):
-                        logger.info("Skipping %s — data is recent (%s)", ticker, fund_date_str)
-                        continue
-                except (ValueError, TypeError):
-                    pass
-
-        tickers_to_process.append((row_number, ticker, company, exchange, row))
-
+    # Apply --limit
     if args.limit:
-        tickers_to_process = tickers_to_process[:args.limit]
+        all_companies = all_companies[:args.limit]
 
-    logger.info("Will process %d tickers", len(tickers_to_process))
+    logger.info("Will process %d tickers", len(all_companies))
 
-    if not tickers_to_process:
+    if not all_companies:
         logger.info("Nothing to do.")
         return
 
     # Process each ticker
-    updates = []
     total_written = 0
     errors = 0
 
-    for idx, (row_number, ticker, company, exchange, existing_row) in enumerate(tickers_to_process):
+    for idx, company in enumerate(all_companies):
+        ticker = company["ticker"]
+        exchange = company.get("exchange", "") or "US"
+        company_name = company.get("company_name", "")
+
         try:
             eodhd_data = fetch_eodhd_data(ticker, eodhd_key, logger,
-                                            exchange=exchange, company=company)
+                                          exchange=exchange, company=company_name)
             if eodhd_data is None:
                 errors += 1
-                # Flag the ticker so it's skipped on future runs and
-                # visibly marked in the sheet.
-                if not args.dry_run:
-                    data_col = key_col.get("data")
-                    snapshot_col = key_col.get("fundamentals_snapshot")
-                    flag_values = {}
-                    if data_col is not None:
-                        flag_values[_col_letter(data_col)] = "No EODHD data"
-                    if snapshot_col is not None:
-                        flag_values[_col_letter(snapshot_col)] = "No EODHD data"
-                    if flag_values:
-                        updates.append({"row": row_number, "values": flag_values})
-                        logger.info("Flagged %s as 'No EODHD data'", ticker)
                 continue
 
             if args.dry_run:
-                logger.info("[DRY RUN] %s.%s (%s):", ticker, exchange, company)
-                logger.info("  r40_score:             %s", eodhd_data.get("r40_score", ""))
-                logger.info("  fundamentals_snapshot: %s", eodhd_data.get("fundamentals_snapshot", ""))
+                logger.info("[DRY RUN] %s.%s (%s):", ticker, exchange, company_name)
                 for key in EODHD_COLUMNS:
-                    if key not in ("r40_score", "fundamentals_snapshot"):
-                        val = eodhd_data.get(key)
-                        if val is not None:
-                            display = DISPLAY_NAMES.get(key, key)
-                            # Format for display
-                            if key in PCT_COLS and isinstance(val, (int, float)):
-                                logger.info("  %-25s %s%%", display, val)
-                            elif key in INTEGER_COLS and isinstance(val, (int, float)):
-                                logger.info("  %-25s %s", display, int(val))
-                            elif key in DOLLAR_COLS and isinstance(val, (int, float)):
-                                logger.info("  %-25s $%s", display, val)
-                            else:
-                                logger.info("  %-25s %s", display, val)
+                    val = eodhd_data.get(key)
+                    if val is not None:
+                        logger.info("  %-25s %s", key, val)
                 continue
 
-            # Build update values using actual sheet column positions
-            values = {}
+            # Map EODHD keys to DB column names and build update dict
+            update = {}
+            flags = {}
             for key in EODHD_COLUMNS:
-                col_idx = key_col.get(key)
-                if col_idx is None:
-                    logger.warning("Column '%s' not found in sheet headers, skipping", key)
-                    continue
-                col_letter = _col_letter(col_idx)
                 val = eodhd_data.get(key)
-                # Use consistent null for missing data
-                if val is None:
-                    values[col_letter] = NULL_VALUE
-                elif key in PCT_COLS and isinstance(val, (int, float)):
-                    formatted = f"{val:.1f}%"
-                    dot = evaluate_criteria(val, key, criteria)
-                    values[col_letter] = f"{dot} {formatted}" if dot else formatted
-                elif key in INTEGER_COLS and isinstance(val, (int, float)):
-                    formatted = f"{val:.0f}"
-                    dot = evaluate_criteria(val, key, criteria)
-                    values[col_letter] = f"{dot} {formatted}" if dot else formatted
-                elif key in DOLLAR_COLS and isinstance(val, (int, float)):
-                    formatted = f"${val:.2f}"
-                    dot = evaluate_criteria(val, key, criteria)
-                    values[col_letter] = f"{dot} {formatted}" if dot else formatted
-                else:
-                    formatted = str(val)
-                    # For string values like "8/10", try to extract numeric
-                    # part for criteria evaluation
-                    numeric_val = safe_float(formatted.split("/")[0]) if "/" in formatted else safe_float(formatted)
-                    dot = evaluate_criteria(numeric_val, key, criteria)
-                    values[col_letter] = f"{dot} {formatted}" if dot else formatted
+                db_col = EODHD_TO_DB.get(key, key)
 
-            if values:
-                updates.append({"row": row_number, "values": values})
-                logger.info("Calculated %d metrics for %s", len(values), ticker)
+                if val is None:
+                    update[db_col] = None
+                else:
+                    update[db_col] = val
+
+                # Evaluate criteria for flaggable metrics
+                if key in FLAGGABLE_METRICS and val is not None:
+                    numeric_val = val
+                    if isinstance(val, str):
+                        # For string values like "8/10", extract numeric part
+                        try:
+                            numeric_val = float(val.split("/")[0]) if "/" in val else float(val)
+                        except (ValueError, TypeError):
+                            numeric_val = None
+                    if numeric_val is not None:
+                        dot = evaluate_criteria(numeric_val, key, criteria)
+                        if dot == DOT_RED:
+                            flags[db_col] = "red"
+                        elif dot == DOT_YELLOW:
+                            flags[db_col] = "yellow"
+
+            update["flags"] = json.dumps(flags) if flags else "{}"
+
+            db.upsert_company(ticker, update)
+            total_written += 1
+            logger.info("Updated %d metrics for %s", len(update), ticker)
 
         except Exception as exc:
             logger.error("Error processing %s: %s", ticker, exc, exc_info=True)
             errors += 1
 
-        # Write batch
-        if updates and not args.dry_run and (len(updates) >= BATCH_SIZE or idx == len(tickers_to_process) - 1):
-            logger.info("Writing batch of %d updates to sheet...", len(updates))
-            write_row_updates(service, updates, logger)
-            total_written += len(updates)
-            updates = []
-
         # Delay between API calls
-        if idx < len(tickers_to_process) - 1:
+        if idx < len(all_companies) - 1:
             time.sleep(DELAY_BETWEEN_CALLS)
 
     elapsed = time.time() - start_time
     if args.dry_run:
         logger.info("=== DRY RUN complete. %d tickers processed in %.1fs ===",
-                     len(tickers_to_process), elapsed)
+                     len(all_companies), elapsed)
     else:
-        # Clear any background colors that may have leaked to data rows
-        clear_data_row_formatting(service, logger)
         logger.info(
             "=== Updated %d tickers. Skipped %d due to errors. (%.1fs) ===",
             total_written, errors, elapsed,

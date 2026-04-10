@@ -2,9 +2,9 @@
 """
 Price-Sales Weekly Updater.
 
-Reads tickers from the 'AI Analysis' sheet, fetches market cap and revenue data
-from EODHD, computes Price-to-Sales ratios, and maintains a rolling 52-week P/S
-history table in the 'Price-Sales' sheet tab.
+Reads tickers from the companies table (Supabase), fetches market cap and revenue
+data from EODHD, computes Price-to-Sales ratios, and maintains a rolling 52-week
+P/S history in the price_sales table.
 
 For backfill (new tickers), fetches 52 weeks of weekly closing prices and
 combines with revenue TTM to build historical P/S.  For weekly updates, fetches
@@ -17,7 +17,6 @@ import argparse
 import json
 import logging
 import os
-import ssl
 import statistics
 import sys
 import time
@@ -26,91 +25,32 @@ from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
+
+from db import SupabaseDB
+from exchanges import resolve_eodhd_exchange, EXCHANGE_FALLBACKS, YAHOO_SUFFIX
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-SPREADSHEET_ID = "1js3dUTJtKhY1dUcwzYUGBOdKDZXBurLtRGgcIV8msYk"
-SOURCE_SHEET = "AI Analysis"
 PS_SHEET = "Price-Sales"
-LOGS_SHEET = "Logs"
 
 EODHD_BASE_URL = "https://eodhd.com/api"
 EODHD_API_KEY = os.environ.get("EODHD_API_KEY", "")
 
 DELAY_BETWEEN_CALLS = 0.5  # seconds between EODHD API calls
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-# Price-Sales sheet column order (matches header row)
+# Price-Sales sheet column order (kept for reference / legacy compatibility)
 PS_COLUMNS = [
     "ticker", "company_name", "ps_now", "52w_high", "52w_low",
     "12m_median", "ath", "%_of_ath", "history_json", "last_updated",
     "first_recorded",
 ]
 
-# Logs sheet column order
+# Logs sheet column order (kept for reference)
 LOG_COLUMNS = [
     "run_date", "backfilled", "updated", "skipped", "errors", "duration_secs",
 ]
-
-# ---------------------------------------------------------------------------
-# EODHD exchange mapping (reused from eodhd_updater.py)
-# ---------------------------------------------------------------------------
-
-EXCHANGE_TO_EODHD = {
-    # United States
-    "NASDAQ": "US", "NYSE": "US", "NYSEARCA": "US", "NYSEMKT": "US",
-    "AMEX": "US", "OTC": "US", "BATS": "US", "US": "US",
-    # United Kingdom
-    "LSE": "LSE", "LON": "LSE", "LONDON": "LSE",
-    # India
-    "NSE": "NSE", "BSE": "BSE", "NSEI": "NSE",
-    # Japan
-    "TSE": "TSE", "TYO": "TSE", "JPX": "TSE",
-    # Germany
-    "XETRA": "XETRA", "FRA": "F", "ETR": "XETRA",
-    "GETTEX": "MU", "MU": "MU", "STU": "STU",
-    "BE": "BE", "DU": "DU", "HM": "HM", "HA": "HA", "FWB": "F",
-    # Other Europe
-    "EPA": "PA", "PAR": "PA", "AMS": "AS", "SWX": "SW",
-    "BIT": "MI", "BME": "MC", "MIL": "MI", "VIE": "VI",
-    "EURONEXT": "PA",
-    # Asia-Pacific
-    "HKG": "HK", "HKEX": "HK", "KRX": "KO", "KOSDAQ": "KO",
-    "TWSE": "TW", "TPE": "TW", "SGX": "SG", "ASX": "AU", "NZX": "NZ",
-    "MYX": "KL", "DFM": "AE",
-    # Americas
-    "TSX": "TO", "TSXV": "V", "SAO": "SA", "BVMF": "SA", "BMV": "MX",
-    # Africa / Middle East
-    "JSE": "JSE", "TADAWUL": "SR", "SAU": "SR",
-    "NSENG": "NSENG", "NGS": "NSENG", "NGSE": "NSENG",
-    "TRADEGATE": "MU",
-}
-
-EXCHANGE_FALLBACKS = {
-    "MU": ["XETRA", "F", "US"], "STU": ["XETRA", "F", "US"],
-    "BE": ["XETRA", "F", "US"], "DU": ["XETRA", "F", "US"],
-    "HM": ["XETRA", "F", "US"], "HA": ["XETRA", "F", "US"],
-    "XETRA": ["F", "US"], "F": ["XETRA", "US"],
-    "BSE": ["NSE"], "NSE": ["BSE"],
-    "TSE": ["US"], "LSE": ["US"],
-    "TO": ["V", "US"], "V": ["TO", "US"],
-    "HK": ["US"], "KO": ["US"], "AU": ["US"],
-    "NSENG": ["LSE", "US"],
-}
-
-for _exc, _chain in EXCHANGE_FALLBACKS.items():
-    if "US" not in _chain:
-        _chain.append("US")
-
-
-def _resolve_exchange(exchange: str) -> str:
-    """Convert a spreadsheet exchange name to the EODHD suffix code."""
-    key = exchange.strip().upper()
-    return EXCHANGE_TO_EODHD.get(key, key)
 
 
 # ---------------------------------------------------------------------------
@@ -144,351 +84,6 @@ def setup_logging() -> logging.Logger:
 
 
 # ---------------------------------------------------------------------------
-# Google Sheets helpers
-# ---------------------------------------------------------------------------
-
-
-def sheets_execute(request, max_retries=4):
-    """Execute a Google Sheets API request with retry on transient errors."""
-    from googleapiclient.errors import HttpError
-
-    for attempt in range(max_retries):
-        try:
-            return request.execute()
-        except HttpError as e:
-            if e.resp.status == 429 and attempt < max_retries - 1:
-                wait = 2 ** (attempt + 1)
-                logging.getLogger("price_sales_updater").warning(
-                    "Sheets API rate limited (attempt %d/%d), retrying in %ds",
-                    attempt + 1, max_retries, wait,
-                )
-                time.sleep(wait)
-                continue
-            raise
-        except (ssl.SSLEOFError, ConnectionError, OSError) as e:
-            if attempt == max_retries - 1:
-                raise
-            wait = 2 ** (attempt + 1)
-            logging.getLogger("price_sales_updater").warning(
-                "Sheets API transient error (attempt %d/%d): %s, retrying in %ds",
-                attempt + 1, max_retries, e, wait,
-            )
-            time.sleep(wait)
-
-
-def get_sheets_service():
-    sa_value = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
-    if not sa_value:
-        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON env var is not set")
-
-    if sa_value.strip().startswith("{"):
-        info = json.loads(sa_value)
-        creds = service_account.Credentials.from_service_account_info(
-            info, scopes=SCOPES
-        )
-    else:
-        creds = service_account.Credentials.from_service_account_file(
-            sa_value, scopes=SCOPES
-        )
-    return build("sheets", "v4", credentials=creds)
-
-
-def read_ticker_list(service, logger) -> list[dict]:
-    """Read ticker + exchange from AI Analysis sheet, starting at row 3."""
-    result = sheets_execute(
-        service.spreadsheets()
-        .values()
-        .get(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"'{SOURCE_SHEET}'!A3:B",
-            valueRenderOption="FORMATTED_VALUE",
-        )
-    )
-    rows = result.get("values", [])
-    tickers = []
-    for row in rows:
-        if len(row) >= 2 and row[0].strip():
-            tickers.append({"ticker": row[0].strip(), "exchange": row[1].strip()})
-        elif len(row) >= 1 and row[0].strip():
-            tickers.append({"ticker": row[0].strip(), "exchange": ""})
-    logger.info("Read %d tickers from %s", len(tickers), SOURCE_SHEET)
-    return tickers
-
-
-def read_ps_sheet(service, logger) -> dict[str, dict]:
-    """Read all rows from Price-Sales sheet, return dict keyed by ticker.
-
-    Dynamically finds the header row (the one containing 'ticker') to handle
-    sheets that have group/merged header rows above the actual column names.
-    Uses PS_COLUMNS for column mapping (data is written in that order).
-    When duplicates exist, keeps the entry with the most recent last_updated.
-    """
-    result = sheets_execute(
-        service.spreadsheets()
-        .values()
-        .get(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"'{PS_SHEET}'!A1:K",
-            valueRenderOption="FORMATTED_VALUE",
-        )
-    )
-    rows = result.get("values", [])
-    if not rows:
-        logger.info("Price-Sales sheet is empty")
-        return {}
-
-    # Find the actual header row (contains "ticker") to know where data starts
-    header_idx = 0
-    for i, row in enumerate(rows):
-        if row and any(str(cell).strip().lower() == "ticker" for cell in row):
-            header_idx = i
-            break
-
-    logger.info("Found header row at index %d", header_idx)
-
-    ps_map = {}
-    for row in rows[header_idx + 1:]:
-        if not row or not row[0]:
-            continue
-        # Map columns by position using PS_COLUMNS (the order data was written)
-        entry = {}
-        for i, col_name in enumerate(PS_COLUMNS):
-            entry[col_name] = row[i] if i < len(row) else ""
-        ticker = entry.get("ticker", "").strip()
-        if not ticker:
-            continue
-        # If duplicate, keep the one with the most recent last_updated
-        if ticker in ps_map:
-            existing_date = ps_map[ticker].get("last_updated", "")
-            new_date = entry.get("last_updated", "")
-            if new_date > existing_date:
-                ps_map[ticker] = entry
-            logger.warning("Duplicate ticker %s found in sheet, keeping most recent", ticker)
-        else:
-            ps_map[ticker] = entry
-
-    logger.info("Read %d unique tickers from %s", len(ps_map), PS_SHEET)
-    return ps_map
-
-
-def ensure_ps_sheet_exists(service, logger):
-    """Create the Price-Sales sheet tab if it doesn't exist, with header row."""
-    meta = sheets_execute(
-        service.spreadsheets()
-        .get(spreadsheetId=SPREADSHEET_ID, fields="sheets.properties")
-    )
-    for sheet in meta.get("sheets", []):
-        if sheet["properties"]["title"] == PS_SHEET:
-            logger.info("Sheet '%s' already exists", PS_SHEET)
-            return
-
-    sheets_execute(service.spreadsheets().batchUpdate(
-        spreadsheetId=SPREADSHEET_ID,
-        body={
-            "requests": [
-                {"addSheet": {"properties": {"title": PS_SHEET}}}
-            ]
-        },
-    ))
-
-    sheets_execute(service.spreadsheets().values().update(
-        spreadsheetId=SPREADSHEET_ID,
-        range=f"'{PS_SHEET}'!A1",
-        valueInputOption="USER_ENTERED",
-        body={"values": [PS_COLUMNS]},
-    ))
-
-    sheet_id = _get_sheet_id(service, PS_SHEET)
-    sheets_execute(service.spreadsheets().batchUpdate(
-        spreadsheetId=SPREADSHEET_ID,
-        body={
-            "requests": [
-                {
-                    "updateSheetProperties": {
-                        "properties": {
-                            "sheetId": sheet_id,
-                            "gridProperties": {"frozenRowCount": 1},
-                        },
-                        "fields": "gridProperties.frozenRowCount",
-                    }
-                }
-            ]
-        },
-    ))
-    logger.info("Created sheet '%s' with header row", PS_SHEET)
-
-
-def ensure_logs_sheet_exists(service, logger):
-    """Create the Logs sheet tab if it doesn't exist, with header row."""
-    meta = sheets_execute(
-        service.spreadsheets()
-        .get(spreadsheetId=SPREADSHEET_ID, fields="sheets.properties")
-    )
-    for sheet in meta.get("sheets", []):
-        if sheet["properties"]["title"] == LOGS_SHEET:
-            return
-
-    sheets_execute(service.spreadsheets().batchUpdate(
-        spreadsheetId=SPREADSHEET_ID,
-        body={
-            "requests": [
-                {"addSheet": {"properties": {"title": LOGS_SHEET}}}
-            ]
-        },
-    ))
-
-    sheets_execute(service.spreadsheets().values().update(
-        spreadsheetId=SPREADSHEET_ID,
-        range=f"'{LOGS_SHEET}'!A1",
-        valueInputOption="USER_ENTERED",
-        body={"values": [LOG_COLUMNS]},
-    ))
-    logger.info("Created sheet '%s' with header row", LOGS_SHEET)
-
-
-def _get_sheet_id(service, sheet_name: str) -> int:
-    """Return the numeric sheet ID for a given sheet name."""
-    meta = sheets_execute(
-        service.spreadsheets()
-        .get(spreadsheetId=SPREADSHEET_ID, fields="sheets.properties")
-    )
-    for sheet in meta.get("sheets", []):
-        if sheet["properties"]["title"] == sheet_name:
-            return sheet["properties"]["sheetId"]
-    raise RuntimeError(f"Sheet '{sheet_name}' not found")
-
-
-def append_rows(service, sheet_name: str, rows: list[list], logger):
-    """Append rows to a sheet."""
-    if not rows:
-        return
-    sheets_execute(service.spreadsheets().values().append(
-        spreadsheetId=SPREADSHEET_ID,
-        range=f"'{sheet_name}'!A1",
-        valueInputOption="USER_ENTERED",
-        insertDataOption="INSERT_ROWS",
-        body={"values": rows},
-    ))
-    logger.info("Appended %d rows to %s", len(rows), sheet_name)
-
-
-def update_rows_by_ticker(service, sheet_name: str, updates: list[dict], logger):
-    """Update existing rows by matching ticker in column A."""
-    if not updates:
-        return
-
-    result = sheets_execute(
-        service.spreadsheets()
-        .values()
-        .get(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"'{sheet_name}'!A:A",
-            valueRenderOption="FORMATTED_VALUE",
-        )
-    )
-    col_a = result.get("values", [])
-    ticker_to_row = {}
-    for i, row in enumerate(col_a):
-        if row and row[0]:
-            ticker_to_row[row[0]] = i + 1  # 1-indexed
-
-    batch_data = []
-    for upd in updates:
-        ticker = upd["ticker"]
-        row_num = ticker_to_row.get(ticker)
-        if not row_num:
-            logger.warning("Ticker %s not found in sheet for update, skipping", ticker)
-            continue
-
-        row_values = [upd.get(col, "") for col in PS_COLUMNS[1:]]
-        batch_data.append(
-            {
-                "range": f"'{sheet_name}'!B{row_num}",
-                "values": [row_values],
-            }
-        )
-
-    if batch_data:
-        sheets_execute(service.spreadsheets().values().batchUpdate(
-            spreadsheetId=SPREADSHEET_ID,
-            body={"valueInputOption": "USER_ENTERED", "data": batch_data},
-        ))
-        logger.info("Updated %d rows in %s", len(batch_data), sheet_name)
-
-
-def cleanup_duplicate_rows(service, logger):
-    """One-time cleanup: delete duplicate ticker rows, keeping the FIRST (original).
-
-    The old code (before the header-detection fix) appended every ticker as
-    a new row on each run, creating duplicates below the originals.  This
-    function removes those extra rows in a single batched API call.
-    """
-    result = sheets_execute(
-        service.spreadsheets()
-        .values()
-        .get(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"'{PS_SHEET}'!A:A",
-            valueRenderOption="FORMATTED_VALUE",
-        )
-    )
-    col_a = result.get("values", [])
-    if not col_a:
-        return
-
-    # Find header row
-    header_idx = 0
-    for i, row in enumerate(col_a):
-        if row and str(row[0]).strip().lower() == "ticker":
-            header_idx = i
-            break
-
-    # Track first occurrence of each ticker; mark later ones for deletion
-    seen: set[str] = set()
-    rows_to_delete: list[int] = []
-    for i in range(header_idx + 1, len(col_a)):
-        row = col_a[i]
-        if not row or not row[0]:
-            continue
-        ticker = str(row[0]).strip()
-        if not ticker:
-            continue
-        if ticker in seen:
-            rows_to_delete.append(i)  # 0-based sheet row index
-        else:
-            seen.add(ticker)
-
-    if not rows_to_delete:
-        logger.info("No duplicate rows to clean up")
-        return
-
-    logger.info("Cleaning up %d duplicate rows (keeping originals)", len(rows_to_delete))
-    sheet_id = _get_sheet_id(service, PS_SHEET)
-
-    # Build all deletes in one batch, bottom-up so indices stay valid
-    requests_list = [
-        {
-            "deleteDimension": {
-                "range": {
-                    "sheetId": sheet_id,
-                    "dimension": "ROWS",
-                    "startIndex": row_idx,
-                    "endIndex": row_idx + 1,
-                }
-            }
-        }
-        for row_idx in sorted(rows_to_delete, reverse=True)
-    ]
-
-    sheets_execute(service.spreadsheets().batchUpdate(
-        spreadsheetId=SPREADSHEET_ID,
-        body={"requests": requests_list},
-    ))
-    logger.info("Cleanup complete — removed %d duplicate rows", len(rows_to_delete))
-
-
-
-# ---------------------------------------------------------------------------
 # EODHD API helpers
 # ---------------------------------------------------------------------------
 
@@ -502,26 +97,6 @@ def _safe_float(val) -> float | None:
         return f if f == f else None  # NaN check
     except (ValueError, TypeError):
         return None
-
-
-def _normalize_date(val: str) -> str:
-    """Normalize a date string to ISO format (YYYY-MM-DD).
-
-    Google Sheets FORMATTED_VALUE returns dates as M/D/YYYY (e.g. '3/23/2026'),
-    but the code writes and compares ISO dates ('2026-03-23').
-    """
-    if not val:
-        return ""
-    # Already ISO
-    if len(val) == 10 and val[4] == "-":
-        return val
-    # Try M/D/YYYY (Sheets display format)
-    for fmt in ("%m/%d/%Y", "%m/%d/%y"):
-        try:
-            return datetime.strptime(val, fmt).date().isoformat()
-        except ValueError:
-            continue
-    return val
 
 
 def eodhd_get(endpoint: str, params: dict | None = None,
@@ -552,7 +127,7 @@ def fetch_fundamentals(ticker: str, exchange: str, logger) -> dict | None:
 
     Returns the full JSON response or None.
     """
-    eodhd_exchange = _resolve_exchange(exchange)
+    eodhd_exchange = resolve_eodhd_exchange(exchange)
     symbol = f"{ticker}.{eodhd_exchange}"
 
     time.sleep(DELAY_BETWEEN_CALLS)
@@ -573,21 +148,6 @@ def fetch_fundamentals(ticker: str, exchange: str, logger) -> dict | None:
             return data
 
     return None
-
-
-# Yahoo Finance ticker suffix mapping (for historical prices)
-YAHOO_SUFFIX = {
-    "US": "", "NSE": ".NS", "BSE": ".BO",
-    "XETRA": ".DE", "F": ".F", "MU": ".MU", "STU": ".SG",
-    "BE": ".BE", "DU": ".DU", "HM": ".HM", "HA": ".HA",
-    "PA": ".PA", "AS": ".AS", "SW": ".SW", "MI": ".MI", "MC": ".MC",
-    "VI": ".VI",
-    "LSE": ".L", "HK": ".HK", "KO": ".KS", "TW": ".TW",
-    "SG": ".SI", "AU": ".AX", "NZ": ".NZ", "KL": ".KL", "AE": ".AE",
-    "TO": ".TO", "V": ".V", "SA": ".SA", "MX": ".MX",
-    "TSE": ".T", "JSE": ".JO", "SR": ".SR",
-    "NSENG": ".LG",
-}
 
 
 def _yahoo_chart_request(yahoo_ticker: str, logger) -> list | None:
@@ -644,7 +204,7 @@ def fetch_weekly_prices(ticker: str, exchange: str, logger) -> list | None:
 
     Returns list of {"date": "YYYY-MM-DD", "close": float} dicts, or None.
     """
-    eodhd_exchange = _resolve_exchange(exchange)
+    eodhd_exchange = resolve_eodhd_exchange(exchange)
     suffix = YAHOO_SUFFIX.get(eodhd_exchange, "")
     yahoo_ticker = ticker + suffix
 
@@ -709,8 +269,6 @@ def get_shares_outstanding(fundamentals: dict) -> float | None:
     # Fallback: MarketCap / price
     highlights = fundamentals.get("Highlights", {})
     mcap = _safe_float(highlights.get("MarketCapitalization"))
-    # General.PreviousClose or similar
-    general = fundamentals.get("General", {})
     # Try technicals
     technicals = fundamentals.get("Technicals", {})
     price = _safe_float(technicals.get("50DayMA"))
@@ -755,7 +313,7 @@ def compute_ps_for_ticker(
 ) -> dict | None:
     """Fetch data from EODHD and compute P/S ratio + history for one ticker.
 
-    Returns a dict ready for sheet writing, or None if data is insufficient.
+    Returns a dict ready for DB writing, or None if data is insufficient.
     History entries are only added on Fridays (weekly granularity),
     but ps_now and last_updated refresh daily.
     """
@@ -824,8 +382,14 @@ def compute_ps_for_ticker(
 
     else:
         # Update: parse existing history
+        existing_history_raw = existing.get("history_json")
         try:
-            existing_history = json.loads(existing.get("history_json", "[]"))
+            if isinstance(existing_history_raw, str):
+                existing_history = json.loads(existing_history_raw)
+            elif isinstance(existing_history_raw, list):
+                existing_history = existing_history_raw
+            else:
+                existing_history = []
         except (json.JSONDecodeError, TypeError):
             existing_history = []
 
@@ -869,14 +433,13 @@ def compute_ps_for_ticker(
     return {
         "ticker": ticker,
         "company_name": company_name,
-        "revenue_ttm": round(revenue_ttm, 0),
         "ps_now": ps_current,
-        "52w_high": ps_52w_high,
-        "52w_low": ps_52w_low,
-        "12m_median": ps_12m_median,
+        "high_52w": ps_52w_high,
+        "low_52w": ps_52w_low,
+        "median_12m": ps_12m_median,
         "ath": ps_ath,
-        "%_of_ath": pct_of_ath,
-        "history_json": json.dumps(new_history),
+        "pct_of_ath": pct_of_ath,
+        "history_json": new_history,  # store as actual JSONB, not JSON string
         "last_updated": today_str,
         "first_recorded": first_recorded,
         "mode": mode,
@@ -914,18 +477,14 @@ def main():
         logger.error("EODHD_API_KEY env var is not set")
         sys.exit(1)
 
-    service = get_sheets_service()
-
-    # Ensure sheets exist
-    ensure_ps_sheet_exists(service, logger)
-    ensure_logs_sheet_exists(service, logger)
-
-    # Remove duplicate rows left by the old broken code (keeps originals)
-    cleanup_duplicate_rows(service, logger)
+    db = SupabaseDB()
 
     # Read inputs
-    ticker_list = read_ticker_list(service, logger)
-    ps_map = read_ps_sheet(service, logger)
+    ticker_list = db.get_all_companies(columns="ticker, exchange, company_name")
+    logger.info("Read %d tickers from companies table", len(ticker_list))
+
+    ps_map = db.get_all_price_sales()
+    logger.info("Read %d existing price-sales rows", len(ps_map))
 
     # Filter to specific tickers if requested
     if args.tickers:
@@ -942,14 +501,14 @@ def main():
                 today, last_friday, backfill_from)
 
     # Classify and process tickers
-    new_rows = []
-    update_rows = []
+    backfilled = 0
+    updated = 0
     skipped = 0
     errors = 0
 
     for item in ticker_list:
         ticker = item["ticker"]
-        exchange = item["exchange"]
+        exchange = item.get("exchange", "")
         existing = ps_map.get(ticker)
 
         # Classify — run daily; skip only if already updated today
@@ -957,7 +516,7 @@ def main():
             mode = "backfill"
         elif args.force:
             mode = "update"
-        elif not existing.get("last_updated") or _normalize_date(existing["last_updated"]) < today_str:
+        elif not existing.get("last_updated") or existing["last_updated"] < today_str:
             mode = "update"
         else:
             skipped += 1
@@ -980,42 +539,36 @@ def main():
             errors += 1
             continue
 
-        if result["mode"] == "backfill":
-            new_rows.append(result)
-        else:
-            update_rows.append(result)
+        # Write to Supabase via upsert
+        result_mode = result.pop("mode")
+        try:
+            db.upsert_price_sales(ticker, result)
+            if result_mode == "backfill":
+                backfilled += 1
+            else:
+                updated += 1
+        except Exception as e:
+            logger.error("ERROR writing %s to DB: %s", ticker, e)
+            errors += 1
 
-    # Write results to sheet
-    logger.info("Writing results: %d new, %d updates, %d skipped, %d errors",
-                len(new_rows), len(update_rows), skipped, errors)
-
-    # Append new rows
-    if new_rows:
-        sheet_rows = []
-        for r in new_rows:
-            sheet_rows.append([r.get(col, "") for col in PS_COLUMNS])
-        append_rows(service, PS_SHEET, sheet_rows, logger)
-
-    # Update existing rows
-    if update_rows:
-        update_rows_by_ticker(service, PS_SHEET, update_rows, logger)
-
-    # Write log entry
+    # Log run stats
     duration = round(time.time() - start_time, 1)
-    log_row = [
-        date.today().isoformat(),
-        len(new_rows),
-        len(update_rows),
-        skipped,
-        errors,
-        duration,
-    ]
-    append_rows(service, LOGS_SHEET, [log_row], logger)
+    stats = {
+        "backfilled": backfilled,
+        "updated": updated,
+        "skipped": skipped,
+        "errors": errors,
+        "duration_secs": duration,
+    }
+    try:
+        db.log_run("price_sales_updater", stats)
+    except Exception as e:
+        logger.error("Failed to log run stats: %s", e)
 
     logger.info("=" * 60)
     logger.info(
         "Done in %.1fs — backfilled=%d updated=%d skipped=%d errors=%d",
-        duration, len(new_rows), len(update_rows), skipped, errors,
+        duration, backfilled, updated, skipped, errors,
     )
     logger.info("=" * 60)
 

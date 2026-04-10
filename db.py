@@ -1,0 +1,181 @@
+"""
+Shared Supabase database access layer.
+
+Replaces the duplicated Google Sheets read/write code across all pipeline
+scripts with a single module backed by Supabase (PostgreSQL).
+
+Environment variables:
+    SUPABASE_URL         — Supabase project URL
+    SUPABASE_SERVICE_KEY — Service-role key (bypasses RLS)
+"""
+
+import json
+import math
+import os
+import re
+from datetime import date, timedelta
+
+from dotenv import load_dotenv
+from supabase import create_client, Client
+
+load_dotenv()
+
+NULL_VALUE = "\u2014"  # em-dash — consistent placeholder for missing data
+
+
+class SupabaseDB:
+    """Shared database access layer for all pipeline scripts."""
+
+    def __init__(self):
+        url = os.environ.get("SUPABASE_URL", "")
+        key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+        if not url or not key:
+            raise RuntimeError(
+                "SUPABASE_URL and SUPABASE_SERVICE_KEY env vars must be set"
+            )
+        self.client: Client = create_client(url, key)
+
+    # ------------------------------------------------------------------
+    # Companies (AI Analysis)
+    # ------------------------------------------------------------------
+
+    def get_all_companies(self, columns: str = "*") -> list[dict]:
+        """Return all rows from the companies table."""
+        resp = self.client.table("companies").select(columns).execute()
+        return resp.data
+
+    def get_company(self, ticker: str) -> dict | None:
+        """Return a single company row, or None."""
+        resp = (
+            self.client.table("companies")
+            .select("*")
+            .eq("ticker", ticker)
+            .execute()
+        )
+        return resp.data[0] if resp.data else None
+
+    def get_all_tickers(self) -> set[str]:
+        """Return the set of all ticker symbols in the companies table."""
+        resp = self.client.table("companies").select("ticker").execute()
+        return {row["ticker"] for row in resp.data}
+
+    def get_stale_companies(self, date_column: str, days: int) -> list[dict]:
+        """Return companies where `date_column` is older than `days` or NULL."""
+        cutoff = (date.today() - timedelta(days=days)).isoformat()
+        # Supabase doesn't support OR with is_.null in a single filter chain,
+        # so we fetch all and filter in Python for reliability.
+        resp = self.client.table("companies").select("*").execute()
+        results = []
+        for row in resp.data:
+            val = row.get(date_column)
+            if val is None or val == "" or val < cutoff:
+                results.append(row)
+        return results
+
+    def upsert_company(self, ticker: str, data: dict) -> None:
+        """Insert or update a single company row."""
+        data["ticker"] = ticker
+        self._sanitize(data)
+        self.client.table("companies").upsert(data).execute()
+
+    def upsert_companies_batch(self, rows: list[dict]) -> None:
+        """Insert or update multiple company rows."""
+        for row in rows:
+            self._sanitize(row)
+        if rows:
+            self.client.table("companies").upsert(rows).execute()
+
+    # ------------------------------------------------------------------
+    # Price-Sales
+    # ------------------------------------------------------------------
+
+    def get_all_price_sales(self) -> dict[str, dict]:
+        """Return all price-sales rows keyed by ticker."""
+        resp = self.client.table("price_sales").select("*").execute()
+        return {row["ticker"]: row for row in resp.data}
+
+    def get_price_sales(self, ticker: str) -> dict | None:
+        """Return a single price-sales row, or None."""
+        resp = (
+            self.client.table("price_sales")
+            .select("*")
+            .eq("ticker", ticker)
+            .execute()
+        )
+        return resp.data[0] if resp.data else None
+
+    def upsert_price_sales(self, ticker: str, data: dict) -> None:
+        """Insert or update a price-sales row."""
+        data["ticker"] = ticker
+        self._sanitize(data)
+        self.client.table("price_sales").upsert(data).execute()
+
+    def upsert_price_sales_batch(self, rows: list[dict]) -> None:
+        """Insert or update multiple price-sales rows."""
+        for row in rows:
+            self._sanitize(row)
+        if rows:
+            self.client.table("price_sales").upsert(rows).execute()
+
+    # ------------------------------------------------------------------
+    # Run Logs
+    # ------------------------------------------------------------------
+
+    def log_run(self, script_name: str, stats: dict) -> None:
+        """Insert a run-log entry."""
+        row = {
+            "script_name": script_name,
+            "run_date": date.today().isoformat(),
+            **stats,
+        }
+        self._sanitize(row)
+        self.client.table("run_logs").insert(row).execute()
+
+    # ------------------------------------------------------------------
+    # Sanitization
+    # ------------------------------------------------------------------
+
+    def _sanitize(self, data: dict) -> None:
+        """Clean values before sending to Supabase (NaN, Inf, em-dash → None)."""
+        for k, v in list(data.items()):
+            if v is None:
+                continue
+            if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                data[k] = None
+            elif v == NULL_VALUE:
+                data[k] = None
+
+    # ------------------------------------------------------------------
+    # Shared utilities (consolidated from all scripts)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def safe_float(val) -> float | None:
+        """Try to convert a value to float, return None on failure.
+
+        Handles em-dash null markers, percentage signs, and NaN/Inf.
+        """
+        if val is None or val == "" or val == NULL_VALUE:
+            return None
+        try:
+            cleaned = str(val).strip().rstrip("%")
+            f = float(cleaned)
+            if math.isnan(f) or math.isinf(f):
+                return None
+            return f
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def extract_ticker(val: str) -> str:
+        """Extract ticker from a HYPERLINK formula or plain text.
+
+        Handles both =HYPERLINK("url", "TICKER") formulas and plain strings.
+        """
+        val = str(val).strip()
+        if not val:
+            return ""
+        match = re.search(r'=HYPERLINK\([^,]+,\s*"([^"]+)"\)', val)
+        if match:
+            return match.group(1).strip().upper()
+        return val.strip().upper()

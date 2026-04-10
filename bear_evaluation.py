@@ -2,10 +2,11 @@
 """
 Bear Evaluation — Fundamental Sentinel for Top Equities.
 
-Sends the top 100 green-eligible equities from AI Analysis to Gemini 2.5 Flash
-for a forensic fundamental health audit. Each equity receives a pass or fail
-verdict based on operational integrity and financial trajectory.
-Results are written to the 'Bear' column in the AI Analysis sheet.
+Sends the top 100 green-eligible equities from the companies table to
+Gemini 2.5 Flash for a forensic fundamental health audit. Each equity
+receives a pass or fail verdict based on operational integrity and
+financial trajectory. Results are written to the `bear_eval` column
+in the companies table via Supabase.
 
 Schedule: Mondays 08:00 UTC.
 """
@@ -13,7 +14,6 @@ Schedule: Mondays 08:00 UTC.
 import argparse
 import json
 import logging
-import math
 import os
 import re
 import subprocess
@@ -24,17 +24,13 @@ from datetime import date
 from pathlib import Path
 
 from dotenv import load_dotenv
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
+
+from db import SupabaseDB
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-SPREADSHEET_ID = os.environ.get(
-    "SPREADSHEET_ID", "1js3dUTJtKhY1dUcwzYUGBOdKDZXBurLtRGgcIV8msYk"
-)
-SHEET_NAME = "AI Analysis"
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_TIMEOUT = 300  # seconds
 MAX_RETRIES = 3
@@ -43,48 +39,14 @@ DELAY_BETWEEN_CALLS = 2
 TOP_N = 100
 NULL_VALUE = "\u2014"
 
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-
-HEADER_ALIASES = {
-    "Ticker":               "ticker",
-    "ticker_clean":         "ticker",
-    "Company":              "company_name",
-    "Company Name":         "company_name",
-    "Exchange":             "exchange",
-    "Country":              "country",
-    "Sector":               "sector",
-    "Status":               "status",
-    "Composite Score":      "composite_score",
-    "composite_score":      "composite_score",
-    "Price":                "price",
-    "PS Now":               "ps_now",
-    "ps_now":               "ps_now",
-    "price_%_of_52w_high":  "price_pct_of_52w_high",
-    "perf_52w_vs_spy":      "perf_52w_vs_spy",
-    "Perf 52W vs SPY":      "perf_52w_vs_spy",
-    "Rating":               "rating",
-    "Short Outlook":        "short_outlook",
-    "R40 Score":            "r40_score",
-    "AI":                   "ai",
-    "Analyzed":             "ai",
-    "AI Analyzed":          "ai",
-    "Data":                 "data",
-    "Data As Of":           "data",
-    "Fundamentals Date":    "data",
-    "Scoring":              "scoring",
-    "scoring":              "scoring",
-    "Bear":                 "bear",
-    "Bear Eval":            "bear",
-    "Bull":                 "bull",
-    "Bull Eval":            "bull",
-}
-
 # Columns to EXCLUDE from the data sent to Gemini
 EXCLUDED_COLUMNS = {
     "status", "composite_score", "price", "ps_now",
-    "price_pct_of_52w_high", "price_%_of_52w_high",
-    "perf_52w_vs_spy", "rating", "ai", "data", "scoring", "price data",
-    "price_data", "bear", "bull", "history_json",
+    "price_pct_of_52w_high",
+    "perf_52w_vs_spy", "rating", "ai_analyzed_at", "data_updated_at",
+    "scored_at", "bear_eval", "bear_eval_at", "bull_eval", "bull_eval_at",
+    "history_json", "in_tv_screen", "created_at", "updated_at",
+    "sort_order", "flags",
 }
 
 # ---------------------------------------------------------------------------
@@ -181,140 +143,32 @@ def setup_logging() -> logging.Logger:
 
 
 # ---------------------------------------------------------------------------
-# Google Sheets helpers
-# ---------------------------------------------------------------------------
-
-
-def get_sheets_service():
-    sa_value = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
-    if not sa_value:
-        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON env var is not set")
-
-    if sa_value.strip().startswith("{"):
-        info = json.loads(sa_value)
-        creds = service_account.Credentials.from_service_account_info(
-            info, scopes=SCOPES
-        )
-    else:
-        creds = service_account.Credentials.from_service_account_file(
-            sa_value, scopes=SCOPES
-        )
-    return build("sheets", "v4", credentials=creds)
-
-
-def read_all_rows(service) -> list[list[str]]:
-    """Return all rows from the AI Analysis sheet (including header rows)."""
-    result = (
-        service.spreadsheets()
-        .values()
-        .get(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"'{SHEET_NAME}'!A1:AZ",
-            valueRenderOption="FORMATTED_VALUE",
-        )
-        .execute()
-    )
-    return result.get("values", [])
-
-
-def write_row_updates(service, updates: list[dict]):
-    """
-    Batch-write updates to the sheet.
-
-    Each entry in `updates` is:
-        {"row": <1-indexed row number>, "values": {col_letter: value, ...}}
-    """
-    if not updates:
-        return
-
-    data = []
-    for upd in updates:
-        row = upd["row"]
-        for col_letter, value in upd["values"].items():
-            data.append({
-                "range": f"'{SHEET_NAME}'!{col_letter}{row}",
-                "values": [[value]],
-            })
-
-    body = {"valueInputOption": "USER_ENTERED", "data": data}
-    service.spreadsheets().values().batchUpdate(
-        spreadsheetId=SPREADSHEET_ID, body=body
-    ).execute()
-
-
-def _col_letter(idx: int) -> str:
-    """Convert 0-based column index to Excel-style letter(s). 0->A, 25->Z, 26->AA."""
-    result = ""
-    while True:
-        result = chr(65 + idx % 26) + result
-        idx = idx // 26 - 1
-        if idx < 0:
-            break
-    return result
-
-
-def _extract_ticker(val):
-    """Extract ticker from a HYPERLINK formula or plain text."""
-    val = str(val).strip()
-    if not val:
-        return ""
-    match = re.search(r'=HYPERLINK\([^,]+,\s*"([^"]+)"\)', val)
-    if match:
-        return match.group(1).strip().upper()
-    return val.strip().upper()
-
-
-def _safe_float(val):
-    """Try to convert a value to float, return None on failure."""
-    if val is None or val == "" or val == NULL_VALUE:
-        return None
-    try:
-        cleaned = str(val).strip().rstrip("%")
-        f = float(cleaned)
-        if math.isnan(f) or math.isinf(f):
-            return None
-        return f
-    except (ValueError, TypeError):
-        return None
-
-
-# ---------------------------------------------------------------------------
 # Data selection
 # ---------------------------------------------------------------------------
 
 
-def select_top_eligible(all_rows, col_map, top_n=TOP_N):
+def select_top_eligible(companies: list[dict], top_n: int = TOP_N) -> list[dict]:
     """
-    Filter rows with green status, sort by composite_score desc, return top N.
+    Filter companies with green status, sort by composite_score desc, return top N.
 
-    Returns list of (sheet_row_number, row_data, ticker) tuples.
+    Returns list of company dicts.
     """
-    status_idx = col_map.get("status")
-    score_idx = col_map.get("composite_score")
-    ticker_idx = col_map.get("ticker")
-
-    if status_idx is None or score_idx is None or ticker_idx is None:
-        return []
-
     eligible = []
-    max_idx = max(col_map.values())
-    for row_offset, row in enumerate(all_rows[2:]):  # skip header rows
-        padded = row + [""] * (max_idx + 1 - len(row))
-        status = padded[status_idx].strip()
+    for company in companies:
+        status = (company.get("status") or "").strip()
         if "\U0001f7e2" not in status:  # green circle emoji
             continue
 
-        ticker = _extract_ticker(padded[ticker_idx])
+        ticker = (company.get("ticker") or "").strip()
         if not ticker:
             continue
 
-        score = _safe_float(padded[score_idx])
-        sheet_row = row_offset + 3  # 1-indexed
-        eligible.append((sheet_row, row, ticker, score if score is not None else 0.0))
+        score = SupabaseDB.safe_float(company.get("composite_score"))
+        eligible.append((company, score if score is not None else 0.0))
 
     # Sort by composite_score descending
-    eligible.sort(key=lambda x: x[3], reverse=True)
-    return [(r, row, t) for r, row, t, _ in eligible[:top_n]]
+    eligible.sort(key=lambda x: x[1], reverse=True)
+    return [company for company, _ in eligible[:top_n]]
 
 
 # ---------------------------------------------------------------------------
@@ -322,33 +176,30 @@ def select_top_eligible(all_rows, col_map, top_n=TOP_N):
 # ---------------------------------------------------------------------------
 
 
-def build_equity_block(row, col_map, ticker, excluded=EXCLUDED_COLUMNS):
+def build_equity_block(company: dict, excluded: set = EXCLUDED_COLUMNS) -> str:
     """Format a single equity's data for the prompt."""
-    max_idx = max(col_map.values()) if col_map else 0
-    padded = row + [""] * (max_idx + 1 - len(row))
+    ticker = (company.get("ticker") or "").strip()
+    company_name = (company.get("company_name") or "").strip()
 
-    # Get company name
-    company_idx = col_map.get("company_name")
-    company = padded[company_idx].strip() if company_idx is not None else ""
-
-    lines = [f"--- {ticker} ({company}) ---"]
-    for col_name, col_idx in sorted(col_map.items(), key=lambda x: x[1]):
+    lines = [f"--- {ticker} ({company_name}) ---"]
+    for col_name in sorted(company.keys()):
         if col_name in excluded or col_name.startswith("_"):
-            continue
-        if col_idx >= len(padded):
-            continue
-        val = padded[col_idx].strip()
-        if not val or val == NULL_VALUE:
             continue
         # Skip the ticker and company_name since they're in the header
         if col_name in ("ticker", "company_name"):
             continue
-        lines.append(f"  {col_name}: {val}")
+        val = company.get(col_name)
+        if val is None:
+            continue
+        val_str = str(val).strip()
+        if not val_str or val_str == NULL_VALUE:
+            continue
+        lines.append(f"  {col_name}: {val_str}")
 
     return "\n".join(lines)
 
 
-def build_bear_prompt(equity_blocks):
+def build_bear_prompt(equity_blocks: list[str]) -> str:
     """Assemble the full bear prompt with all equity data."""
     equity_data = "\n\n".join(equity_blocks)
     return BEAR_PROMPT_TEMPLATE.format(
@@ -474,7 +325,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Bear Evaluation - Fundamental Sentinel")
     parser.add_argument("--dry-run", action="store_true",
-                        help="Print prompt and results without writing to the sheet")
+                        help="Print prompt and results without writing to the database")
     args = parser.parse_args()
 
     logger = setup_logging()
@@ -488,54 +339,38 @@ def main():
         sys.exit(1)
     logger.info("GEMINI_API_KEY is set (length=%d)", len(gemini_key))
 
-    # Read sheet
-    service = get_sheets_service()
-    all_rows = read_all_rows(service)
-    logger.info("Read %d rows from sheet (including headers)", len(all_rows))
+    # Connect to Supabase
+    db = SupabaseDB()
 
-    if len(all_rows) < 3:
-        logger.error("Sheet has fewer than 3 rows (need headers + data)")
+    # Read all companies
+    all_companies = db.get_all_companies()
+    logger.info("Read %d companies from database", len(all_companies))
+
+    if not all_companies:
+        logger.error("No companies found in database")
         sys.exit(1)
-
-    # Build column map from row 2 headers
-    col_map = {}
-    for idx, header in enumerate(all_rows[1]):
-        name = header.strip()
-        name = HEADER_ALIASES.get(name, name.lower())
-        col_map[name] = idx
-    logger.info("Column map: %s", {k: v for k, v in col_map.items()})
-
-    # Verify bear column exists
-    bear_idx = col_map.get("bear")
-    if bear_idx is None:
-        logger.error("'Bear' column not found in sheet headers. Available: %s",
-                      [h.strip() for h in all_rows[1]])
-        sys.exit(1)
-    bear_col_letter = _col_letter(bear_idx)
-    logger.info("Bear column: %s (index %d)", bear_col_letter, bear_idx)
 
     # Select top green-eligible equities
-    top_equities = select_top_eligible(all_rows, col_map)
+    top_equities = select_top_eligible(all_companies)
     logger.info("Selected %d green-eligible equities for bear evaluation", len(top_equities))
 
     if not top_equities:
         logger.warning("No green-eligible equities found. Nothing to do.")
-        status_idx = col_map.get("status")
-        if status_idx is not None:
-            for i, row in enumerate(all_rows[2:7]):
-                padded = row + [""] * (status_idx + 1 - len(row))
-                logger.info("  Row %d status: [%s] repr=%r", i + 3,
-                            padded[status_idx].strip(), padded[status_idx])
+        # Log some sample statuses for debugging
+        for company in all_companies[:5]:
+            logger.info("  %s status: [%s]", company.get("ticker", "?"),
+                        company.get("status", ""))
         return
 
-    top_tickers = {t for _, _, t in top_equities}
+    top_tickers = {(c.get("ticker") or "").strip() for c in top_equities}
 
     # Build equity data blocks
     equity_blocks = []
-    for sheet_row, row, ticker in top_equities:
-        block = build_equity_block(row, col_map, ticker)
+    for company in top_equities:
+        ticker = (company.get("ticker") or "").strip()
+        block = build_equity_block(company)
         equity_blocks.append(block)
-        logger.info("  %s (row %d)", ticker, sheet_row)
+        logger.info("  %s", ticker)
 
     # Build prompt
     prompt = build_bear_prompt(equity_blocks)
@@ -576,41 +411,37 @@ def main():
         logger.info("[DRY RUN] Complete. No writes performed.")
         return
 
-    # Build updates for top equities
-    updates = []
+    # Write verdicts for top equities
+    today_str = date.today().isoformat()
     matched = 0
-    for sheet_row, row, ticker in top_equities:
+    for company in top_equities:
+        ticker = (company.get("ticker") or "").strip()
         verdict = verdicts.get(ticker)
         if verdict:
-            updates.append({
-                "row": sheet_row,
-                "values": {bear_col_letter: verdict},
+            db.upsert_company(ticker, {
+                "bear_eval": verdict,
+                "bear_eval_at": today_str,
             })
             matched += 1
         else:
-            logger.warning("No verdict found for %s (row %d)", ticker, sheet_row)
+            logger.warning("No verdict found for %s", ticker)
 
     # Clear stale bear values for equities no longer in top list
-    max_idx = max(col_map.values())
-    ticker_idx = col_map.get("ticker")
     clears = 0
-    for row_offset, row in enumerate(all_rows[2:]):
-        padded = row + [""] * (max_idx + 1 - len(row))
-        sheet_row = row_offset + 3
-        ticker = _extract_ticker(padded[ticker_idx])
+    for company in all_companies:
+        ticker = (company.get("ticker") or "").strip()
         if ticker in top_tickers:
             continue  # handled above
-        # Check if bear column has a value
-        bear_val = padded[bear_idx].strip() if bear_idx < len(padded) else ""
+        # Check if bear_eval column has a value
+        bear_val = (company.get("bear_eval") or "").strip()
         if bear_val:
-            updates.append({
-                "row": sheet_row,
-                "values": {bear_col_letter: ""},
+            db.upsert_company(ticker, {
+                "bear_eval": None,
+                "bear_eval_at": None,
             })
             clears += 1
 
     logger.info("Writing %d verdicts + clearing %d stale bear values", matched, clears)
-    write_row_updates(service, updates)
 
     elapsed = time.time() - start_time
     logger.info(
