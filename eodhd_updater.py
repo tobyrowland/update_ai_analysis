@@ -115,6 +115,7 @@ def setup_logging() -> logging.Logger:
 # EODHD API helpers & business logic
 # ---------------------------------------------------------------------------
 
+def _has_financials(data: dict) -> bool:
     """Check whether an EODHD response contains usable financial data.
 
     Some tickers return 200 OK but have empty Financials / Earnings

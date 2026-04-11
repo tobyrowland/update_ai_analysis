@@ -33,6 +33,11 @@ class SupabaseDB:
             raise RuntimeError(
                 "SUPABASE_URL and SUPABASE_SERVICE_KEY env vars must be set"
             )
+        # Log connection info for debugging (mask most of the key)
+        import logging
+        _log = logging.getLogger("db")
+        _log.info("Connecting to Supabase: url=%s key=%s...%s",
+                   url, key[:8], key[-4:])
         self.client: Client = create_client(url, key)
 
     # ------------------------------------------------------------------

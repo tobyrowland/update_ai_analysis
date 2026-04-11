@@ -73,6 +73,16 @@ CREATE TABLE companies (
     full_outlook            TEXT DEFAULT '',
     key_risks               TEXT DEFAULT '',
 
+    -- EVALUATIONS (bear/bull weekly analysis)
+    bear_eval               TEXT DEFAULT '',
+    bear_eval_at            DATE,
+    bull_eval               TEXT DEFAULT '',
+    bull_eval_at            DATE,
+
+    -- PORTFOLIO
+    in_portfolio            BOOLEAN NOT NULL DEFAULT FALSE,
+    portfolio_sort_order    INTEGER,
+
     -- LAST ANALYSIS
     ai_analyzed_at          DATE,
     data_updated_at         DATE,
