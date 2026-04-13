@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 
 const links = [
   { href: "/screener", label: "Screener" },
-  { href: "/portfolio", label: "Portfolio" },
+  { href: "/portfolio", label: "Example Agent" },
 ];
 
 export default function Nav() {
