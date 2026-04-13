@@ -35,15 +35,29 @@ export function formatPrice(val: number | null | undefined): string {
 export function parseStatus(status: string): {
   label: string;
   color: string;
+  detail: string | null;
 } {
-  if (status.includes("Eligible"))
-    return { label: "Eligible", color: COLORS.green };
-  if (status.includes("Discount"))
-    return { label: "Discount", color: COLORS.orange };
-  if (status.includes("New")) return { label: "New", color: COLORS.yellow };
-  if (status.includes("Excluded"))
-    return { label: "Excluded", color: COLORS.red };
-  return { label: status || "--", color: COLORS.textDim };
+  // Statuses are written by score_ai_analysis.py as emoji-prefixed strings:
+  //   "🟢 Eligible"
+  //   "🆕 New"
+  //   "🏷️ -25% vs. 52w p/s"           (Discount)
+  //   "❌ net_margin, fcf_margin"     (Excluded — joined red-flag names)
+  //   "❌ Unprofitable Health Tech"   (Excluded — sector rule)
+  // Match on the emoji prefix first, since the English words don't always appear.
+  const s = status ?? "";
+  // Strip any leading emoji(s) — including variation selectors like 🏷️ — to
+  // surface the human-readable detail (e.g. "net_margin, fcf_margin").
+  const trimmed = s.replace(/^(?:\p{Extended_Pictographic}\uFE0F?\s*)+/u, "").trim();
+
+  if (s.startsWith("❌"))
+    return { label: "Excluded", color: COLORS.red, detail: trimmed || null };
+  if (s.startsWith("🏷️") || s.includes("Discount"))
+    return { label: "Discount", color: COLORS.orange, detail: trimmed || null };
+  if (s.startsWith("🆕") || s.includes("New"))
+    return { label: "New", color: COLORS.yellow, detail: null };
+  if (s.startsWith("🟢") || s.includes("Eligible"))
+    return { label: "Eligible", color: COLORS.green, detail: null };
+  return { label: s || "--", color: COLORS.textDim, detail: null };
 }
 
 export function parseEval(val: string | null): {
