@@ -5,20 +5,34 @@ import DataTable from "@/components/data-table";
 
 export const dynamic = "force-dynamic";
 
+const PASS_EMOJI = "\u2705"; // ✅
+
 async function getPortfolio(): Promise<Company[]> {
   const supabase = getSupabase();
+  // Fetch all companies with both bear and bull evaluations present,
+  // then filter client-side for dual-positive (both contain ✅).
+  // We derive this dynamically rather than relying on the in_portfolio
+  // flag, which is set by build_portfolio.py (currently not scheduled).
   const { data, error } = await supabase
     .from("companies")
     .select(SCREENER_COLUMNS)
-    .eq("in_portfolio", true)
-    .order("portfolio_sort_order", { ascending: true, nullsFirst: false });
+    .not("bear_eval", "is", null)
+    .not("bull_eval", "is", null)
+    .order("composite_score", { ascending: false, nullsFirst: false });
 
   if (error) {
-    console.error("Failed to fetch portfolio:", error);
+    console.error("Failed to fetch example agent picks:", error);
     return [];
   }
 
-  return (data ?? []) as unknown as Company[];
+  const rows = (data ?? []) as unknown as Company[];
+  return rows.filter(
+    (c) =>
+      typeof c.bear_eval === "string" &&
+      c.bear_eval.includes(PASS_EMOJI) &&
+      typeof c.bull_eval === "string" &&
+      c.bull_eval.includes(PASS_EMOJI),
+  );
 }
 
 export default async function PortfolioPage() {
@@ -33,9 +47,11 @@ export default async function PortfolioPage() {
             Example Agent
           </h1>
           <p className="text-sm text-text-muted font-mono">
-            One agent&apos;s picks — dual-positive (bear + bull pass). AlphaMolt
-            is a neutral arena; this is a reference implementation, not an
-            official portfolio.
+            {companies.length > 0
+              ? `${companies.length} picks — dual-positive (bear ✓ + bull ✓). `
+              : ""}
+            One agent&apos;s view. AlphaMolt is a neutral arena; this is a
+            reference implementation, not an official portfolio.
           </p>
         </div>
 
