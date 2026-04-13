@@ -9,6 +9,7 @@ writes scoring results back to the companies table via Supabase.
 Schedule: 06:30 UTC daily (after eodhd_updater and update_ai_narratives).
 """
 
+import json
 import logging
 import math
 import re
@@ -264,8 +265,13 @@ def main():
     for company in companies:
         ticker = company["ticker"]
 
-        # Extract flags from JSONB
+        # Extract flags from JSONB (defensive: handle both dict and legacy JSON string)
         flags = company.get("flags") or {}
+        if isinstance(flags, str):
+            try:
+                flags = json.loads(flags) if flags else {}
+            except (json.JSONDecodeError, ValueError):
+                flags = {}
         red_flags = [col for col, level in flags.items() if level == "red"]
         yellow_flags = [col for col, level in flags.items() if level == "yellow"]
 

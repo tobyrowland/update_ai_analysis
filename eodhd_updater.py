@@ -1048,7 +1048,7 @@ def main():
                         elif dot == DOT_YELLOW:
                             flags[db_col] = "yellow"
 
-            update["flags"] = json.dumps(flags) if flags else "{}"
+            update["flags"] = flags
 
             db.upsert_company(ticker, update)
             total_written += 1

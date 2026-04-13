@@ -40,7 +40,20 @@ export default async function CompanyPage({
   const status = parseStatus(company.status);
   const bear = parseEval(company.bear_eval);
   const bull = parseEval(company.bull_eval);
-  const flags = company.flags || {};
+  // Defensive: flags may be a dict OR a stringified JSON string (legacy data)
+  let flags: Record<string, string> = {};
+  const rawFlags = company.flags;
+  if (rawFlags) {
+    if (typeof rawFlags === "string") {
+      try {
+        flags = JSON.parse(rawFlags) || {};
+      } catch {
+        flags = {};
+      }
+    } else {
+      flags = rawFlags;
+    }
+  }
 
   return (
     <>

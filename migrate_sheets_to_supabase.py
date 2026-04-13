@@ -276,7 +276,7 @@ def migrate_ai_analysis(service, db: SupabaseDB) -> int:
             else:
                 company[db_col] = None
 
-        company["flags"] = json.dumps(flags) if flags else "{}"
+        company["flags"] = flags
         companies.append(company)
 
     # Batch upsert in chunks of 50
