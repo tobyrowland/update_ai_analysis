@@ -8,6 +8,8 @@ import {
   formatNumber,
   parseStatus,
   parseEval,
+  extractEvalRationale,
+  COLORS,
 } from "@/lib/constants";
 import Nav from "@/components/nav";
 import PsChart from "@/components/ps-chart";
@@ -40,6 +42,8 @@ export default async function CompanyPage({
   const status = parseStatus(company.status);
   const bear = parseEval(company.bear_eval);
   const bull = parseEval(company.bull_eval);
+  const bearRationale = extractEvalRationale(company.bear_eval);
+  const bullRationale = extractEvalRationale(company.bull_eval);
   // Defensive: flags may be a dict OR a stringified JSON string (legacy data)
   let flags: Record<string, string> = {};
   const rawFlags = company.flags;
@@ -153,29 +157,74 @@ export default async function CompanyPage({
             <Metric label="EPS YoY" value={formatPct(company.eps_yoy_pct)} />
           </Card>
 
-          {/* Evaluations */}
-          <Card title="Evaluations">
-            <div className="flex gap-6 mb-3">
-              <div>
-                <p className="text-xs text-text-muted mb-1">Bear</p>
-                <span className="font-mono text-sm font-bold" style={{ color: bear.color }}>
-                  {bear.label}
-                </span>
+          {/* Evaluations — full width so rationale text has room */}
+          <div className="md:col-span-2 lg:col-span-3">
+            <Card title="Example Agent Evaluations">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Bear */}
+                <div className="border-l-2 pl-3" style={{ borderColor: bear.color }}>
+                  <div className="flex items-baseline gap-2 mb-2">
+                    <span
+                      className="font-mono text-xs uppercase tracking-wider"
+                      style={{ color: COLORS.textMuted }}
+                    >
+                      Bear (Fundamental Sentinel)
+                    </span>
+                    <span
+                      className="font-mono text-sm font-bold"
+                      style={{ color: bear.color }}
+                    >
+                      {bear.label}
+                    </span>
+                  </div>
+                  {bearRationale ? (
+                    <p className="text-sm text-text-dim leading-relaxed">
+                      {bearRationale}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-text-muted italic">
+                      No rationale provided
+                    </p>
+                  )}
+                </div>
+
+                {/* Bull */}
+                <div className="border-l-2 pl-3" style={{ borderColor: bull.color }}>
+                  <div className="flex items-baseline gap-2 mb-2">
+                    <span
+                      className="font-mono text-xs uppercase tracking-wider"
+                      style={{ color: COLORS.textMuted }}
+                    >
+                      Bull (Smash-Hit Scout)
+                    </span>
+                    <span
+                      className="font-mono text-sm font-bold"
+                      style={{ color: bull.color }}
+                    >
+                      {bull.label}
+                    </span>
+                  </div>
+                  {bullRationale ? (
+                    <p className="text-sm text-text-dim leading-relaxed">
+                      {bullRationale}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-text-muted italic">
+                      No rationale provided
+                    </p>
+                  )}
+                </div>
               </div>
-              <div>
-                <p className="text-xs text-text-muted mb-1">Bull</p>
-                <span className="font-mono text-sm font-bold" style={{ color: bull.color }}>
-                  {bull.label}
-                </span>
-              </div>
-              <div>
-                <p className="text-xs text-text-muted mb-1">Portfolio</p>
-                <span className="font-mono text-sm" style={{ color: company.in_portfolio ? "#00FF41" : "#555555" }}>
-                  {company.in_portfolio ? "YES" : "NO"}
-                </span>
-              </div>
-            </div>
-          </Card>
+
+              {company.in_portfolio && (
+                <div className="mt-4 pt-3 border-t border-border/50">
+                  <span className="text-xs font-mono text-green">
+                    ✓ Selected by example agent (portfolio rank #{company.portfolio_sort_order ?? "--"})
+                  </span>
+                </div>
+              )}
+            </Card>
+          </div>
 
           {/* AI Narrative — full width */}
           <div className="md:col-span-2 lg:col-span-3">

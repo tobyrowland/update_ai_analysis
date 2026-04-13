@@ -58,3 +58,24 @@ export function parseEval(val: string | null): {
     return { passed: false, label: "FAIL", color: COLORS.red };
   return { passed: null, label: "--", color: COLORS.textMuted };
 }
+
+/**
+ * Extract the rationale text from a bear_eval or bull_eval string.
+ *
+ * Verdicts are stored as e.g. "✅ (Rare disease pharma with 94% YoY rev growth)"
+ * or "❌ Net margin declined significantly YoY" or just "✅" with no rationale.
+ *
+ * This function strips the leading emoji and optional parentheses,
+ * returning just the rationale (or null if there isn't one).
+ */
+export function extractEvalRationale(val: string | null): string | null {
+  if (!val) return null;
+  // Strip the verdict emoji (✅ U+2705 or ❌ U+274C) from the start
+  let text = val.replace(/^[\u2705\u274C]\s*/u, "").trim();
+  if (!text) return null;
+  // If wrapped in parentheses, strip them
+  if (text.startsWith("(") && text.endsWith(")")) {
+    text = text.slice(1, -1).trim();
+  }
+  return text || null;
+}
