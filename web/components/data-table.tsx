@@ -95,7 +95,23 @@ export default function DataTable({ companies }: { companies: Company[] }) {
 
       {/* Table */}
       <div className="overflow-x-auto rounded-lg border border-border">
-        <table className="w-full text-sm font-mono">
+        <table className="w-full text-sm font-mono table-fixed min-w-[1200px]">
+          <colgroup>
+            <col className="w-[50px]" />
+            <col className="w-[90px]" />
+            <col className="w-[90px]" />
+            <col className="w-[220px]" />
+            <col className="w-[70px]" />
+            <col className="w-[160px]" />
+            <col className="w-[120px]" />
+            <col className="w-[90px]" />
+            <col className="w-[70px]" />
+            <col className="w-[85px]" />
+            <col className="w-[70px]" />
+            <col className="w-[70px]" />
+            <col className="w-[70px]" />
+            <col className="w-[70px]" />
+          </colgroup>
           <thead>
             <tr className="border-b border-border bg-bg-card">
               <Th onClick={() => handleSort("sort_order")} active={sortKey === "sort_order"} dir={sortDir}>#</Th>
@@ -125,10 +141,10 @@ export default function DataTable({ companies }: { companies: Company[] }) {
                   key={c.ticker}
                   className="border-b border-border/50 hover:bg-bg-hover transition-colors"
                 >
-                  <td className="px-3 py-2 text-text-muted text-right">
+                  <td className="px-3 py-2 text-text-muted text-right whitespace-nowrap">
                     {c.sort_order ?? "--"}
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-2 whitespace-nowrap">
                     <span
                       className="text-xs px-1.5 py-0.5 rounded"
                       style={{
@@ -139,7 +155,7 @@ export default function DataTable({ companies }: { companies: Company[] }) {
                       {st.label}
                     </span>
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-2 whitespace-nowrap">
                     <Link
                       href={`/company/${c.ticker}`}
                       className="text-green hover:underline"
@@ -147,25 +163,34 @@ export default function DataTable({ companies }: { companies: Company[] }) {
                       {c.ticker}
                     </Link>
                   </td>
-                  <td className="px-3 py-2 text-text max-w-[200px] truncate">
+                  <td
+                    className="px-3 py-2 text-text truncate"
+                    title={c.company_name || ""}
+                  >
                     {c.company_name || "--"}
                   </td>
-                  <td className="px-3 py-2 text-right">
+                  <td className="px-3 py-2 text-right whitespace-nowrap">
                     {formatNumber(c.composite_score, { decimals: 1 })}
                   </td>
-                  <td className="px-3 py-2 text-text-dim text-xs max-w-[120px] truncate">
+                  <td
+                    className="px-3 py-2 text-text-dim text-xs truncate"
+                    title={c.sector || ""}
+                  >
                     {c.sector || "--"}
                   </td>
-                  <td className="px-3 py-2 text-text-dim text-xs">
+                  <td
+                    className="px-3 py-2 text-text-dim text-xs truncate"
+                    title={c.country || ""}
+                  >
                     {c.country || "--"}
                   </td>
-                  <td className="px-3 py-2 text-right">
+                  <td className="px-3 py-2 text-right whitespace-nowrap">
                     {formatPrice(c.price)}
                   </td>
-                  <td className="px-3 py-2 text-right">
+                  <td className="px-3 py-2 text-right whitespace-nowrap">
                     {formatNumber(c.ps_now, { decimals: 1 })}
                   </td>
-                  <td className="px-3 py-2 text-right">
+                  <td className="px-3 py-2 text-right whitespace-nowrap">
                     <span
                       className={
                         (c.rev_growth_ttm_pct ?? 0) >= 25
@@ -176,7 +201,7 @@ export default function DataTable({ companies }: { companies: Company[] }) {
                       {formatPct(c.rev_growth_ttm_pct)}
                     </span>
                   </td>
-                  <td className="px-3 py-2 text-right">
+                  <td className="px-3 py-2 text-right whitespace-nowrap">
                     <span
                       className={
                         (c.gross_margin_pct ?? 0) >= 45
@@ -187,13 +212,13 @@ export default function DataTable({ companies }: { companies: Company[] }) {
                       {formatPct(c.gross_margin_pct)}
                     </span>
                   </td>
-                  <td className="px-3 py-2 text-right text-text-dim">
+                  <td className="px-3 py-2 text-right text-text-dim whitespace-nowrap">
                     {formatNumber(c.rating, { decimals: 1 })}
                   </td>
-                  <td className="px-3 py-2 text-center">
+                  <td className="px-3 py-2 text-center whitespace-nowrap">
                     <span style={{ color: bear.color }}>{bear.label}</span>
                   </td>
-                  <td className="px-3 py-2 text-center">
+                  <td className="px-3 py-2 text-center whitespace-nowrap">
                     <span style={{ color: bull.color }}>{bull.label}</span>
                   </td>
                 </tr>
