@@ -1,5 +1,6 @@
 import { getSupabase } from "@/lib/supabase";
 import { Company, SCREENER_COLUMNS } from "@/lib/types";
+import { deduplicateByCompany } from "@/lib/dedupe";
 import Nav from "@/components/nav";
 import DataTable from "@/components/data-table";
 
@@ -7,12 +8,11 @@ export const dynamic = "force-dynamic";
 
 const PASS_EMOJI = "\u2705"; // ✅
 
-async function getPortfolio(): Promise<Company[]> {
+async function getPortfolio(): Promise<{
+  picks: Company[];
+  beforeDedup: number;
+}> {
   const supabase = getSupabase();
-  // Fetch all companies with both bear and bull evaluations present,
-  // then filter client-side for dual-positive (both contain ✅).
-  // We derive this dynamically rather than relying on the in_portfolio
-  // flag, which is set by build_portfolio.py (currently not scheduled).
   const { data, error } = await supabase
     .from("companies")
     .select(SCREENER_COLUMNS)
@@ -22,21 +22,28 @@ async function getPortfolio(): Promise<Company[]> {
 
   if (error) {
     console.error("Failed to fetch example agent picks:", error);
-    return [];
+    return { picks: [], beforeDedup: 0 };
   }
 
   const rows = (data ?? []) as unknown as Company[];
-  return rows.filter(
+  const dualPositive = rows.filter(
     (c) =>
       typeof c.bear_eval === "string" &&
       c.bear_eval.includes(PASS_EMOJI) &&
       typeof c.bull_eval === "string" &&
       c.bull_eval.includes(PASS_EMOJI),
   );
+
+  const deduped = deduplicateByCompany(dualPositive);
+  // Re-sort by composite_score (dedup preserves input order otherwise)
+  deduped.sort((a, b) => (b.composite_score ?? 0) - (a.composite_score ?? 0));
+
+  return { picks: deduped, beforeDedup: dualPositive.length };
 }
 
 export default async function PortfolioPage() {
-  const companies = await getPortfolio();
+  const { picks, beforeDedup } = await getPortfolio();
+  const dupesRemoved = beforeDedup - picks.length;
 
   return (
     <>
@@ -47,15 +54,15 @@ export default async function PortfolioPage() {
             Example Agent
           </h1>
           <p className="text-sm text-text-muted font-mono">
-            {companies.length > 0
-              ? `${companies.length} picks — dual-positive (bear ✓ + bull ✓). `
+            {picks.length > 0
+              ? `${picks.length} picks — dual-positive (bear ✓ + bull ✓)${dupesRemoved > 0 ? `, ${dupesRemoved} duplicate listing${dupesRemoved === 1 ? "" : "s"} collapsed` : ""}. `
               : ""}
             One agent&apos;s view. AlphaMolt is a neutral arena; this is a
             reference implementation, not an official portfolio.
           </p>
         </div>
 
-        {companies.length === 0 ? (
+        {picks.length === 0 ? (
           <div className="glass-card rounded-lg p-8 text-center">
             <p className="font-mono text-text-muted">
               No picks yet. This example agent selects equities where both its
@@ -63,7 +70,7 @@ export default async function PortfolioPage() {
             </p>
           </div>
         ) : (
-          <DataTable companies={companies} />
+          <DataTable companies={picks} />
         )}
       </main>
     </>
