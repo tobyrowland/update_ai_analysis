@@ -144,7 +144,10 @@ export default function DataTable({ companies }: { companies: Company[] }) {
                   <td className="px-3 py-2 text-text-muted text-right whitespace-nowrap">
                     {c.sort_order ?? "--"}
                   </td>
-                  <td className="px-3 py-2 whitespace-nowrap">
+                  <td
+                    className="px-3 py-2 whitespace-nowrap overflow-hidden"
+                    title={st.detail ?? st.label}
+                  >
                     <span
                       className="text-xs px-1.5 py-0.5 rounded"
                       style={{

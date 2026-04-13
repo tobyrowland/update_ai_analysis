@@ -80,6 +80,7 @@ export default async function CompanyPage({
               </h1>
               <span
                 className="text-xs px-2 py-0.5 rounded font-mono"
+                title={status.detail ?? status.label}
                 style={{
                   color: status.color,
                   backgroundColor: status.color + "15",
@@ -88,6 +89,11 @@ export default async function CompanyPage({
                 {status.label}
               </span>
             </div>
+            {status.detail && (
+              <p className="text-xs font-mono mt-1" style={{ color: status.color }}>
+                {status.detail}
+              </p>
+            )}
             <p className="text-text-dim text-sm">
               {company.company_name} &middot; {company.exchange} &middot;{" "}
               {company.country}
