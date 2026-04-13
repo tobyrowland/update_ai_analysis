@@ -27,6 +27,7 @@ import requests
 from dotenv import load_dotenv
 
 from db import SupabaseDB
+from eodhd_updater import fetch_fundamentals_with_fallbacks
 from exchanges import resolve_eodhd_exchange, EXCHANGE_FALLBACKS, YAHOO_SUFFIX
 
 # ---------------------------------------------------------------------------
@@ -122,32 +123,23 @@ def eodhd_get(endpoint: str, params: dict | None = None,
         return None
 
 
-def fetch_fundamentals(ticker: str, exchange: str, logger) -> dict | None:
-    """Fetch EODHD fundamentals with exchange fallback.
+def fetch_fundamentals(ticker: str, exchange: str, logger,
+                       company_name: str = "") -> dict | None:
+    """Fetch EODHD fundamentals using the shared full fallback chain.
+
+    Delegates to eodhd_updater.fetch_fundamentals_with_fallbacks which tries:
+      1. Primary exchange
+      2. Fallback exchanges (EXCHANGE_FALLBACKS)
+      3. EODHD search API by ticker code
+      4. OTC base ticker (strip F/Y suffix) + search
+      5. Search by company name
 
     Returns the full JSON response or None.
     """
-    eodhd_exchange = resolve_eodhd_exchange(exchange)
-    symbol = f"{ticker}.{eodhd_exchange}"
-
-    time.sleep(DELAY_BETWEEN_CALLS)
-    data = eodhd_get(f"fundamentals/{symbol}", logger=logger)
-    if data and isinstance(data, dict) and data.get("Financials"):
-        return data
-
-    # Try fallbacks
-    fallbacks = EXCHANGE_FALLBACKS.get(eodhd_exchange, ["US"])
-    for fb_exchange in fallbacks:
-        if fb_exchange == eodhd_exchange:
-            continue
-        fb_symbol = f"{ticker}.{fb_exchange}"
-        logger.info("Retrying fundamentals: %s → %s", symbol, fb_symbol)
-        time.sleep(DELAY_BETWEEN_CALLS)
-        data = eodhd_get(f"fundamentals/{fb_symbol}", logger=logger)
-        if data and isinstance(data, dict) and data.get("Financials"):
-            return data
-
-    return None
+    return fetch_fundamentals_with_fallbacks(
+        ticker, EODHD_API_KEY, logger,
+        exchange=exchange, company=company_name,
+    )
 
 
 def _yahoo_chart_request(yahoo_ticker: str, logger) -> list | None:
@@ -310,6 +302,7 @@ def compute_ps_for_ticker(
     last_friday: date,
     backfill_from: date,
     logger,
+    company_name: str = "",
 ) -> dict | None:
     """Fetch data from EODHD and compute P/S ratio + history for one ticker.
 
@@ -324,7 +317,7 @@ def compute_ps_for_ticker(
     mode = "backfill" if existing is None else "update"
 
     # --- Fetch fundamentals (market cap, revenue, shares) ---
-    fundamentals = fetch_fundamentals(ticker, exchange, logger)
+    fundamentals = fetch_fundamentals(ticker, exchange, logger, company_name=company_name)
     if not fundamentals:
         logger.warning("SKIP %s: no fundamentals data", ticker)
         return None
@@ -509,6 +502,7 @@ def main():
     for item in ticker_list:
         ticker = item["ticker"]
         exchange = item.get("exchange", "")
+        company_name = item.get("company_name", "")
         existing = ps_map.get(ticker)
 
         # Classify — run daily; skip only if already updated today
@@ -529,6 +523,7 @@ def main():
                 ticker, exchange,
                 existing if mode == "update" else None,
                 last_friday, backfill_from, logger,
+                company_name=company_name,
             )
         except Exception as e:
             logger.error("ERROR processing %s: %s", ticker, e)

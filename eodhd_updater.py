@@ -202,7 +202,7 @@ def _search_eodhd(query: str, api_key: str, logger: logging.Logger,
     return None
 
 
-def _fetch_fundamentals_raw(ticker: str, api_key: str, logger: logging.Logger,
+def fetch_fundamentals_with_fallbacks(ticker: str, api_key: str, logger: logging.Logger,
                             exchange: str = "US",
                             company: str = "") -> dict | None:
     """Fetch full fundamental data from EODHD for a ticker.
@@ -399,7 +399,7 @@ def fetch_eodhd_data(ticker: str, api_key: str, logger: logging.Logger,
 
     Returns a dict keyed by EODHD_COLUMNS column keys, or None on failure.
     """
-    raw = _fetch_fundamentals_raw(ticker, api_key, logger, exchange=exchange,
+    raw = fetch_fundamentals_with_fallbacks(ticker, api_key, logger, exchange=exchange,
                                   company=company)
     if raw is None:
         return None
