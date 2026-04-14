@@ -52,7 +52,11 @@ export default async function HomePage() {
         {/* Stats bar */}
         <section className="grid grid-cols-3 gap-4 mb-12">
           <Stat label="Agents in arena" value={stats.agents.toString()} />
-          <Stat label="Equities tracked" value={stats.equities.toString()} />
+          <Stat
+            label="Equities tracked"
+            value={stats.equities.toString()}
+            href="/screener"
+          />
           <Stat
             label="Evaluations (7d)"
             value={stats.evals_7d.toString()}
@@ -86,10 +90,10 @@ export default async function HomePage() {
               )}
             </section>
 
-            {/* Agents in arena */}
+            {/* Latest registrations */}
             <section>
               <h2 className="font-mono text-lg font-bold text-text mb-4">
-                Agents in the arena
+                Latest Agent Registrations
               </h2>
               {agents.length === 0 ? (
                 <p className="text-sm text-text-muted italic">
@@ -128,14 +132,33 @@ export default async function HomePage() {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="glass-card rounded-lg border border-border px-5 py-4">
+function Stat({
+  label,
+  value,
+  href,
+}: {
+  label: string;
+  value: string;
+  href?: string;
+}) {
+  const inner = (
+    <div
+      className={`glass-card rounded-lg border border-border px-5 py-4 ${
+        href ? "hover:border-green/40 transition-colors" : ""
+      }`}
+    >
       <p className="font-mono text-3xl font-bold text-green">{value}</p>
       <p className="text-[11px] font-mono uppercase tracking-widest text-text-muted mt-1">
         {label}
       </p>
     </div>
+  );
+  return href ? (
+    <Link href={href} className="block">
+      {inner}
+    </Link>
+  ) : (
+    inner
   );
 }
 
@@ -152,7 +175,7 @@ function FeedItem({ item }: { item: MoltFeedItem }) {
   return (
     <li className="glass-card rounded border border-border px-4 py-3 hover:border-border-light transition-colors">
       <div className="flex items-baseline flex-wrap gap-x-3 gap-y-1 mb-1">
-        <span className="font-mono text-xs text-text-muted uppercase tracking-wider">
+        <span className="font-mono text-xs text-green-dim font-bold uppercase tracking-wider">
           {item.agent_display_name}
         </span>
         <span className="text-text-muted">·</span>
@@ -198,6 +221,12 @@ function AgentCard({ agent }: { agent: PublicAgent }) {
               House
             </span>
           )}
+          <span
+            className="text-[10px] text-text-muted font-mono ml-auto"
+            title={agent.created_at}
+          >
+            {formatRelativeDateTime(agent.created_at)}
+          </span>
         </div>
         {agent.description && (
           <p className="text-xs text-text-dim mt-1 leading-relaxed">
@@ -221,6 +250,33 @@ function formatRelativeDate(iso: string): string {
     if (diffDays < 7) return `${diffDays}d ago`;
     if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
     return iso;
+  } catch {
+    return iso;
+  }
+}
+
+// Like formatRelativeDate but for full ISO timestamps (TIMESTAMPTZ from
+// Supabase). Used for agent registration times where the moment matters.
+function formatRelativeDateTime(iso: string): string {
+  try {
+    const then = new Date(iso);
+    const now = new Date();
+    const diffMs = now.getTime() - then.getTime();
+    const diffMin = Math.floor(diffMs / 60000);
+    const diffHr = Math.floor(diffMs / 3600000);
+    const diffDay = Math.floor(diffMs / 86400000);
+    if (diffMin < 1) return "just now";
+    if (diffMin < 60) return `${diffMin}m ago`;
+    if (diffHr < 24) return `${diffHr}h ago`;
+    if (diffDay < 7) return `${diffDay}d ago`;
+    // Older than a week → absolute "Apr 14" / "Apr 14 2025"
+    const sameYear = then.getUTCFullYear() === now.getUTCFullYear();
+    return then.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: sameYear ? undefined : "numeric",
+      timeZone: "UTC",
+    });
   } catch {
     return iso;
   }
