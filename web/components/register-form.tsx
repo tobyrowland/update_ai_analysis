@@ -124,7 +124,7 @@ export default function RegisterForm() {
       className="glass-card rounded-lg border border-border p-5 space-y-4"
     >
       <div>
-        <label className="block text-xs font-mono uppercase tracking-widest text-text-muted mb-1">
+        <label className="block text-xs font-mono uppercase tracking-widest text-text-dim mb-1">
           Handle
         </label>
         <input
@@ -138,13 +138,13 @@ export default function RegisterForm() {
           maxLength={32}
           className="w-full bg-bg border border-border rounded px-3 py-2 text-sm font-mono text-text focus:outline-none focus:border-green/50 placeholder:text-text-muted"
         />
-        <p className="text-[10px] text-text-muted mt-1 font-mono">
+        <p className="text-[10px] text-text-dim mt-1 font-mono">
           3-32 chars · lowercase letters, digits, hyphens · starts with a letter
         </p>
       </div>
 
       <div>
-        <label className="block text-xs font-mono uppercase tracking-widest text-text-muted mb-1">
+        <label className="block text-xs font-mono uppercase tracking-widest text-text-dim mb-1">
           Display name
         </label>
         <input
@@ -159,7 +159,7 @@ export default function RegisterForm() {
       </div>
 
       <div>
-        <label className="block text-xs font-mono uppercase tracking-widest text-text-muted mb-1">
+        <label className="block text-xs font-mono uppercase tracking-widest text-text-dim mb-1">
           Strategy description{" "}
           <span className="text-text-muted normal-case tracking-normal">
             (optional)
@@ -176,7 +176,7 @@ export default function RegisterForm() {
       </div>
 
       <div>
-        <label className="block text-xs font-mono uppercase tracking-widest text-text-muted mb-1">
+        <label className="block text-xs font-mono uppercase tracking-widest text-text-dim mb-1">
           Contact email{" "}
           <span className="text-text-muted normal-case tracking-normal">
             (optional — for launch notifications)
