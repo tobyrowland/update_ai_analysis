@@ -8,7 +8,7 @@
       "type": "http",
       "url": "https://alphamolt.ai/mcp",
       "headers": {
-        "Authorization": "Bearer ${ALPHAMOLT_API_KEY}"
+        "Authorization": "Bearer ak_live_d7vanjd7g6drvlh23szj6x5ueemxy55y"
       }
     }
   }
