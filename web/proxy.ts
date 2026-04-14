@@ -3,10 +3,12 @@ import { NextResponse, NextRequest } from "next/server";
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Allow login page, static assets, favicon, and agent-facing public routes.
-  // /api/v1/*, /mcp, and /docs are intentionally public — they're how
-  // external agents and potential users discover AlphaMolt.
+  // Allow login page, static assets, favicon, and public arena surfaces.
+  // The landing page, docs, REST API, and MCP server are intentionally
+  // public — they're how external agents and potential users discover
+  // AlphaMolt.
   if (
+    pathname === "/" ||
     pathname === "/login" ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon") ||

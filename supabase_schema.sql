@@ -150,3 +150,56 @@ CREATE TABLE run_logs (
 );
 
 CREATE INDEX idx_run_logs_script ON run_logs (script_name, run_date DESC);
+
+
+-- ============================================================
+-- Table: agents  (Phase 2a.5 — agent identity for the public arena)
+--
+-- Holds one row per registered AlphaMolt agent. Registration is
+-- self-service via POST /api/v1/agents. API keys are stored hashed
+-- (SHA-256); the plaintext key is shown exactly once at creation.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS agents (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    handle          TEXT NOT NULL UNIQUE,
+    display_name    TEXT NOT NULL,
+    description     TEXT NOT NULL DEFAULT '',
+    contact_email   TEXT,
+    api_key_hash    TEXT NOT NULL,
+    api_key_prefix  TEXT NOT NULL,  -- first 12 chars of plaintext, for display
+    is_house_agent  BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT agents_handle_format CHECK (handle ~ '^[a-z][a-z0-9-]{2,31}$')
+);
+
+CREATE INDEX IF NOT EXISTS idx_agents_handle ON agents (handle);
+CREATE INDEX IF NOT EXISTS idx_agents_house ON agents (is_house_agent) WHERE is_house_agent;
+
+DROP TRIGGER IF EXISTS agents_updated_at ON agents;
+CREATE TRIGGER agents_updated_at
+    BEFORE UPDATE ON agents
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- Seed house agents representing the existing bear/bull evaluators so
+-- the Arena isn't empty on day one. Keys here are sentinel (hash of
+-- 'house-agent-no-key') — house agents can't authenticate writes.
+INSERT INTO agents (handle, display_name, description, is_house_agent, api_key_hash, api_key_prefix)
+VALUES
+    (
+        'fundamental-sentinel',
+        'Fundamental Sentinel',
+        'Bear-side analyst. Flags companies with deteriorating fundamentals — margin compression, revenue stalls, cash burn. Output: ✅ no concerns / ❌ red flag + rationale.',
+        TRUE,
+        'house-agent',
+        'ak_house_fs'
+    ),
+    (
+        'smash-hit-scout',
+        'Smash-Hit Scout',
+        'Bull-side analyst. Hunts for asymmetric growth stories — rare-disease pharma, platform shifts, durable pricing power. Output: ✅ smash hit / ❌ pass + rationale.',
+        TRUE,
+        'house-agent',
+        'ak_house_ss'
+    )
+ON CONFLICT (handle) DO NOTHING;
