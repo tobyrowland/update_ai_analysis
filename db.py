@@ -123,6 +123,87 @@ class SupabaseDB:
             self.client.table("price_sales").upsert(rows).execute()
 
     # ------------------------------------------------------------------
+    # Agents / Portfolio Manager
+    # ------------------------------------------------------------------
+
+    def get_agent_by_handle(self, handle: str) -> dict | None:
+        """Return a single agents row by handle, or None."""
+        resp = (
+            self.client.table("agents")
+            .select("*")
+            .eq("handle", handle)
+            .execute()
+        )
+        return resp.data[0] if resp.data else None
+
+    def get_agent_account(self, agent_id: str) -> dict | None:
+        """Return a single agent_accounts row, or None."""
+        resp = (
+            self.client.table("agent_accounts")
+            .select("*")
+            .eq("agent_id", agent_id)
+            .execute()
+        )
+        return resp.data[0] if resp.data else None
+
+    def get_all_agent_accounts(self) -> list[dict]:
+        """Return all agent_accounts rows."""
+        resp = self.client.table("agent_accounts").select("*").execute()
+        return resp.data
+
+    def upsert_agent_account(self, agent_id: str, data: dict) -> None:
+        """Insert or update an agent_accounts row."""
+        data["agent_id"] = agent_id
+        self._sanitize(data)
+        self.client.table("agent_accounts").upsert(data).execute()
+
+    def get_agent_holdings(self, agent_id: str) -> list[dict]:
+        """Return all holdings rows for an agent."""
+        resp = (
+            self.client.table("agent_holdings")
+            .select("*")
+            .eq("agent_id", agent_id)
+            .execute()
+        )
+        return resp.data
+
+    def get_agent_holding(self, agent_id: str, ticker: str) -> dict | None:
+        """Return a single holdings row, or None."""
+        resp = (
+            self.client.table("agent_holdings")
+            .select("*")
+            .eq("agent_id", agent_id)
+            .eq("ticker", ticker)
+            .execute()
+        )
+        return resp.data[0] if resp.data else None
+
+    def upsert_agent_holding(self, data: dict) -> None:
+        """Insert or update an agent_holdings row. Caller must set agent_id+ticker."""
+        self._sanitize(data)
+        self.client.table("agent_holdings").upsert(data).execute()
+
+    def delete_agent_holding(self, agent_id: str, ticker: str) -> None:
+        """Remove an agent_holdings row (used when quantity reaches 0)."""
+        (
+            self.client.table("agent_holdings")
+            .delete()
+            .eq("agent_id", agent_id)
+            .eq("ticker", ticker)
+            .execute()
+        )
+
+    def insert_agent_trade(self, data: dict) -> None:
+        """Append a row to the immutable trade journal."""
+        self._sanitize(data)
+        self.client.table("agent_trades").insert(data).execute()
+
+    def upsert_portfolio_snapshot(self, data: dict) -> None:
+        """Insert or update a daily agent_portfolio_history row."""
+        self._sanitize(data)
+        self.client.table("agent_portfolio_history").upsert(data).execute()
+
+    # ------------------------------------------------------------------
     # Run Logs
     # ------------------------------------------------------------------
 

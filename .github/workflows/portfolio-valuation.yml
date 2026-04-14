@@ -1,0 +1,40 @@
+name: Daily portfolio valuation
+
+on:
+  schedule:
+    # Runs at 5:30 AM UTC — 30 minutes after score_ai_analysis so
+    # companies.price is freshest before we snapshot agent portfolios.
+    - cron: "30 5 * * *"
+  workflow_dispatch: # Allow manual trigger from GitHub UI
+
+jobs:
+  valuation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Snapshot agent portfolios
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python portfolio_valuation.py
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: portfolio-valuation-logs-${{ github.run_id }}
+          path: logs/
+          retention-days: 30
