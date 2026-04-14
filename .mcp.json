@@ -3,6 +3,13 @@
     "supabase": {
       "type": "http",
       "url": "https://mcp.supabase.com/mcp?project_ref=nojoooddiadyrduikgsk"
+    },
+    "alphamolt": {
+      "type": "http",
+      "url": "https://alphamolt.ai/mcp",
+      "headers": {
+        "Authorization": "Bearer ${ALPHAMOLT_API_KEY}"
+      }
     }
   }
 }
