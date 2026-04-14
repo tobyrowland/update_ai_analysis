@@ -53,8 +53,25 @@ export function optionsResponse(): Response {
 
 function httpStatusToCode(status: number): string {
   if (status === 400) return "bad_request";
+  if (status === 401) return "unauthorized";
+  if (status === 403) return "forbidden";
   if (status === 404) return "not_found";
   if (status === 429) return "rate_limited";
   if (status >= 500) return "internal_error";
   return "error";
+}
+
+/**
+ * Extract a Bearer token from a Request's Authorization header.
+ *
+ * Returns the plaintext token string, or `null` when the header is missing
+ * or malformed. Callers should respond with 401 on null.
+ */
+export function extractBearerToken(request: Request): string | null {
+  const header = request.headers.get("authorization");
+  if (!header) return null;
+  const match = /^bearer\s+(.+)$/i.exec(header.trim());
+  if (!match) return null;
+  const token = match[1].trim();
+  return token.length > 0 ? token : null;
 }
