@@ -203,3 +203,110 @@ VALUES
         'ak_house_ss'
     )
 ON CONFLICT (handle) DO NOTHING;
+
+
+-- ============================================================
+-- Portfolio Manager — virtual trading layer for competing agents
+--
+-- Each agent gets a $1M starting cash account, can buy/sell from
+-- the `companies` universe, and is marked-to-market daily into
+-- `agent_portfolio_history` so we can rank them on a leaderboard.
+--
+-- v1 simplifications:
+--   - All prices treated as USD (companies.price may be native-ccy
+--     for non-US listings). Agents should prefer US-listed tickers.
+--   - No fees, slippage, shorting, margin, splits, or dividends.
+--   - Single-writer assumed per agent (no row-level locks).
+-- ============================================================
+
+-- One row per agent: cash balance + inception config.
+CREATE TABLE IF NOT EXISTS agent_accounts (
+    agent_id        UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    starting_cash   NUMERIC(14,2) NOT NULL DEFAULT 1000000.00,
+    cash_usd        NUMERIC(14,2) NOT NULL DEFAULT 1000000.00,
+    inception_date  DATE NOT NULL DEFAULT CURRENT_DATE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+DROP TRIGGER IF EXISTS agent_accounts_updated_at ON agent_accounts;
+CREATE TRIGGER agent_accounts_updated_at
+    BEFORE UPDATE ON agent_accounts
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+
+-- Current open positions (one row per agent+ticker).
+CREATE TABLE IF NOT EXISTS agent_holdings (
+    agent_id        UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    ticker          TEXT NOT NULL REFERENCES companies(ticker) ON DELETE RESTRICT,
+    quantity        NUMERIC(18,6) NOT NULL,
+    avg_cost_usd    NUMERIC(14,4) NOT NULL,
+    first_bought_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (agent_id, ticker)
+);
+
+CREATE INDEX IF NOT EXISTS idx_holdings_agent ON agent_holdings (agent_id);
+
+DROP TRIGGER IF EXISTS agent_holdings_updated_at ON agent_holdings;
+CREATE TRIGGER agent_holdings_updated_at
+    BEFORE UPDATE ON agent_holdings
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+
+-- Immutable trade journal.
+CREATE TABLE IF NOT EXISTS agent_trades (
+    id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    agent_id        UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    ticker          TEXT NOT NULL REFERENCES companies(ticker),
+    side            TEXT NOT NULL CHECK (side IN ('buy','sell')),
+    quantity        NUMERIC(18,6) NOT NULL CHECK (quantity > 0),
+    price_usd       NUMERIC(14,4) NOT NULL,
+    gross_usd       NUMERIC(14,2) NOT NULL,
+    cash_after_usd  NUMERIC(14,2) NOT NULL,
+    executed_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    note            TEXT DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_trades_agent_time ON agent_trades (agent_id, executed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_trades_ticker ON agent_trades (ticker);
+
+
+-- Daily mark-to-market snapshots — powers the leaderboard.
+CREATE TABLE IF NOT EXISTS agent_portfolio_history (
+    agent_id            UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    snapshot_date       DATE NOT NULL,
+    cash_usd            NUMERIC(14,2) NOT NULL,
+    holdings_value_usd  NUMERIC(14,2) NOT NULL,
+    total_value_usd     NUMERIC(14,2) NOT NULL,
+    pnl_usd             NUMERIC(14,2) NOT NULL,
+    pnl_pct             NUMERIC(8,4) NOT NULL,
+    num_positions       INTEGER NOT NULL DEFAULT 0,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (agent_id, snapshot_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pfhist_date ON agent_portfolio_history (snapshot_date DESC);
+
+
+-- Leaderboard view — latest snapshot per agent, ranked by pnl_pct.
+CREATE OR REPLACE VIEW agent_leaderboard AS
+SELECT
+    a.handle,
+    a.display_name,
+    a.is_house_agent,
+    h.snapshot_date,
+    h.cash_usd,
+    h.holdings_value_usd,
+    h.total_value_usd,
+    h.pnl_usd,
+    h.pnl_pct,
+    h.num_positions
+FROM agent_portfolio_history h
+JOIN agents a ON a.id = h.agent_id
+WHERE h.snapshot_date = (
+    SELECT MAX(snapshot_date)
+    FROM agent_portfolio_history h2
+    WHERE h2.agent_id = h.agent_id
+)
+ORDER BY h.pnl_pct DESC;

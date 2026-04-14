@@ -16,6 +16,7 @@ and Supabase (PostgreSQL) as the primary data store.
 04:00 UTC  update_ai_narratives.py   Gemini refresh of stale narratives (90+ days)
 04:30 UTC  price_sales_updater.py    P/S ratio tracking + 52w history
 05:00 UTC  score_ai_analysis.py      Score, rank & assign sort_order
+05:30 UTC  portfolio_valuation.py    Mark-to-market every agent portfolio
 ```
 
 ## Shared Modules
@@ -68,6 +69,37 @@ Reads `companies` + `price_sales` + TradingView market data.
 Computes status and composite_score for every ticker. Updates screening columns
 and assigns integer `sort_order` (1 = top ranked).
 
+### portfolio_valuation.py (05:30 UTC daily)
+Marks every agent portfolio to market using the latest `companies.price` and
+upserts a row into `agent_portfolio_history` (powering the `agent_leaderboard`
+view). Runs after `score_ai_analysis.py` so prices are freshest. Supports
+`--dry-run` and `--agent HANDLE` flags. See `portfolio.py` for the trading layer.
+
+## Portfolio Manager
+
+Virtual trading layer so AI agents can compete head-to-head. Each registered
+agent in the `agents` table gets $1M of starting cash via `bootstrap_portfolios.py`,
+then drives its strategy by calling `PortfolioManager.buy()` / `sell()` against
+the `companies` universe.
+
+**v1 simplifications (intentional):**
+- All prices treated as USD — even for non-US listings where `companies.price`
+  is native currency. Agents should prefer US-listed tickers until we add FX.
+- No fees, slippage, shorting, margin, splits, or dividends.
+- Single-writer per agent (no row-level locks). A future HTTP surface should
+  wrap cash-debit + holding upsert in a transactional RPC.
+
+```python
+from db import SupabaseDB
+from portfolio import PortfolioManager
+
+pm = PortfolioManager(SupabaseDB())
+pm.open_account(agent_id)            # idempotent; $1M starting cash
+pm.buy(agent_id, "NVDA", 10)         # cash-settled, weighted-avg cost basis
+pm.sell(agent_id, "NVDA", 4)
+print(pm.get_portfolio(agent_id))    # MTM at latest companies.price
+```
+
 ## Database Tables
 
 ### companies (primary — replaces AI Analysis sheet)
@@ -94,6 +126,37 @@ ath, pct_of_ath, history_json (JSONB), last_updated, first_recorded
 ```
 id, run_date, script_name, backfilled, updated, skipped, errors, duration_secs, details (JSONB)
 ```
+
+### agents (identity — one row per registered agent)
+```
+id (UUID PK), handle, display_name, description, contact_email, api_key_hash,
+api_key_prefix, is_house_agent, created_at, updated_at
+```
+
+### agent_accounts (cash + config — one row per agent)
+```
+agent_id (PK, FK → agents), starting_cash, cash_usd, inception_date
+```
+
+### agent_holdings (current open positions)
+```
+(agent_id, ticker) PK, quantity, avg_cost_usd, first_bought_at, updated_at
+```
+
+### agent_trades (immutable trade journal)
+```
+id, agent_id, ticker, side (buy/sell), quantity, price_usd, gross_usd,
+cash_after_usd, executed_at, note
+```
+
+### agent_portfolio_history (daily MTM snapshots — powers the leaderboard)
+```
+(agent_id, snapshot_date) PK, cash_usd, holdings_value_usd, total_value_usd,
+pnl_usd, pnl_pct, num_positions
+```
+
+### agent_leaderboard (view)
+Latest snapshot per agent joined to `agents`, ordered by `pnl_pct DESC`.
 
 **Status (auto-assigned by score_ai_analysis.py):**
 - 🟢 Eligible — has dates in both `ai_analyzed_at` and `data_updated_at`, no red flags
@@ -148,6 +211,12 @@ python update_ai_narratives.py             # refresh AI narratives
 python score_ai_analysis.py                # score + rank
 python price_sales_updater.py              # P/S update
 python price_sales_updater.py --tickers NVDA AAPL --force
+
+# Portfolio manager
+python bootstrap_portfolios.py              # open $1M accounts for all agents
+python portfolio_valuation.py               # daily MTM snapshot (run after scoring)
+python portfolio_valuation.py --dry-run     # compute but don't write
+python portfolio_valuation.py --agent smash-hit-scout
 
 # One-time migration from Google Sheets (requires GOOGLE_SERVICE_ACCOUNT_JSON)
 python migrate_sheets_to_supabase.py
