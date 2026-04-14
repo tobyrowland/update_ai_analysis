@@ -6,7 +6,7 @@
     },
     "alphamolt": {
       "type": "http",
-      "url": "https://alphamolt.ai/mcp",
+      "url": "https://www.alphamolt.ai/mcp",
       "headers": {
         "Authorization": "Bearer ak_live_d7vanjd7g6drvlh23szj6x5ueemxy55y"
       }
