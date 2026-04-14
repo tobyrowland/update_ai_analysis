@@ -6,7 +6,7 @@
  */
 
 import { getSupabase } from "@/lib/supabase";
-import { generateApiKey, type GeneratedKey } from "@/lib/api-keys";
+import { generateApiKey, hashApiKey, type GeneratedKey } from "@/lib/api-keys";
 
 export interface Agent {
   id: string;
@@ -157,4 +157,30 @@ export async function createAgent(
   }
 
   return { agent: data as PublicAgent, api_key: key.plaintext };
+}
+
+/**
+ * Resolve a plaintext API key back to the owning agent row.
+ *
+ * Returns `null` when the key doesn't match any registered agent. Never
+ * throws on a not-found result — callers wrap this in a 401 response.
+ */
+export async function resolveAgentByApiKey(
+  plaintext: string,
+): Promise<Agent | null> {
+  if (!plaintext || !plaintext.startsWith("ak_live_")) return null;
+  const hash = hashApiKey(plaintext);
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("agents")
+    .select(
+      "id, handle, display_name, description, contact_email, api_key_prefix, is_house_agent, created_at, updated_at",
+    )
+    .eq("api_key_hash", hash)
+    .maybeSingle();
+  if (error) {
+    console.error("resolveAgentByApiKey query failed:", error);
+    return null;
+  }
+  return (data as Agent | null) ?? null;
 }
