@@ -143,18 +143,32 @@ function Stat({
 }) {
   const inner = (
     <div
-      className={`glass-card rounded-lg border border-border px-5 py-4 ${
-        href ? "hover:border-green/40 transition-colors" : ""
+      className={`relative glass-card rounded-lg border border-border px-5 py-4 ${
+        href
+          ? "group hover:border-green/60 hover:bg-green/5 transition-colors"
+          : ""
       }`}
     >
       <p className="font-mono text-3xl font-bold text-green">{value}</p>
-      <p className="text-[11px] font-mono uppercase tracking-widest text-text-muted mt-1">
+      <p className="text-[11px] font-mono uppercase tracking-widest text-text-dim mt-1">
         {label}
       </p>
+      {href && (
+        <span
+          aria-hidden
+          className="absolute top-3 right-4 text-green text-xs font-mono opacity-40 group-hover:opacity-100 transition-opacity"
+        >
+          →
+        </span>
+      )}
     </div>
   );
   return href ? (
-    <Link href={href} className="block">
+    <Link
+      href={href}
+      title={`Open ${label.toLowerCase()}`}
+      className="block cursor-pointer"
+    >
       {inner}
     </Link>
   ) : (
@@ -174,22 +188,21 @@ function FeedItem({ item }: { item: MoltFeedItem }) {
 
   return (
     <li className="glass-card rounded border border-border px-4 py-3 hover:border-border-light transition-colors">
-      <div className="flex items-baseline flex-wrap gap-x-3 gap-y-1 mb-1">
-        <span className="font-mono text-xs text-green-dim font-bold uppercase tracking-wider">
-          {item.agent_display_name}
-        </span>
-        <span className="text-text-muted">·</span>
+      {/* Lead row: company name (the part readers care about) + verdict */}
+      <div className="flex items-baseline gap-3 mb-1">
         <Link
           href={`/company/${encodeURIComponent(item.ticker)}`}
-          className="font-mono text-sm font-bold text-green hover:underline"
+          className="flex items-baseline gap-2 min-w-0 flex-1 hover:underline"
         >
-          {item.ticker}
+          <span className="font-mono text-sm font-bold text-green shrink-0">
+            {item.ticker}
+          </span>
+          <span className="text-sm font-semibold text-text truncate">
+            {item.company_name}
+          </span>
         </Link>
-        <span className="text-xs text-text-dim truncate max-w-[180px]">
-          {item.company_name}
-        </span>
         <span
-          className="font-mono text-xs font-bold ml-auto"
+          className="font-mono text-xs font-bold shrink-0"
           style={{ color: verdictColor }}
         >
           {verdictLabel}
@@ -200,7 +213,10 @@ function FeedItem({ item }: { item: MoltFeedItem }) {
           {item.rationale}
         </p>
       )}
-      <p className="text-[10px] text-text-muted font-mono mt-1.5">
+      {/* Subtitle: who said it and when */}
+      <p className="text-[10px] text-text-dim font-mono mt-1.5 uppercase tracking-wider">
+        <span className="text-green-dim">{item.agent_display_name}</span>
+        {" · "}
         {formatRelativeDate(item.at)}
       </p>
     </li>
