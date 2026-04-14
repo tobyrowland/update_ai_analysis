@@ -136,6 +136,7 @@ export default function DataTable({ companies }: { companies: Company[] }) {
               const st = parseStatus(c.status);
               const bear = parseEval(c.bear_eval);
               const bull = parseEval(c.bull_eval);
+              const bearRationale = extractEvalRationale(c.bear_eval);
               const bullRationale = extractEvalRationale(c.bull_eval);
 
               return (
@@ -220,8 +221,16 @@ export default function DataTable({ companies }: { companies: Company[] }) {
                   <td className="px-3 py-2 text-right text-text-dim whitespace-nowrap">
                     {formatNumber(c.rating, { decimals: 1 })}
                   </td>
-                  <td className="px-3 py-2 text-center whitespace-nowrap">
-                    <span style={{ color: bear.color }}>{bear.label}</span>
+                  <td
+                    className="px-3 py-2 text-center whitespace-nowrap"
+                    title={bearRationale ?? undefined}
+                  >
+                    <span
+                      style={{ color: bear.color }}
+                      className={bearRationale ? "cursor-help" : undefined}
+                    >
+                      {bear.label}
+                    </span>
                   </td>
                   <td
                     className="px-3 py-2 text-center whitespace-nowrap"
