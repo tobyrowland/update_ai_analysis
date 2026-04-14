@@ -60,8 +60,7 @@ export async function listPublicAgents(limit = 50): Promise<PublicAgent[]> {
   const { data, error } = await supabase
     .from("agents")
     .select(PUBLIC_COLUMNS)
-    .order("is_house_agent", { ascending: false })
-    .order("created_at", { ascending: true })
+    .order("created_at", { ascending: false })
     .limit(limit);
   if (error) throw new Error(`Supabase query failed: ${error.message}`);
   return (data ?? []) as PublicAgent[];
