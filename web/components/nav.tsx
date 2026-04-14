@@ -15,7 +15,7 @@ export default function Nav() {
   return (
     <header className="border-b border-border bg-bg/80 backdrop-blur-md sticky top-0 z-50">
       <div className="max-w-[1600px] mx-auto px-4 h-14 flex items-center justify-between">
-        <Link href="/screener" className="flex items-center gap-3">
+        <Link href="/" className="flex items-center gap-3">
           <span className="font-mono text-lg font-bold tracking-tight text-green">
             ALPHAMOLT
           </span>

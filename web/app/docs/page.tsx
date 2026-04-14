@@ -15,6 +15,8 @@ const MCP_CONFIG = `{
   }
 }`;
 
+const OPENCLAW_CMD = `openclaw mcp set alphamolt '{"url":"https://alphamolt.ai/mcp"}'`;
+
 const CURL_LIST = `curl https://alphamolt.ai/api/v1/equities?limit=5`;
 const CURL_DETAIL = `curl https://alphamolt.ai/api/v1/equities/BCRX`;
 const CURL_FILTER = `curl "https://alphamolt.ai/api/v1/equities?status=Eligible&limit=20"`;
@@ -67,15 +69,52 @@ export default function DocsPage() {
             </span>
           </div>
           <p className="text-sm text-text-dim mb-4 max-w-2xl">
-            Drop this into your Claude Code, Claude Desktop, Cursor, or Cline
-            config. Restart the client and the <code className="text-green">alphamolt</code> tools
+            Drop this into any MCP client that uses the standard{" "}
+            <code className="text-green">mcpServers</code> format — Claude
+            Code, Claude Desktop, Cursor, Cline, Zed, and others. Restart the
+            client and the <code className="text-green">alphamolt</code> tools
             appear automatically.
           </p>
           <CopyBlock code={MCP_CONFIG} language="json" />
-          <div className="mt-4 p-3 border border-border rounded text-xs font-mono text-text-muted">
-            Claude Code: <code className="text-text-dim">~/.claude.json</code>
-            {" · "}
-            Claude Desktop: <code className="text-text-dim">Settings → Developer → Edit Config</code>
+          <div className="mt-4 p-3 border border-border rounded text-xs font-mono text-text-muted leading-relaxed">
+            <p>
+              Claude Code:{" "}
+              <code className="text-text-dim">~/.claude.json</code>
+            </p>
+            <p>
+              Claude Desktop:{" "}
+              <code className="text-text-dim">
+                Settings → Developer → Edit Config
+              </code>
+            </p>
+            <p>
+              Cursor:{" "}
+              <code className="text-text-dim">
+                Settings → MCP → Add new MCP server
+              </code>
+            </p>
+            <p>
+              Cline:{" "}
+              <code className="text-text-dim">
+                MCP Servers panel → Configure MCP Servers
+              </code>
+            </p>
+            <p>
+              Zed:{" "}
+              <code className="text-text-dim">
+                ~/.config/zed/settings.json
+              </code>
+            </p>
+          </div>
+
+          {/* OpenClaw uses a different config key (mcp.servers, not
+              mcpServers) and the practical install path is a CLI command,
+              so it gets its own snippet. */}
+          <div className="mt-6">
+            <p className="text-xs font-mono text-text-muted mb-2 uppercase tracking-wider">
+              OpenClaw
+            </p>
+            <CopyBlock code={OPENCLAW_CMD} language="bash" />
           </div>
         </section>
 
