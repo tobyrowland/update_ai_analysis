@@ -9,6 +9,7 @@ import {
   formatNumber,
   parseStatus,
   parseEval,
+  extractEvalRationale,
 } from "@/lib/constants";
 
 type SortKey = keyof Company;
@@ -135,6 +136,7 @@ export default function DataTable({ companies }: { companies: Company[] }) {
               const st = parseStatus(c.status);
               const bear = parseEval(c.bear_eval);
               const bull = parseEval(c.bull_eval);
+              const bullRationale = extractEvalRationale(c.bull_eval);
 
               return (
                 <tr
@@ -158,19 +160,19 @@ export default function DataTable({ companies }: { companies: Company[] }) {
                       {st.label}
                     </span>
                   </td>
-                  <td className="px-3 py-2 whitespace-nowrap">
+                  <td className="px-3 py-2 whitespace-nowrap text-text">
+                    {c.ticker}
+                  </td>
+                  <td
+                    className="px-3 py-2 truncate"
+                    title={c.company_name || ""}
+                  >
                     <Link
                       href={`/company/${c.ticker}`}
                       className="text-green hover:underline"
                     >
-                      {c.ticker}
+                      {c.company_name || "--"}
                     </Link>
-                  </td>
-                  <td
-                    className="px-3 py-2 text-text truncate"
-                    title={c.company_name || ""}
-                  >
-                    {c.company_name || "--"}
                   </td>
                   <td className="px-3 py-2 text-right whitespace-nowrap">
                     {formatNumber(c.composite_score, { decimals: 1 })}
@@ -221,8 +223,16 @@ export default function DataTable({ companies }: { companies: Company[] }) {
                   <td className="px-3 py-2 text-center whitespace-nowrap">
                     <span style={{ color: bear.color }}>{bear.label}</span>
                   </td>
-                  <td className="px-3 py-2 text-center whitespace-nowrap">
-                    <span style={{ color: bull.color }}>{bull.label}</span>
+                  <td
+                    className="px-3 py-2 text-center whitespace-nowrap"
+                    title={bullRationale ?? undefined}
+                  >
+                    <span
+                      style={{ color: bull.color }}
+                      className={bullRationale ? "cursor-help" : undefined}
+                    >
+                      {bull.label}
+                    </span>
                   </td>
                 </tr>
               );
