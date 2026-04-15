@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getSupabase } from "@/lib/supabase";
@@ -11,6 +12,7 @@ import {
   extractEvalRationale,
   COLORS,
 } from "@/lib/constants";
+import { absoluteUrl } from "@/lib/site";
 import Nav from "@/components/nav";
 import PsChart from "@/components/ps-chart";
 
@@ -26,6 +28,98 @@ async function getData(ticker: string) {
   return {
     company: companyRes.data as Company | null,
     priceSales: psRes.data as PriceSales | null,
+  };
+}
+
+// SEO metadata. Next.js runs this for every request alongside the page, so
+// we fetch only the 5 columns we need for title/description to keep it cheap.
+// Falls back to generic "ticker not found" metadata for missing companies
+// rather than crashing, since the page itself handles 404 via notFound().
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ ticker: string }>;
+}): Promise<Metadata> {
+  const { ticker: rawTicker } = await params;
+  const ticker = decodeURIComponent(rawTicker);
+
+  try {
+    const supabase = getSupabase();
+    const { data } = await supabase
+      .from("companies")
+      .select("ticker, company_name, sector, country, description, short_outlook")
+      .eq("ticker", ticker)
+      .single();
+
+    if (!data) {
+      return {
+        title: `${ticker} — not found`,
+        robots: { index: false, follow: false },
+      };
+    }
+
+    const name = (data.company_name as string | null) ?? ticker;
+    const sector = (data.sector as string | null) ?? "equity";
+    // Prefer the short outlook (1–2 sentences, written for humans) over the
+    // fundamentals description. Trim to ~155 chars for SERP width.
+    const raw =
+      (data.short_outlook as string | null) ??
+      (data.description as string | null) ??
+      `${name} (${ticker}) — ${sector} equity tracked by AlphaMolt with AI narrative, fundamentals, and P/S history.`;
+    const description = raw.length > 155 ? `${raw.slice(0, 152)}...` : raw;
+
+    const title = `${name} (${ticker}) — ${sector} stock analysis`;
+    const canonical = `/company/${encodeURIComponent(ticker)}`;
+
+    return {
+      title,
+      description,
+      alternates: { canonical },
+      openGraph: {
+        title,
+        description,
+        url: canonical,
+        type: "article",
+      },
+      twitter: {
+        card: "summary_large_image",
+        title,
+        description,
+      },
+    };
+  } catch (err) {
+    console.error(`generateMetadata: failed for ${ticker}:`, err);
+    return { title: `${ticker} — AlphaMolt` };
+  }
+}
+
+// Breadcrumb JSON-LD helper. Rendered as a <script> inside the page body so
+// Google can build rich-result breadcrumbs above the SERP snippet.
+function breadcrumbJsonLd(ticker: string, name: string | null) {
+  const display = name ?? ticker;
+  return {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      {
+        "@type": "ListItem",
+        position: 1,
+        name: "Home",
+        item: absoluteUrl("/"),
+      },
+      {
+        "@type": "ListItem",
+        position: 2,
+        name: "Screener",
+        item: absoluteUrl("/screener"),
+      },
+      {
+        "@type": "ListItem",
+        position: 3,
+        name: `${display} (${ticker})`,
+        item: absoluteUrl(`/company/${encodeURIComponent(ticker)}`),
+      },
+    ],
   };
 }
 
@@ -59,8 +153,14 @@ export default async function CompanyPage({
     }
   }
 
+  const breadcrumb = breadcrumbJsonLd(company.ticker, company.company_name);
+
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumb) }}
+      />
       <Nav />
       <main className="flex-1 max-w-[1200px] mx-auto w-full px-4 py-6">
         {/* Back link */}

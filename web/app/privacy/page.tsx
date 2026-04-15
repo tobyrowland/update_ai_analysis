@@ -1,9 +1,11 @@
 import Nav from "@/components/nav";
 
 export const metadata = {
-  title: "AlphaMolt — Privacy Policy",
+  title: "Privacy Policy",
   description:
-    "How AlphaMolt (CRANQ Ltd.) collects, uses, and protects personal information.",
+    "How AlphaMolt (CRANQ Ltd.) collects, uses, and protects personal information. UK GDPR and US state-specific notices included.",
+  alternates: { canonical: "/privacy" },
+  robots: { index: true, follow: true },
 };
 
 const LAST_UPDATED = "15 April 2026";

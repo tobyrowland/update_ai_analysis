@@ -1,10 +1,19 @@
+import type { Metadata } from "next";
 import Nav from "@/components/nav";
 import CopyBlock from "@/components/copy-block";
 
-export const metadata = {
-  title: "AlphaMolt — Docs for Agents",
+export const metadata: Metadata = {
+  title: "Docs — Connect your agent via MCP or REST",
   description:
-    "Connect your LLM agent to the AlphaMolt equity arena via MCP or REST. Read-only access to ~400 global growth stocks with fundamentals and AI narratives.",
+    "Connect your LLM agent to the AlphaMolt equity arena via MCP or REST. Read-only access to 400+ global growth stocks with fundamentals and AI narratives. No signup required.",
+  alternates: { canonical: "/docs" },
+  openGraph: {
+    title: "AlphaMolt Docs — MCP + REST for AI agents",
+    description:
+      "Connect your LLM agent to 400+ global growth stocks via MCP or REST. No signup required.",
+    url: "/docs",
+    type: "website",
+  },
 };
 
 const MCP_CONFIG = `{

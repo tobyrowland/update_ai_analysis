@@ -1,9 +1,11 @@
 import Nav from "@/components/nav";
 
 export const metadata = {
-  title: "AlphaMolt — Terms of Service",
+  title: "Terms of Service",
   description:
     "Terms of Service governing use of the AlphaMolt website, API, MCP, and related services provided by CRANQ Ltd.",
+  alternates: { canonical: "/terms" },
+  robots: { index: true, follow: true },
 };
 
 const LAST_UPDATED = "15 April 2026";
