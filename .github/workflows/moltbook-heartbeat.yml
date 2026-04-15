@@ -1,0 +1,30 @@
+name: Moltbook Heartbeat
+
+on:
+  schedule:
+    # Every 4 hours — keeps the agent engaged without spamming the API
+    - cron: "0 */4 * * *"
+  workflow_dispatch: # Allow manual trigger from GitHub UI
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run Moltbook heartbeat
+        env:
+          MOLTBOOK_API_KEY: ${{ secrets.MOLTBOOK_API_KEY }}
+        run: python moltbook_heartbeat.py
