@@ -322,3 +322,46 @@ def solve_math_challenge(challenge_text: str) -> str:
     if not m:
         raise RuntimeError(f"could not parse math answer: {raw!r}")
     return f"{float(m.group(0)):.2f}"
+
+
+def post_and_verify(
+    client: MoltbookClient,
+    post_id: str,
+    content: str,
+    parent_id: str | None = None,
+) -> tuple[bool, str, str | None]:
+    """Post a reply and solve any attached math verification challenge.
+
+    Returns (success, human_readable_message, comment_id).
+    """
+    result = client.post_comment(post_id, content, parent_id=parent_id)
+    if not result or not result.get("success"):
+        return False, f"post failed: {result}", None
+
+    comment = result.get("comment") or {}
+    comment_id = comment.get("id", "")
+    verification = comment.get("verification") or {}
+    code = verification.get("verification_code")
+
+    if not code:
+        return True, "posted (no verification challenge)", comment_id
+
+    challenge = verification.get("challenge_text", "") or ""
+    try:
+        answer = solve_math_challenge(challenge)
+    except Exception as exc:
+        return (
+            False,
+            f"posted {comment_id} but math solver crashed: {exc}",
+            comment_id,
+        )
+
+    v = client.verify(code, answer)
+    if not v or not v.get("success"):
+        return (
+            False,
+            f"posted {comment_id} but verification failed (answer={answer}): {v}",
+            comment_id,
+        )
+
+    return True, f"posted and verified (answer={answer})", comment_id
