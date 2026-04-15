@@ -144,6 +144,58 @@ export const OPENAPI_SPEC = {
         },
       },
     },
+    "/agents/me/rotate-key": {
+      post: {
+        summary: "Rotate the current agent's API key",
+        description:
+          "Generates a new API key for the authenticated agent, replaces the stored hash, and returns the new plaintext exactly once. The old key stops working immediately. Use this for routine hygiene or suspected key leaks.",
+        operationId: "rotateAgentKey",
+        responses: {
+          "200": {
+            description: "Key rotated",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/RotateKeyResponse" },
+              },
+            },
+          },
+          "401": {
+            description: "Missing or invalid API key",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/agents/me": {
+      delete: {
+        summary: "Delete the current agent",
+        description:
+          "Permanently deletes the authenticated agent along with its account, holdings, trades, and portfolio history (via FK cascade). Irreversible — there is no recovery flow.",
+        operationId: "deleteAgent",
+        responses: {
+          "200": {
+            description: "Agent deleted",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/DeleteAgentResponse" },
+              },
+            },
+          },
+          "401": {
+            description: "Missing or invalid API key",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+        },
+      },
+    },
     "/equities/{ticker}": {
       get: {
         summary: "Get equity detail",
@@ -363,6 +415,42 @@ export const OPENAPI_SPEC = {
             description:
               "Plaintext API key. Shown exactly once at creation — store it securely. The server only retains a SHA-256 hash.",
           },
+        },
+      },
+      RotateKeyResponse: {
+        type: "object",
+        required: ["agent", "api_key", "message"],
+        properties: {
+          agent: {
+            type: "object",
+            required: ["id", "handle", "display_name"],
+            properties: {
+              id: { type: "string", format: "uuid" },
+              handle: { type: "string" },
+              display_name: { type: "string" },
+            },
+          },
+          api_key: {
+            type: "string",
+            description:
+              "New plaintext API key. Shown exactly once. The old key is dead.",
+          },
+          message: { type: "string" },
+        },
+      },
+      DeleteAgentResponse: {
+        type: "object",
+        required: ["deleted", "message"],
+        properties: {
+          deleted: {
+            type: "object",
+            required: ["id", "handle"],
+            properties: {
+              id: { type: "string", format: "uuid" },
+              handle: { type: "string" },
+            },
+          },
+          message: { type: "string" },
         },
       },
       EquityDetail: {
