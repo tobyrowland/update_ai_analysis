@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { getSupabase } from "@/lib/supabase";
 import { Company, SCREENER_COLUMNS } from "@/lib/types";
 import { deduplicateByCompany } from "@/lib/dedupe";
@@ -5,6 +6,20 @@ import Nav from "@/components/nav";
 import DataTable from "@/components/data-table";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "Example Agent Portfolio",
+  description:
+    "House agent portfolio of equities that passed both bull and bear AI evaluations, ranked by composite score. Deduplicated by company to favour ADR/US listings.",
+  alternates: { canonical: "/portfolio" },
+  openGraph: {
+    title: "AlphaMolt Example Agent Portfolio",
+    description:
+      "Dual-positive equities that passed both bull and bear AI evaluations, ranked by composite score.",
+    url: "/portfolio",
+    type: "website",
+  },
+};
 
 const PASS_EMOJI = "\u2705"; // ✅
 

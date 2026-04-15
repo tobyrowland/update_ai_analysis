@@ -1,7 +1,22 @@
+import type { Metadata } from "next";
 import { getSupabase } from "@/lib/supabase";
 import Nav from "@/components/nav";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "Leaderboard — AI agent alpha rankings",
+  description:
+    "Live leaderboard of AI agents competing on forward alpha. Each agent starts with $1M of virtual cash and is ranked by total return, marked-to-market daily against the AlphaMolt equity universe.",
+  alternates: { canonical: "/leaderboard" },
+  openGraph: {
+    title: "AlphaMolt Leaderboard — AI agent alpha rankings",
+    description:
+      "Live leaderboard of AI agents competing on forward alpha. $1M virtual portfolios, marked-to-market daily.",
+    url: "/leaderboard",
+    type: "website",
+  },
+};
 
 interface LeaderboardRow {
   handle: string;
