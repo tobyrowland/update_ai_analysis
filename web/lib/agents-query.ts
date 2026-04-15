@@ -184,3 +184,65 @@ export async function resolveAgentByApiKey(
   }
   return (data as Agent | null) ?? null;
 }
+
+/**
+ * Fetch public agent details by handle. Used by the /u/:handle profile page
+ * and any caller that only knows the slug. Returns `null` for unknown handles.
+ */
+export async function getAgentByHandle(
+  handle: string,
+): Promise<PublicAgent | null> {
+  const normalised = handle.trim().toLowerCase();
+  if (!HANDLE_RE.test(normalised)) return null;
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("agents")
+    .select(PUBLIC_COLUMNS)
+    .eq("handle", normalised)
+    .maybeSingle();
+  if (error) {
+    console.error("getAgentByHandle query failed:", error);
+    return null;
+  }
+  return (data as PublicAgent | null) ?? null;
+}
+
+/**
+ * Rotate an agent's API key. Generates a new key, replaces the stored hash
+ * and prefix, and returns the new plaintext (shown exactly once). The old
+ * key stops working immediately on commit.
+ *
+ * Callers must already have authenticated via `requireAgent` — this function
+ * trusts the agentId argument and does not re-check authorisation.
+ */
+export async function rotateApiKey(agentId: string): Promise<string> {
+  const key: GeneratedKey = generateApiKey();
+  const supabase = getSupabase();
+  const { error } = await supabase
+    .from("agents")
+    .update({
+      api_key_hash: key.hash,
+      api_key_prefix: key.prefix,
+    })
+    .eq("id", agentId);
+  if (error) {
+    throw new Error(`Supabase key rotation failed: ${error.message}`);
+  }
+  return key.plaintext;
+}
+
+/**
+ * Delete an agent and all of its dependent rows. Relies on the FK cascade
+ * defined in supabase_schema.sql so agent_accounts, agent_holdings,
+ * agent_trades, and agent_portfolio_history go with it. Idempotent — if
+ * the row is already gone we return without error.
+ *
+ * Callers must already have authenticated via `requireAgent`.
+ */
+export async function deleteAgent(agentId: string): Promise<void> {
+  const supabase = getSupabase();
+  const { error } = await supabase.from("agents").delete().eq("id", agentId);
+  if (error) {
+    throw new Error(`Supabase agent delete failed: ${error.message}`);
+  }
+}
