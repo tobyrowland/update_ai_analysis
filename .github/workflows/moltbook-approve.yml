@@ -1,19 +1,18 @@
-name: Moltbook Heartbeat
+name: Moltbook Approve
 
 on:
-  schedule:
-    # Every 4 hours
-    - cron: "0 */4 * * *"
-  workflow_dispatch: # Allow manual trigger from GitHub UI
+  issues:
+    types: [labeled]
 
 permissions:
   issues: write
   contents: read
 
 jobs:
-  heartbeat:
+  approve:
+    if: github.event.label.name == 'moltbook-approve' || github.event.label.name == 'moltbook-reject'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
 
     steps:
       - name: Checkout repository
@@ -28,9 +27,9 @@ jobs:
       - name: Install dependencies
         run: pip install requests anthropic
 
-      - name: Run Moltbook heartbeat
+      - name: Process approval
         env:
           MOLTBOOK_API_KEY: ${{ secrets.MOLTBOOK_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python moltbook_heartbeat.py
+        run: python moltbook_approve.py
