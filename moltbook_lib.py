@@ -23,6 +23,7 @@ APPROVE_LABEL = "moltbook-approve"
 REJECT_LABEL = "moltbook-reject"
 
 DRAFT_MODEL = "claude-haiku-4-5"
+MATH_MODEL = "claude-sonnet-4-6"
 
 # Cached system prompt — persona + platform context. Stable across runs so
 # Anthropic prompt caching gives us near-free re-reads.
@@ -261,11 +262,43 @@ def _anthropic_client():
     return Anthropic()
 
 
-def draft_reply(context: dict[str, Any]) -> str:
-    """Draft a reply with Claude Haiku. System prompt is prompt-cached."""
+WORD_CAP = 80
+WORD_CAP_HARD = 100  # triggers a retry
+
+
+def _count_words(text: str) -> int:
+    return len(text.split())
+
+
+def _draft_once(user_block: str) -> str:
     client = _anthropic_client()
+    resp = client.messages.create(
+        model=DRAFT_MODEL,
+        max_tokens=400,
+        system=[
+            {
+                "type": "text",
+                "text": ALPHAMOLT_SYSTEM,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        messages=[{"role": "user", "content": user_block}],
+    )
+    text = "".join(
+        b.text for b in resp.content if getattr(b, "type", None) == "text"
+    )
+    return text.strip()
+
+
+def draft_reply(context: dict[str, Any]) -> str:
+    """Draft a reply with Claude Haiku. System prompt is prompt-cached.
+
+    If the first draft exceeds WORD_CAP_HARD words, re-draft once with a
+    sharper length reminder. Final draft is returned as-is — truncation
+    would cut mid-sentence and look worse than an 85-word reply.
+    """
     parent_block = context.get("parent_content") or "(none — top-level comment)"
-    user_block = (
+    base_user_block = (
         "You received a notification on your Moltbook post. Draft a reply.\n\n"
         f"## Your post\n"
         f"Title: {context.get('post_title', '(unknown)')}\n"
@@ -277,40 +310,60 @@ def draft_reply(context: dict[str, Any]) -> str:
         f"Content:\n{context.get('comment_content', '')}\n\n"
         f"## Parent thread (if this is a nested reply)\n"
         f"{parent_block}\n\n"
-        "Draft your reply now. Return only the reply text — no preamble, "
-        "no explanation, no signature unless it feels natural."
+        f"HARD LENGTH CAP: {WORD_CAP} words. Count them. If you can't say "
+        "it in 80 words, pick ONE point and drop the rest.\n\n"
+        "Draft your reply now. Return ONLY the reply text — no preamble, "
+        "no sign-off, no explanation."
     )
-    resp = client.messages.create(
-        model=DRAFT_MODEL,
-        max_tokens=600,
-        system=[
-            {
-                "type": "text",
-                "text": ALPHAMOLT_SYSTEM,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-        messages=[{"role": "user", "content": user_block}],
+
+    draft = _draft_once(base_user_block)
+    words = _count_words(draft)
+    if words <= WORD_CAP_HARD:
+        return draft
+
+    log.warning("draft too long (%d words); re-drafting with stricter cap", words)
+    retry_block = base_user_block + (
+        f"\n\nYOUR PREVIOUS DRAFT WAS {words} WORDS — TOO LONG.\n"
+        f"Previous draft:\n{draft}\n\n"
+        f"Rewrite it in UNDER {WORD_CAP} words. Lead with the actual answer. "
+        "Drop anything that isn't information-dense. One question back, max."
     )
-    text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
-    return text.strip()
+    return _draft_once(retry_block)
 
 
 def solve_math_challenge(challenge_text: str) -> str:
-    """Ask Haiku to solve the verification math and return '37.00'-style answer."""
+    """Solve the verification math. Returns '37.00'-style answer.
+
+    Uses Sonnet with chain-of-thought reasoning, then parses the final
+    numeric answer from the end of the response. The challenge text is
+    deliberately noisy (ransom-note formatting, word problems) so Haiku
+    was underperforming — Sonnet is more reliable and the call cost is
+    negligible (≤$0.01/verification).
+    """
     client = _anthropic_client()
     resp = client.messages.create(
-        model=DRAFT_MODEL,
-        max_tokens=30,
+        model=MATH_MODEL,
+        max_tokens=800,
         messages=[
             {
                 "role": "user",
                 "content": (
-                    "Solve the math problem hidden in this text. Ignore the noisy "
-                    "ransom-note formatting.\n\n"
-                    f"{challenge_text}\n\n"
-                    "Respond with ONLY the numeric answer to exactly 2 decimal "
-                    "places (e.g. '525.00'). No other text."
+                    "You are solving a math verification challenge. The text "
+                    "below is deliberately noisy (ransom-note case, punctuation, "
+                    "whimsical framing). Extract the actual math problem, solve "
+                    "it carefully, and output the final numeric answer.\n\n"
+                    "IMPORTANT RULES:\n"
+                    "- Read the noisy text and extract the clean math problem "
+                    "first. Number words like 'twenty-five' mean 25.\n"
+                    "- Solve step by step. Do not skip steps.\n"
+                    "- The answer MUST be a number to exactly 2 decimal places "
+                    "(e.g. 37.00, 525.00, 18.50).\n"
+                    "- End your response with a line that reads exactly:\n"
+                    "  ANSWER: <number>\n"
+                    "- The number on the ANSWER line must be just digits and a "
+                    "decimal point — no units, no currency, no commas.\n\n"
+                    f"CHALLENGE:\n{challenge_text}\n\n"
+                    "Reason through it step by step, then output the ANSWER line."
                 ),
             }
         ],
@@ -318,10 +371,18 @@ def solve_math_challenge(challenge_text: str) -> str:
     raw = "".join(
         b.text for b in resp.content if getattr(b, "type", None) == "text"
     ).strip()
-    m = re.search(r"-?\d+(?:\.\d+)?", raw)
-    if not m:
+    log.info("math solver reasoning:\n%s", raw)
+
+    # Prefer the explicit ANSWER: <number> line at the end.
+    answer_line = re.search(r"ANSWER:\s*(-?\d+(?:\.\d+)?)", raw)
+    if answer_line:
+        return f"{float(answer_line.group(1)):.2f}"
+
+    # Fallback: last number in the response.
+    matches = re.findall(r"-?\d+(?:\.\d+)?", raw)
+    if not matches:
         raise RuntimeError(f"could not parse math answer: {raw!r}")
-    return f"{float(m.group(0)):.2f}"
+    return f"{float(matches[-1]):.2f}"
 
 
 def post_and_verify(
