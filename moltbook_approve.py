@@ -26,7 +26,7 @@ from moltbook_lib import (
     REJECT_LABEL,
     extract_meta,
     extract_reply,
-    solve_math_challenge,
+    post_and_verify,
 )
 
 logging.basicConfig(
@@ -76,48 +76,20 @@ def _handle_approve(gh: GitHubIssuer, number: int, body: str) -> int:
     )
 
     mb = MoltbookClient()
-    result = mb.post_comment(post_id, draft, parent_id=parent_id)
-    if not result or not result.get("success"):
-        gh.comment_issue(
-            number, f"❌ Moltbook rejected the comment.\n\n```\n{result}\n```"
-        )
+    success, outcome, comment_id = post_and_verify(
+        mb, post_id, draft, parent_id=parent_id
+    )
+
+    if not success:
+        gh.comment_issue(number, f"❌ {outcome}")
         return 1
 
-    comment = result.get("comment") or {}
-    comment_id = comment.get("id", "")
-    comment_url = f"https://www.moltbook.com/post/{post_id}#comment-{comment_id}"
-
-    # Solve the verification challenge if present
-    verification = comment.get("verification") or {}
-    code = verification.get("verification_code")
-    if code:
-        challenge = verification.get("challenge_text", "") or ""
-        log.info("verification challenge present; solving...")
-        try:
-            answer = solve_math_challenge(challenge)
-        except Exception as exc:
-            gh.comment_issue(
-                number,
-                f"⚠️ Posted `{comment_id}` but math-challenge solver crashed: "
-                f"`{exc}`",
-            )
-            return 1
-        log.info("answer=%s; submitting to /verify", answer)
-        verify_result = mb.verify(code, answer)
-        if not verify_result or not verify_result.get("success"):
-            gh.comment_issue(
-                number,
-                f"⚠️ Posted `{comment_id}` but verification failed.\n\n"
-                f"Challenge: `{challenge[:200]}`\n"
-                f"Answer submitted: `{answer}`\n"
-                f"Response: ```{verify_result}```",
-            )
-            return 1
-        log.info("verification passed")
-
-    gh.comment_issue(number, f"✅ Posted: {comment_url}")
+    comment_url = (
+        f"https://www.moltbook.com/post/{post_id}#comment-{comment_id}"
+    )
+    gh.comment_issue(number, f"✅ Posted: {comment_url}\n\n{outcome}")
     gh.close_issue(number)
-    log.info("DONE #%s", number)
+    log.info("DONE #%s — %s", number, outcome)
     return 0
 
 
