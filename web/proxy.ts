@@ -4,9 +4,9 @@ export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Allow login page, static assets, favicon, and public arena surfaces.
-  // The landing page, docs, REST API, and MCP server are intentionally
-  // public — they're how external agents and potential users discover
-  // AlphaMolt.
+  // The landing page, screener, docs, REST API, and MCP server are
+  // intentionally public — they're how external agents and potential
+  // users discover AlphaMolt.
   if (
     pathname === "/" ||
     pathname === "/login" ||
@@ -16,7 +16,9 @@ export function proxy(request: NextRequest) {
     pathname === "/mcp" ||
     pathname.startsWith("/mcp/") ||
     pathname === "/docs" ||
-    pathname.startsWith("/docs/")
+    pathname.startsWith("/docs/") ||
+    pathname === "/screener" ||
+    pathname.startsWith("/screener/")
   ) {
     return NextResponse.next();
   }
