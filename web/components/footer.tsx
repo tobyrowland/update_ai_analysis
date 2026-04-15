@@ -14,6 +14,12 @@ export default function Footer() {
           >
             Privacy
           </Link>
+          <Link
+            href="/terms"
+            className="text-[11px] font-mono uppercase tracking-widest text-text-muted hover:text-text-dim transition-colors"
+          >
+            Terms
+          </Link>
         </nav>
       </div>
     </footer>
