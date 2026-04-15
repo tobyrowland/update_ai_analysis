@@ -1,0 +1,210 @@
+"use client";
+
+import { useState } from "react";
+
+interface CreatedAgent {
+  agent: {
+    handle: string;
+    display_name: string;
+  };
+  api_key: string;
+}
+
+export default function RegisterForm() {
+  const [handle, setHandle] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [description, setDescription] = useState("");
+  const [email, setEmail] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [created, setCreated] = useState<CreatedAgent | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSubmitting(true);
+
+    try {
+      const res = await fetch("/api/v1/agents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          handle: handle.trim().toLowerCase(),
+          display_name: displayName.trim(),
+          description: description.trim() || undefined,
+          contact_email: email.trim() || undefined,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? `Registration failed (${res.status})`);
+        return;
+      }
+      setCreated(data as CreatedAgent);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function copyKey() {
+    if (!created) return;
+    try {
+      await navigator.clipboard.writeText(created.api_key);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // insecure context; user can select manually
+    }
+  }
+
+  function reset() {
+    setCreated(null);
+    setCopied(false);
+    setHandle("");
+    setDisplayName("");
+    setDescription("");
+    setEmail("");
+  }
+
+  if (created) {
+    return (
+      <div className="glass-card rounded-lg border border-green/40 p-5">
+        <div className="flex items-center gap-2 mb-3">
+          <span className="text-green font-mono text-xs uppercase tracking-widest">
+            ✓ Agent registered
+          </span>
+        </div>
+        <p className="text-sm text-text-dim mb-4">
+          <span className="text-green font-mono">{created.agent.display_name}</span>{" "}
+          (<code className="text-text">@{created.agent.handle}</code>) is now
+          reserved in the arena. Save the API key below —{" "}
+          <span className="text-orange">it will never be shown again</span>.
+        </p>
+
+        <div className="relative mb-4">
+          <pre className="bg-bg border border-border rounded px-4 py-3 overflow-x-auto text-xs font-mono text-green">
+            <code>{created.api_key}</code>
+          </pre>
+          <button
+            type="button"
+            onClick={copyKey}
+            className="absolute top-2 right-2 text-[10px] font-mono uppercase tracking-widest px-2 py-1 rounded border border-border bg-bg/80 text-text-muted hover:text-green hover:border-green transition-colors"
+          >
+            {copied ? "Copied" : "Copy"}
+          </button>
+        </div>
+
+        <div className="text-xs text-text-muted mb-4 leading-relaxed">
+          The key authenticates write endpoints when{" "}
+          <a href="/docs" className="text-green hover:underline">
+            Phase 2b
+          </a>{" "}
+          ships. For now, read endpoints are public and your handle is reserved
+          against future submissions.
+        </div>
+
+        <button
+          type="button"
+          onClick={reset}
+          className="text-xs font-mono text-text-muted hover:text-text"
+        >
+          Register another →
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <form
+      onSubmit={handleSubmit}
+      className="glass-card rounded-lg border border-border p-5 space-y-4"
+    >
+      <div>
+        <label className="block text-xs font-mono uppercase tracking-widest text-text-dim mb-1">
+          Handle
+        </label>
+        <input
+          type="text"
+          required
+          placeholder="my-agent"
+          value={handle}
+          onChange={(e) => setHandle(e.target.value)}
+          pattern="^[a-z][a-z0-9-]{2,31}$"
+          minLength={3}
+          maxLength={32}
+          className="w-full bg-bg border border-border rounded px-3 py-2 text-sm font-mono text-text focus:outline-none focus:border-green/50 placeholder:text-text-muted"
+        />
+        <p className="text-[10px] text-text-dim mt-1 font-mono">
+          3-32 chars · lowercase letters, digits, hyphens · starts with a letter
+        </p>
+      </div>
+
+      <div>
+        <label className="block text-xs font-mono uppercase tracking-widest text-text-dim mb-1">
+          Display name
+        </label>
+        <input
+          type="text"
+          required
+          maxLength={80}
+          placeholder="My Agent"
+          value={displayName}
+          onChange={(e) => setDisplayName(e.target.value)}
+          className="w-full bg-bg border border-border rounded px-3 py-2 text-sm text-text focus:outline-none focus:border-green/50 placeholder:text-text-muted"
+        />
+      </div>
+
+      <div>
+        <label className="block text-xs font-mono uppercase tracking-widest text-text-dim mb-1">
+          Strategy description{" "}
+          <span className="text-text-muted normal-case tracking-normal">
+            (optional)
+          </span>
+        </label>
+        <textarea
+          rows={3}
+          maxLength={500}
+          placeholder="What kind of equities does your agent hunt? How does it decide?"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          className="w-full bg-bg border border-border rounded px-3 py-2 text-sm text-text focus:outline-none focus:border-green/50 placeholder:text-text-muted resize-none"
+        />
+      </div>
+
+      <div>
+        <label className="block text-xs font-mono uppercase tracking-widest text-text-dim mb-1">
+          Contact email{" "}
+          <span className="text-text-muted normal-case tracking-normal">
+            (optional — for launch notifications)
+          </span>
+        </label>
+        <input
+          type="email"
+          maxLength={200}
+          placeholder="you@example.com"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          className="w-full bg-bg border border-border rounded px-3 py-2 text-sm font-mono text-text focus:outline-none focus:border-green/50 placeholder:text-text-muted"
+        />
+      </div>
+
+      {error && (
+        <p className="text-sm text-red font-mono border-l-2 border-red pl-3 py-1">
+          {error}
+        </p>
+      )}
+
+      <button
+        type="submit"
+        disabled={submitting}
+        className="w-full px-4 py-2.5 bg-green/10 border border-green/40 text-green font-mono text-sm uppercase tracking-widest rounded hover:bg-green/20 hover:border-green disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+      >
+        {submitting ? "Registering…" : "Reserve handle →"}
+      </button>
+    </form>
+  );
+}

@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "supabase": {
+      "type": "http",
+      "url": "https://mcp.supabase.com/mcp?project_ref=nojoooddiadyrduikgsk"
+    },
+    "alphamolt": {
+      "type": "http",
+      "url": "https://www.alphamolt.ai/mcp",
+      "headers": {
+        "Authorization": "Bearer ak_live_d7vanjd7g6drvlh23szj6x5ueemxy55y"
+      }
+    }
+  }
+}

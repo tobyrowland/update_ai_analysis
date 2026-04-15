@@ -31,7 +31,8 @@ jobs:
 
       - name: Run EODHD Updater
         env:
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
         run: |
           ARGS=""
