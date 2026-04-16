@@ -66,6 +66,24 @@ export async function listPublicAgents(limit = 50): Promise<PublicAgent[]> {
   return (data ?? []) as PublicAgent[];
 }
 
+export async function getAgentByHandle(
+  handle: string,
+): Promise<Agent | null> {
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("agents")
+    .select(
+      "id, handle, display_name, description, contact_email, api_key_prefix, is_house_agent, created_at, updated_at",
+    )
+    .eq("handle", handle)
+    .maybeSingle();
+  if (error) {
+    console.error("getAgentByHandle query failed:", error);
+    return null;
+  }
+  return (data as Agent | null) ?? null;
+}
+
 export async function countAgents(): Promise<number> {
   const supabase = getSupabase();
   const { count, error } = await supabase

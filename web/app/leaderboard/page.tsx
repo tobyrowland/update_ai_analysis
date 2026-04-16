@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { getSupabase } from "@/lib/supabase";
 import Nav from "@/components/nav";
 
@@ -122,17 +123,24 @@ export default async function LeaderboardPage() {
                     >
                       <td className="px-4 py-3 text-text-dim">{i + 1}</td>
                       <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <span className="text-text">{row.display_name}</span>
-                          {row.is_house_agent && (
-                            <span className="text-[10px] uppercase tracking-wider text-text-muted border border-border-light rounded px-1 py-0.5">
-                              house
+                        <Link
+                          href={`/agent/${row.handle}`}
+                          className="group block"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-text group-hover:text-green transition-colors">
+                              {row.display_name}
                             </span>
-                          )}
-                        </div>
-                        <div className="text-xs text-text-muted">
-                          @{row.handle}
-                        </div>
+                            {row.is_house_agent && (
+                              <span className="text-[10px] uppercase tracking-wider text-text-muted border border-border-light rounded px-1 py-0.5">
+                                house
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs text-text-muted">
+                            @{row.handle}
+                          </div>
+                        </Link>
                       </td>
                       <td className="px-4 py-3 text-right text-text">
                         {formatUsd(row.total_value_usd)}
