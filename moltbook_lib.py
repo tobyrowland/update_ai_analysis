@@ -22,6 +22,15 @@ MOLTBOOK_ISSUE_LABEL = "moltbook-reply"
 APPROVE_LABEL = "moltbook-approve"
 REJECT_LABEL = "moltbook-reject"
 
+LEDGER_LABEL = "moltbook-ledger"
+LEDGER_MARKER_START = "<!-- engagement-ledger-data"
+LEDGER_MARKER_END = "engagement-ledger-data -->"
+
+FINANCE_SUBMOLTS = frozenset({
+    "investing", "value-investing", "stocks", "stockmarket",
+    "markets", "investment", "agent-investors", "tradingdesk",
+})
+
 DRAFT_MODEL = "claude-haiku-4-5"
 MATH_MODEL = "claude-sonnet-4-6"
 
@@ -149,6 +158,36 @@ class MoltbookClient:
             "/verify", {"verification_code": verification_code, "answer": answer}
         )
 
+    # Engagement endpoints (proactive growth)
+    def feed(self, sort: str = "new", limit: int = 15) -> list[dict]:
+        data = self._get(f"/feed?sort={sort}&limit={limit}") or {}
+        return data.get("posts") or data.get("items") or []
+
+    def follow_agent(self, agent_name: str) -> bool:
+        result = self._post(f"/agents/{agent_name}/follow", {})
+        return bool(result and result.get("success"))
+
+    def upvote_post(self, post_id: str) -> bool:
+        result = self._post(f"/posts/{post_id}/upvote", {})
+        return bool(result and result.get("success"))
+
+    def upvote_comment(self, comment_id: str) -> bool:
+        result = self._post(f"/comments/{comment_id}/upvote", {})
+        return bool(result and result.get("success"))
+
+    def create_post(
+        self, submolt_name: str, title: str, content: str
+    ) -> dict | None:
+        return self._post(
+            "/posts",
+            {
+                "submolt_name": submolt_name,
+                "submolt": submolt_name,
+                "title": title,
+                "content": content,
+            },
+        )
+
 
 class GitHubIssuer:
     """Small GitHub REST client for issue create / search / comment / close."""
@@ -230,6 +269,71 @@ class GitHubIssuer:
         if r.status_code >= 400:
             return None
         return r.json()
+
+    def update_issue_body(self, number: int, body: str) -> None:
+        self.session.patch(
+            f"{self.base}/issues/{number}",
+            json={"body": body},
+            timeout=TIMEOUT,
+        )
+
+    def get_or_create_ledger(self) -> tuple[int, dict]:
+        """Return (issue_number, ledger_dict) for the engagement ledger."""
+        r = self.session.get(
+            f"{self.base}/issues",
+            params={"labels": LEDGER_LABEL, "state": "open", "per_page": 5},
+            timeout=TIMEOUT,
+        )
+        issues = r.json() if r.status_code < 400 else []
+        for issue in issues:
+            body = issue.get("body") or ""
+            m = re.search(
+                re.escape(LEDGER_MARKER_START) + r"\s*(.*?)\s*"
+                + re.escape(LEDGER_MARKER_END),
+                body,
+                re.DOTALL,
+            )
+            if m:
+                try:
+                    return issue["number"], json.loads(m.group(1))
+                except json.JSONDecodeError:
+                    return issue["number"], {}
+            return issue["number"], {}
+
+        # No ledger issue exists — create one.
+        self.ensure_label(
+            LEDGER_LABEL, "bfd4f2", "Moltbook engagement state"
+        )
+        empty: dict[str, Any] = {
+            "followed": [],
+            "upvoted_posts": [],
+            "commented_posts": [],
+            "daily_comment_count": {},
+            "daily_post_count": {},
+        }
+        body = (
+            "Engagement ledger for AlphaMolt-Equities on Moltbook.\n"
+            "Updated automatically by the heartbeat.\n\n"
+            f"{LEDGER_MARKER_START}\n"
+            f"{json.dumps(empty, indent=2)}\n"
+            f"{LEDGER_MARKER_END}\n"
+        )
+        issue = self.create_issue(
+            "[moltbook] engagement-ledger", body, [LEDGER_LABEL]
+        )
+        if issue:
+            return issue["number"], empty
+        raise RuntimeError("could not create engagement ledger issue")
+
+    def update_ledger(self, issue_number: int, ledger: dict) -> None:
+        body = (
+            "Engagement ledger for AlphaMolt-Equities on Moltbook.\n"
+            "Updated automatically by the heartbeat.\n\n"
+            f"{LEDGER_MARKER_START}\n"
+            f"{json.dumps(ledger, indent=2)}\n"
+            f"{LEDGER_MARKER_END}\n"
+        )
+        self.update_issue_body(issue_number, body)
 
 
 def notification_marker(notif_id: str) -> str:
@@ -329,6 +433,120 @@ def draft_reply(context: dict[str, Any]) -> str:
         "Drop anything that isn't information-dense. One question back, max."
     )
     return _draft_once(retry_block)
+
+
+def draft_feed_comment(post: dict[str, Any]) -> str:
+    """Draft a comment on someone else's post. Returns '' if LLM says SKIP."""
+    submolt = (post.get("submolt") or {}).get("name", "(unknown)")
+    author = (post.get("author") or {}).get("name", "unknown")
+    title = post.get("title", "(no title)")
+    content = (post.get("content") or "")[:1500]
+
+    user_block = (
+        "You are browsing the Moltbook feed and found a post to comment on.\n"
+        "Draft a substantive, information-dense comment.\n\n"
+        f"## The post\n"
+        f"Submolt: m/{submolt}\n"
+        f"Title: {title}\n"
+        f"Author: @{author}\n"
+        f"Content:\n{content}\n\n"
+        "RULES:\n"
+        "- Add genuine value: a specific data point, a counterpoint, a sharp question.\n"
+        "- Do NOT just agree ('great post', 'I love this'). That is noise.\n"
+        "- If the post is outside your expertise or you have nothing to add, "
+        "return the single word SKIP.\n"
+        f"- HARD LENGTH CAP: {WORD_CAP} words.\n\n"
+        "Return ONLY the comment text, or SKIP."
+    )
+
+    draft = _draft_once(user_block)
+    if draft.strip().upper() == "SKIP":
+        return ""
+
+    words = _count_words(draft)
+    if words <= WORD_CAP_HARD:
+        return draft
+
+    log.warning("feed comment too long (%d words); re-drafting", words)
+    retry_block = user_block + (
+        f"\n\nYOUR PREVIOUS DRAFT WAS {words} WORDS — TOO LONG.\n"
+        f"Previous draft:\n{draft}\n\n"
+        f"Rewrite in UNDER {WORD_CAP} words."
+    )
+    return _draft_once(retry_block)
+
+
+def draft_original_post(topic_data: dict[str, Any]) -> tuple[str, str] | None:
+    """Draft a new post for a submolt. Returns (title, body) or None."""
+    user_block = (
+        "You are creating an original post for a Moltbook submolt.\n"
+        "Share a genuine insight from your equity screening pipeline.\n"
+        "You have real data — use it. Do NOT fabricate or embellish.\n\n"
+        f"Topic type: {topic_data.get('type', 'general')}\n"
+        f"Data:\n{json.dumps(topic_data.get('data', {}), indent=2)[:2000]}\n\n"
+        "RULES:\n"
+        "- Title: under 80 chars, specific, no clickbait.\n"
+        "- Body: 100–200 words max. Lead with the data. "
+        "End with a question to spark discussion.\n"
+        "- If the data is boring or unremarkable, return the single word SKIP.\n\n"
+        "Return in this format (on separate lines):\n"
+        "TITLE: your title here\n"
+        "BODY: your post body here\n\n"
+        "Or return the single word SKIP."
+    )
+
+    raw = _draft_once(user_block)
+    if raw.strip().upper() == "SKIP":
+        return None
+
+    title_match = re.search(r"TITLE:\s*(.+)", raw)
+    body_match = re.search(r"BODY:\s*([\s\S]+)", raw)
+    if not title_match or not body_match:
+        log.warning("could not parse original post draft")
+        return None
+
+    return title_match.group(1).strip(), body_match.group(1).strip()
+
+
+def create_post_and_verify(
+    client: MoltbookClient,
+    submolt_name: str,
+    title: str,
+    content: str,
+) -> tuple[bool, str, str | None]:
+    """Create a new post and solve any verification challenge.
+
+    Returns (success, human_readable_message, post_id).
+    """
+    result = client.create_post(submolt_name, title, content)
+    if not result or not result.get("success"):
+        return False, f"create_post failed: {result}", None
+
+    post = result.get("post") or {}
+    post_id = post.get("id", "")
+    verification = (
+        post.get("verification") or result.get("verification") or {}
+    )
+    code = verification.get("verification_code")
+
+    if not code:
+        return True, "posted (no verification)", post_id
+
+    challenge = verification.get("challenge_text", "") or ""
+    try:
+        answer = solve_math_challenge(challenge)
+    except Exception as exc:
+        return False, f"posted {post_id} but math solver crashed: {exc}", post_id
+
+    v = client.verify(code, answer)
+    if not v or not v.get("success"):
+        return (
+            False,
+            f"posted {post_id} but verification failed (answer={answer}): {v}",
+            post_id,
+        )
+
+    return True, f"posted and verified (answer={answer})", post_id
 
 
 def solve_math_challenge(challenge_text: str) -> str:
