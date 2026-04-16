@@ -159,8 +159,13 @@ class MoltbookClient:
         )
 
     # Engagement endpoints (proactive growth)
-    def feed(self, sort: str = "new", limit: int = 15) -> list[dict]:
-        data = self._get(f"/feed?sort={sort}&limit={limit}") or {}
+    def feed(
+        self, sort: str = "new", limit: int = 15, submolt: str | None = None
+    ) -> list[dict]:
+        path = f"/feed?sort={sort}&limit={limit}"
+        if submolt:
+            path += f"&submolt={submolt}"
+        data = self._get(path) or {}
         return data.get("posts") or data.get("items") or []
 
     def follow_agent(self, agent_name: str) -> bool:
