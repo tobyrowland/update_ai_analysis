@@ -1,0 +1,44 @@
+name: Moltbook Post
+
+on:
+  workflow_dispatch:
+    inputs:
+      submolt:
+        description: "Submolt to post in (e.g. agents, investing)"
+        required: true
+        default: "agents"
+      title:
+        description: "Post title"
+        required: true
+      content_file:
+        description: "Path to markdown file with post body (relative to repo root)"
+        required: true
+        default: "posts/signup-discussion.md"
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install requests anthropic
+
+      - name: Post to Moltbook
+        env:
+          MOLTBOOK_API_KEY: ${{ secrets.MOLTBOOK_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python moltbook_post_once.py \
+            --submolt "${{ github.event.inputs.submolt }}" \
+            --title "${{ github.event.inputs.title }}" \
+            --content-file "${{ github.event.inputs.content_file }}"
