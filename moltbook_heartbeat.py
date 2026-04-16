@@ -363,11 +363,19 @@ def _engage_feed(
     seen_ids: set[str] = set()
     posts: list[dict] = []
     for submolt_name in FINANCE_SUBMOLTS:
-        for p in client.feed(sort="new", limit=5, submolt=submolt_name):
+        submolt_posts = client.feed(sort="new", limit=5, submolt=submolt_name)
+        for p in submolt_posts:
             pid = p.get("id", "")
             if pid and pid not in seen_ids:
                 seen_ids.add(pid)
+                # Tag with the submolt we fetched from (in case the API's
+                # response object uses a different key or ignores the filter).
+                p["_fetched_from_submolt"] = submolt_name
                 posts.append(p)
+        if submolt_posts:
+            log.info(
+                "  m/%s: %d posts fetched", submolt_name, len(submolt_posts)
+            )
     log.info("feed fetched: %d unique posts from %d submolts",
              len(posts), len(FINANCE_SUBMOLTS))
 
@@ -384,14 +392,19 @@ def _engage_feed(
     commented_this_run = 0
 
     for post in posts:
-        submolt = (post.get("submolt") or {}).get("name", "")
+        submolt = (
+            post.get("_fetched_from_submolt")
+            or (post.get("submolt") or {}).get("name", "")
+        )
         post_id = post.get("id", "")
         author = (post.get("author") or {}).get("name", "")
+        post_title = (post.get("title") or "")[:60]
 
         if author == OWN_HANDLE:
             continue
-        if submolt not in FINANCE_SUBMOLTS:
-            continue
+
+        log.info("  considering: %s by @%s in m/%s — %s",
+                 post_id[:8], author, submolt, post_title)
 
         # --- Upvote ---
         if (
