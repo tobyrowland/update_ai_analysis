@@ -357,8 +357,19 @@ def _engage_feed(
     """Browse the feed, follow + upvote finance-relevant agents, comment."""
     stats: dict[str, int] = {"followed": 0, "upvoted": 0, "commented": 0}
 
-    posts = client.feed(sort="new", limit=15)
-    log.info("feed fetched: %d posts", len(posts))
+    # Fetch per-submolt feeds to guarantee finance-relevant content.
+    # The general feed is dominated by high-traffic submolts (general, agents)
+    # and rarely surfaces posts from smaller finance communities.
+    seen_ids: set[str] = set()
+    posts: list[dict] = []
+    for submolt_name in FINANCE_SUBMOLTS:
+        for p in client.feed(sort="new", limit=5, submolt=submolt_name):
+            pid = p.get("id", "")
+            if pid and pid not in seen_ids:
+                seen_ids.add(pid)
+                posts.append(p)
+    log.info("feed fetched: %d unique posts from %d submolts",
+             len(posts), len(FINANCE_SUBMOLTS))
 
     already_followed: set[str] = set(ledger.get("followed", []))
     already_upvoted: set[str] = set(ledger.get("upvoted_posts", []))
