@@ -310,3 +310,87 @@ WHERE h.snapshot_date = (
     WHERE h2.agent_id = h.agent_id
 )
 ORDER BY h.pnl_pct DESC;
+
+
+-- ============================================================
+-- Event-driven portfolio snapshots
+--
+-- Fires after every trade so `agent_portfolio_history` (and therefore
+-- `agent_leaderboard`) reflects the agent's state immediately instead of
+-- waiting for the nightly `portfolio_valuation.py` run. Mirrors the Python
+-- price-fallback behaviour: if `companies.price` is NULL we value the
+-- holding at its weighted-average cost so the snapshot never crashes on
+-- stale upstream data. Upserts on (agent_id, snapshot_date) so repeated
+-- trades on the same UTC day collapse into one row — matching the PK.
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION recompute_portfolio_snapshot(_agent_id UUID, _snapshot_date DATE)
+RETURNS VOID AS $$
+DECLARE
+    _cash             NUMERIC(14,2);
+    _starting_cash    NUMERIC(14,2);
+    _holdings_value   NUMERIC(14,2);
+    _num_positions    INTEGER;
+    _total_value      NUMERIC(14,2);
+    _pnl              NUMERIC(14,2);
+    _pnl_pct          NUMERIC(8,4);
+BEGIN
+    SELECT cash_usd, starting_cash
+      INTO _cash, _starting_cash
+      FROM agent_accounts
+     WHERE agent_id = _agent_id;
+
+    IF _cash IS NULL THEN
+        -- Agent has no account row yet; nothing to snapshot.
+        RETURN;
+    END IF;
+
+    SELECT
+        COALESCE(SUM(h.quantity * COALESCE(c.price, h.avg_cost_usd)), 0)::NUMERIC(14,2),
+        COUNT(*)::INTEGER
+      INTO _holdings_value, _num_positions
+      FROM agent_holdings h
+      LEFT JOIN companies c ON c.ticker = h.ticker
+     WHERE h.agent_id = _agent_id;
+
+    _total_value := _cash + _holdings_value;
+    _pnl         := _total_value - _starting_cash;
+    _pnl_pct     := CASE WHEN _starting_cash > 0
+                         THEN ROUND((_pnl / _starting_cash) * 100, 4)
+                         ELSE 0
+                    END;
+
+    INSERT INTO agent_portfolio_history (
+        agent_id, snapshot_date, cash_usd, holdings_value_usd,
+        total_value_usd, pnl_usd, pnl_pct, num_positions
+    ) VALUES (
+        _agent_id, _snapshot_date, _cash, _holdings_value,
+        _total_value, _pnl, _pnl_pct, _num_positions
+    )
+    ON CONFLICT (agent_id, snapshot_date) DO UPDATE SET
+        cash_usd           = EXCLUDED.cash_usd,
+        holdings_value_usd = EXCLUDED.holdings_value_usd,
+        total_value_usd    = EXCLUDED.total_value_usd,
+        pnl_usd            = EXCLUDED.pnl_usd,
+        pnl_pct            = EXCLUDED.pnl_pct,
+        num_positions      = EXCLUDED.num_positions;
+END;
+$$ LANGUAGE plpgsql;
+
+
+CREATE OR REPLACE FUNCTION tg_recompute_snapshot_on_trade()
+RETURNS TRIGGER AS $$
+BEGIN
+    PERFORM recompute_portfolio_snapshot(
+        NEW.agent_id,
+        (NEW.executed_at AT TIME ZONE 'UTC')::DATE
+    );
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+
+DROP TRIGGER IF EXISTS agent_trades_recompute_snapshot ON agent_trades;
+CREATE TRIGGER agent_trades_recompute_snapshot
+    AFTER INSERT ON agent_trades
+    FOR EACH ROW EXECUTE FUNCTION tg_recompute_snapshot_on_trade();
