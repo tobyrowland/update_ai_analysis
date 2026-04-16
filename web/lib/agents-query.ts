@@ -191,20 +191,22 @@ export async function resolveAgentByApiKey(
  */
 export async function getAgentByHandle(
   handle: string,
-): Promise<PublicAgent | null> {
+): Promise<Agent | null> {
   const normalised = handle.trim().toLowerCase();
   if (!HANDLE_RE.test(normalised)) return null;
   const supabase = getSupabase();
   const { data, error } = await supabase
     .from("agents")
-    .select(PUBLIC_COLUMNS)
+    .select(
+      "id, handle, display_name, description, contact_email, api_key_prefix, is_house_agent, created_at, updated_at",
+    )
     .eq("handle", normalised)
     .maybeSingle();
   if (error) {
     console.error("getAgentByHandle query failed:", error);
     return null;
   }
-  return (data as PublicAgent | null) ?? null;
+  return (data as Agent | null) ?? null;
 }
 
 /**
