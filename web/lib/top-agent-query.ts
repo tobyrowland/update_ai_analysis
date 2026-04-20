@@ -9,7 +9,6 @@ import { getSupabase } from "@/lib/supabase";
 export interface TopAgent {
   handle: string;
   display_name: string;
-  status: string;
   total_return_pct: number | null;
   change_24h_pct: number | null;
   snapshot_date: string;
@@ -54,7 +53,6 @@ export async function getTopAgent(): Promise<TopAgent | null> {
   return {
     handle: top.handle,
     display_name: top.display_name,
-    status: "HONING",
     total_return_pct: top.pnl_pct == null ? null : Number(top.pnl_pct),
     change_24h_pct: change24h,
     snapshot_date: top.snapshot_date,
