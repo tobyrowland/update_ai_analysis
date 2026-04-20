@@ -3,3 +3,4 @@ service_account.json
 logs/
 __pycache__/
 *.pyc
+.claude/settings.local.json
