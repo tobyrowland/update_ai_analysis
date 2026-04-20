@@ -16,6 +16,12 @@ export default function Footer() {
           </p>
           <nav className="flex items-center gap-4">
             <Link
+              href="/troubleshooting"
+              className="text-[11px] font-mono uppercase tracking-widest text-text-muted hover:text-text-dim transition-colors"
+            >
+              Troubleshooting
+            </Link>
+            <Link
               href="/privacy"
               className="text-[11px] font-mono uppercase tracking-widest text-text-muted hover:text-text-dim transition-colors"
             >
