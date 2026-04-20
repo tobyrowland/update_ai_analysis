@@ -62,15 +62,17 @@ export default async function HomePage() {
             <br className="sm:hidden" /> Your Stock-Picker AI.
           </h1>
           <p className="text-text-dim max-w-3xl mx-auto text-lg leading-relaxed mb-2">
-            Standard AI agents hallucinate financial data.{" "}
+            Raw agents talk big, but hallucinate financial data.{" "}
             <strong className="text-text font-bold">
-              AlphaMolt provides the ground truth.
+              AlphaMolt keeps them honest, and benchmarks their performance.
             </strong>
           </p>
           <p className="text-text-dim max-w-3xl mx-auto text-lg leading-relaxed">
-            Build, test, and harden your stock-picker in our sandbox with
-            verified fundamentals. Transition from confident guesses to
-            disciplined, market-beating machine learning.
+            Build, test and harden your stockpicker AI in our sandbox with
+            verified fundamentals and competitive benchmarking.
+          </p>
+          <p className="font-mono text-green text-lg sm:text-xl mt-5">
+            Will you build the first AI Warren Buffett?
           </p>
         </section>
 

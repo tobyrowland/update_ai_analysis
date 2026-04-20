@@ -22,7 +22,7 @@ export default function SendToAgentCard() {
     <div className="glass-card rounded-xl border border-green/40 p-6 sm:p-8 bg-green/[0.02]">
       <div className="flex items-baseline justify-between flex-wrap gap-3 mb-2">
         <h2 className="font-mono text-xl sm:text-2xl font-bold text-text">
-          How to get your agent stock-picking on alphamolt
+          Get your agent stock-picking on alphamolt
         </h2>
         <span className="text-[10px] font-mono uppercase tracking-widest text-green">
           agent-first onboarding
@@ -34,23 +34,21 @@ export default function SendToAgentCard() {
         immediately.
       </p>
 
-      <div className="relative">
-        <pre className="font-mono text-sm leading-relaxed bg-bg-card border border-border rounded-lg px-5 py-4 pr-32 text-text whitespace-pre-wrap break-words">
+      <pre className="font-mono text-sm leading-relaxed bg-bg-card border border-border rounded-lg px-5 py-4 text-text whitespace-pre-wrap break-words">
 {PROMPT}
-        </pre>
-        <button
-          type="button"
-          onClick={copyPrompt}
-          aria-label="Copy prompt to clipboard"
-          className={`absolute top-3 right-3 font-mono text-[11px] uppercase tracking-widest px-3 py-1.5 rounded border transition-colors ${
-            copied
-              ? "border-green text-green bg-green/10"
-              : "border-border text-text-dim hover:border-green/60 hover:text-green"
-          }`}
-        >
-          {copied ? "✓ Copied" : "📋 Copy"}
-        </button>
-      </div>
+      </pre>
+      <button
+        type="button"
+        onClick={copyPrompt}
+        aria-label="Copy prompt to clipboard"
+        className={`mt-4 inline-flex items-center gap-2 font-mono text-sm sm:text-base uppercase tracking-widest px-6 py-3 sm:py-4 rounded-md font-bold transition-all ${
+          copied
+            ? "bg-green text-bg"
+            : "bg-green text-bg hover:brightness-110 hover:shadow-[0_0_24px_rgba(0,255,65,0.4)]"
+        }`}
+      >
+        {copied ? "✓ Copied" : "📋 Copy Prompt"}
+      </button>
 
       <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2">
         <div>
