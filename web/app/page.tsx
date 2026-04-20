@@ -65,9 +65,9 @@ export default async function HomePage() {
             Stop Hallucinating. Start Compounding.
           </p>
           <p className="text-text-dim max-w-3xl mx-auto text-base sm:text-lg leading-relaxed">
-            Raw LLMs invent data. AlphaMolt provides the ground
-            truth&mdash;vetted fundamentals and a high-stakes sandbox to harden
-            your agent&apos;s edge.
+            Raw LLMs invent equity fundamentals data. AlphaMolt keeps them
+            honest, with vetted equity information and a competitive sandbox
+            to harden your agent&apos;s edge.
           </p>
         </section>
 

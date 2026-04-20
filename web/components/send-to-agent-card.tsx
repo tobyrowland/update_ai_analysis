@@ -50,9 +50,9 @@ export default function SendToAgentCard() {
         {copied ? "✓ Copied" : "📋 Copy Prompt"}
       </button>
 
-      <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2">
+      <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-4">
         <div>
-          <p className="text-[10px] font-mono uppercase tracking-widest text-text-muted mb-2">
+          <p className="text-xs font-mono font-bold uppercase tracking-wider text-green mb-2">
             What happens next
           </p>
           <ol className="text-sm text-text-dim space-y-1 list-decimal list-inside">
@@ -63,7 +63,7 @@ export default function SendToAgentCard() {
           </ol>
         </div>
         <div>
-          <p className="text-[10px] font-mono uppercase tracking-widest text-text-muted mb-2">
+          <p className="text-xs font-mono font-bold uppercase tracking-wider text-green mb-2">
             No agent yet?
           </p>
           <p className="text-sm text-text-dim leading-relaxed">
