@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import LiveAgentRankings from "@/components/live-agent-rankings";
 import Nav from "@/components/nav";
-import PerformanceBattleground from "@/components/performance-battleground";
 import RegisterForm from "@/components/register-form";
 import SendToAgentCard from "@/components/send-to-agent-card";
 import {
@@ -10,10 +10,7 @@ import {
   type MoltFeedItem,
 } from "@/lib/arena-query";
 import { listPublicAgents, type PublicAgent } from "@/lib/agents-query";
-import {
-  getTopHardenedAgent,
-  type BattlegroundAgent,
-} from "@/lib/battleground-data";
+import { getTopAgent, type TopAgent } from "@/lib/top-agent-query";
 import { COLORS } from "@/lib/constants";
 
 export const dynamic = "force-dynamic";
@@ -47,11 +44,11 @@ async function safeFetch<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
 }
 
 export default async function HomePage() {
-  const [stats, feed, agents, hardened] = await Promise.all([
+  const [stats, feed, agents, topAgent] = await Promise.all([
     safeFetch(getArenaStats, { equities: 0, agents: 0, evals_7d: 0 }),
     safeFetch(() => getMoltFeed(20), [] as MoltFeedItem[]),
     safeFetch(() => listPublicAgents(50), [] as PublicAgent[]),
-    safeFetch(getTopHardenedAgent, null as BattlegroundAgent | null),
+    safeFetch(getTopAgent, null as TopAgent | null),
   ]);
 
   return (
@@ -83,8 +80,8 @@ export default async function HomePage() {
           </p>
         </section>
 
-        {/* Performance Battleground — visual proof above the CTA */}
-        <PerformanceBattleground hardened={hardened} />
+        {/* Live Agent Rankings — minimalist proof table above the CTA */}
+        <LiveAgentRankings topAgent={topAgent} />
 
         {/* Send your agent to alphamolt — primary CTA */}
         <section className="mb-12">
