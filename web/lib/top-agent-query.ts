@@ -1,16 +1,18 @@
 // Server-side fetch for the homepage Live Agent Rankings table. Returns
-// the single top non-house agent from the leaderboard view, plus a
-// derived 24h change computed from the last two daily snapshots in
-// agent_portfolio_history. Returns null when no eligible agent exists
-// yet (early days) and the table renders an "awaiting" state.
+// the top non-house agent from the leaderboard view plus per-period
+// deltas and a 30-day equity curve. Returns null when there's no
+// eligible agent yet and the table renders an "awaiting" state.
 
 import { getSupabase } from "@/lib/supabase";
 
 export interface TopAgent {
   handle: string;
   display_name: string;
-  total_return_pct: number | null;
+  trades_30d: number;
   change_24h_pct: number | null;
+  mtd_pct: number | null;
+  ytd_pct: number | null;
+  sparkline: { x: number; y: number }[];
   snapshot_date: string;
 }
 
@@ -26,35 +28,79 @@ export async function getTopAgent(): Promise<TopAgent | null> {
     .maybeSingle();
   if (topErr || !top) return null;
 
-  // 24h delta needs the two most recent snapshots; the leaderboard view
-  // only exposes the latest, so we look up agent_id then pull two history
-  // rows.
   const { data: agent } = await supabase
     .from("agents")
     .select("id")
     .eq("handle", top.handle)
     .maybeSingle();
+  if (!agent) return null;
 
-  let change24h: number | null = null;
-  if (agent) {
-    const { data: history } = await supabase
-      .from("agent_portfolio_history")
-      .select("total_value_usd")
-      .eq("agent_id", agent.id)
-      .order("snapshot_date", { ascending: false })
-      .limit(2);
-    if (history && history.length === 2) {
-      const curr = Number(history[0].total_value_usd);
-      const prev = Number(history[1].total_value_usd);
-      if (prev > 0) change24h = ((curr - prev) / prev) * 100;
-    }
-  }
+  // Pull every snapshot since Jan 1 of the current year in one query.
+  // This covers everything we need: 30-day sparkline tail, 24h delta,
+  // MTD anchor, and YTD anchor.
+  const now = new Date();
+  const jan1 = `${now.getUTCFullYear()}-01-01`;
+  const { data: history } = await supabase
+    .from("agent_portfolio_history")
+    .select("snapshot_date, total_value_usd")
+    .eq("agent_id", agent.id)
+    .gte("snapshot_date", jan1)
+    .order("snapshot_date", { ascending: true });
+
+  const rows = history ?? [];
+  const latest = rows[rows.length - 1];
+  const prev = rows.length >= 2 ? rows[rows.length - 2] : null;
+
+  const monthStart = `${now.getUTCFullYear()}-${String(
+    now.getUTCMonth() + 1,
+  ).padStart(2, "0")}-01`;
+  const mtdAnchor = rows.find((r) => r.snapshot_date >= monthStart) ?? null;
+  const ytdAnchor = rows[0] ?? null;
+
+  const change24h = pctChange(prev, latest);
+  const mtd =
+    mtdAnchor && latest && mtdAnchor.snapshot_date !== latest.snapshot_date
+      ? pctChange(mtdAnchor, latest)
+      : null;
+  const ytd =
+    ytdAnchor && latest && ytdAnchor.snapshot_date !== latest.snapshot_date
+      ? pctChange(ytdAnchor, latest)
+      : null;
+
+  const sparkline = rows.slice(-30).map((r, i) => ({
+    x: i,
+    y: Number(r.total_value_usd),
+  }));
+
+  // 30-day trade count from the immutable trade journal.
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setUTCDate(thirtyDaysAgo.getUTCDate() - 30);
+  const { count } = await supabase
+    .from("agent_trades")
+    .select("*", { count: "exact", head: true })
+    .eq("agent_id", agent.id)
+    .gte("executed_at", thirtyDaysAgo.toISOString());
+  const trades_30d = count ?? 0;
 
   return {
     handle: top.handle,
     display_name: top.display_name,
-    total_return_pct: top.pnl_pct == null ? null : Number(top.pnl_pct),
+    trades_30d,
     change_24h_pct: change24h,
+    mtd_pct: mtd,
+    ytd_pct: ytd,
+    sparkline,
     snapshot_date: top.snapshot_date,
   };
+}
+
+function pctChange(
+  from: { total_value_usd: number | string } | null,
+  to: { total_value_usd: number | string } | null,
+): number | null {
+  if (!from || !to) return null;
+  const a = Number(from.total_value_usd);
+  const b = Number(to.total_value_usd);
+  if (!(a > 0)) return null;
+  return ((b - a) / a) * 100;
 }
