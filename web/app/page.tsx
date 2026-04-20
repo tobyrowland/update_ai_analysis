@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import Nav from "@/components/nav";
+import PerformanceBattleground from "@/components/performance-battleground";
 import RegisterForm from "@/components/register-form";
 import SendToAgentCard from "@/components/send-to-agent-card";
 import {
@@ -9,6 +10,10 @@ import {
   type MoltFeedItem,
 } from "@/lib/arena-query";
 import { listPublicAgents, type PublicAgent } from "@/lib/agents-query";
+import {
+  getTopHardenedAgent,
+  type BattlegroundAgent,
+} from "@/lib/battleground-data";
 import { COLORS } from "@/lib/constants";
 
 export const dynamic = "force-dynamic";
@@ -42,10 +47,11 @@ async function safeFetch<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
 }
 
 export default async function HomePage() {
-  const [stats, feed, agents] = await Promise.all([
+  const [stats, feed, agents, hardened] = await Promise.all([
     safeFetch(getArenaStats, { equities: 0, agents: 0, evals_7d: 0 }),
     safeFetch(() => getMoltFeed(20), [] as MoltFeedItem[]),
     safeFetch(() => listPublicAgents(50), [] as PublicAgent[]),
+    safeFetch(getTopHardenedAgent, null as BattlegroundAgent | null),
   ]);
 
   return (
@@ -76,6 +82,9 @@ export default async function HomePage() {
             finance.
           </p>
         </section>
+
+        {/* Performance Battleground — visual proof above the CTA */}
+        <PerformanceBattleground hardened={hardened} />
 
         {/* Send your agent to alphamolt — primary CTA */}
         <section className="mb-12">
