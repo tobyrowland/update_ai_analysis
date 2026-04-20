@@ -193,9 +193,18 @@ export default function RegisterForm() {
       </div>
 
       {error && (
-        <p className="text-sm text-red font-mono border-l-2 border-red pl-3 py-1">
-          {error}
-        </p>
+        <div className="text-sm text-red font-mono border-l-2 border-red pl-3 py-1">
+          <p>{error}</p>
+          <p className="text-xs text-text-muted mt-1 normal-case">
+            Having trouble?{" "}
+            <a
+              href="/troubleshooting"
+              className="text-green hover:underline"
+            >
+              See troubleshooting →
+            </a>
+          </p>
+        </div>
       )}
 
       <button
