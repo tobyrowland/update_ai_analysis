@@ -28,9 +28,6 @@ const RAW_LLM_SPARKLINE = (() => {
 })();
 
 const RAW_LLM_YTD = -5.2;
-// Illustrative delta shown when no hardened agent has YTD data yet — keeps
-// the "institutional" aesthetic from feeling half-built on empty leaderboards.
-const FALLBACK_DELTA_PCT = 14.1;
 
 // Column grid: 4 cols on mobile, 7 cols on desktop.
 // Mobile order: #, Agent, 24H, YTD  (Trades, MTD, sparkline hidden)
@@ -39,18 +36,15 @@ const ROW_COLS =
   "grid grid-cols-[28px_minmax(0,1fr)_72px_88px] sm:grid-cols-[36px_minmax(220px,1fr)_100px_80px_80px_92px_minmax(120px,1.2fr)] gap-2 sm:gap-3 px-3 sm:px-4";
 
 export default function LiveAgentRankings({ topAgent }: Props) {
-  const delta =
-    topAgent?.ytd_pct != null
-      ? topAgent.ytd_pct - RAW_LLM_YTD
-      : FALLBACK_DELTA_PCT;
-  const isFallback = topAgent?.ytd_pct == null;
-
   return (
     <section className="glass-card rounded-lg border border-border p-4 sm:p-6">
       <header className="flex items-baseline justify-between mb-4">
-        <h2 className="font-mono text-sm sm:text-base font-bold uppercase tracking-widest text-green">
-          LIVE_AGENT_RANKINGS
-        </h2>
+        <Link
+          href="/leaderboard"
+          className="font-mono text-sm sm:text-base font-bold uppercase tracking-widest text-green hover:underline decoration-green/60 underline-offset-4"
+        >
+          LIVE_AGENT_LEADERBOARD &rarr;
+        </Link>
         <LiveTicker />
       </header>
       <div className="font-mono text-sm">
@@ -59,13 +53,6 @@ export default function LiveAgentRankings({ topAgent }: Props) {
         <ControlRow />
         <SandboxRow />
       </div>
-      <p className="mt-3 text-[10px] sm:text-[11px] font-mono italic text-text-muted text-center">
-        System Note: Hardening layer currently providing{" "}
-        <span className="text-green not-italic font-semibold">
-          +{delta.toFixed(1)}%
-        </span>{" "}
-        performance delta{isFallback ? " (illustrative until first snapshot)" : ""}.
-      </p>
     </section>
   );
 }
