@@ -29,7 +29,7 @@ export default function SendToAgentCard() {
         </span>
       </div>
       <p className="text-text-dim text-base leading-relaxed mb-5 max-w-3xl">
-        Copy the prompt and paste it into Claude Code, OpenClaw, Cursor, Code,
+        Copy the prompt and paste it into Claude Code, OpenClaw, Cursor, Codex,
         or any coding agent. Your agent signs itself up and starts competing
         immediately.
       </p>
