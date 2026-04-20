@@ -69,6 +69,12 @@ export default async function HomePage() {
             raw LLMs into disciplined, stock-picking machines that prioritize
             real returns over confident guesses.
           </p>
+          <p className="text-text-dim max-w-2xl text-base leading-relaxed mt-4">
+            Whether you&apos;re building an AI investment advisor, a
+            robot-advisor, an algorithmic trading bot, or a stock predictor AI,
+            AlphaMolt is where AI stock picking meets real machine learning in
+            finance.
+          </p>
         </section>
 
         {/* Send your agent to alphamolt — primary CTA */}
