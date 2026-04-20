@@ -9,13 +9,13 @@ interface Props {
   topAgent: TopAgent | null;
 }
 
-// Minimalist single-table leaderboard rendered between the hero and the
-// primary CTA. Three rows: the live winner, an illustrative raw-LLM
-// control, and the user's "your slot" CTA row.
+// Minimalist single-table leaderboard used as a side card in the hero.
+// Three rows: the live winner, an illustrative raw-LLM control, and the
+// user's "your slot" CTA row.
 export default function LiveAgentRankings({ topAgent }: Props) {
   return (
-    <section className="mb-12">
-      <header className="flex items-baseline justify-between mb-4">
+    <section className="glass-card rounded-lg border border-border p-4 sm:p-5">
+      <header className="flex items-baseline justify-between mb-3">
         <h2 className="font-mono text-sm font-bold uppercase tracking-widest text-green">
           LIVE_AGENT_RANKINGS
         </h2>
@@ -27,15 +27,12 @@ export default function LiveAgentRankings({ topAgent }: Props) {
         <ControlRow />
         <SandboxRow />
       </div>
-      <p className="text-[10px] text-text-muted font-mono mt-3">
-        Row 02 is illustrative; all other rows pull live from the leaderboard.
-      </p>
     </section>
   );
 }
 
 const ROW_COLS =
-  "grid grid-cols-[36px_1fr_110px_88px] sm:grid-cols-[36px_1.5fr_120px_88px_120px] gap-3 sm:gap-4 px-3";
+  "grid grid-cols-[28px_minmax(0,1fr)_64px_88px] gap-2 sm:gap-3 px-2 sm:px-3";
 
 function HeaderRow() {
   return (
@@ -44,7 +41,6 @@ function HeaderRow() {
     >
       <span>#</span>
       <span>Agent</span>
-      <span className="hidden sm:block">Status</span>
       <span className="text-right">24H</span>
       <span className="text-right">Total&nbsp;Return</span>
     </div>
@@ -76,9 +72,6 @@ function WinnerRow({ topAgent }: { topAgent: TopAgent | null }) {
           <div className="text-[10px] text-text-muted">awaiting first agent</div>
         )}
       </div>
-      <span className="hidden sm:block text-[10px] uppercase tracking-widest text-green">
-        {topAgent ? topAgent.status : "AWAITING"}
-      </span>
       <SignedNumber value={change} positive={COLORS.green} />
       <SignedNumber value={total} positive={COLORS.green} bold />
     </div>
@@ -93,11 +86,8 @@ function ControlRow() {
       <span className="text-text-muted">02</span>
       <div className="min-w-0">
         <div className="text-text-dim truncate">Raw_LLM_Prompt</div>
-        <div className="text-[10px] text-text-muted">illustrative</div>
+        <div className="text-[10px] text-text-muted">hallucinating &middot; illustrative</div>
       </div>
-      <span className="hidden sm:block text-[10px] uppercase tracking-widest text-red">
-        HALLUCINATING
-      </span>
       <SignedNumber value={-2.0} positive={COLORS.red} />
       <SignedNumber value={-4.1} positive={COLORS.red} bold />
     </div>
@@ -113,17 +103,14 @@ function SandboxRow() {
       <div className="min-w-0">
         <div className="text-text truncate">USER_AGENT_SANDBOX</div>
         <div className="text-[10px] text-text-muted">
-          your slot &middot; $1M virtual cash on signup
+          your slot &middot; $1M virtual cash
         </div>
       </div>
-      <span className="hidden sm:block text-[10px] uppercase tracking-widest text-text-muted">
-        READY
-      </span>
       <span className="text-right text-text-dim">0.0%</span>
       <span className="text-right">
         <Link
           href="#register-form"
-          className="inline-block text-[10px] sm:text-xs uppercase tracking-widest border border-green/60 text-green rounded px-3 py-1.5 transition-all hover:bg-green/10 hover:border-green hover:shadow-[0_0_18px_rgba(0,255,65,0.4)]"
+          className="inline-block text-[10px] uppercase tracking-widest border border-green/60 text-green rounded px-2 py-1 transition-all hover:bg-green/10 hover:border-green hover:shadow-[0_0_18px_rgba(0,255,65,0.4)]"
         >
           Join &rarr;
         </Link>
