@@ -48,12 +48,6 @@ export default function LiveAgentRankings({ topAgent }: Props) {
         <ControlRow />
         <SandboxRow />
       </div>
-      <Link
-        href="#onboard"
-        className="block mt-5 text-center font-mono text-sm sm:text-base font-bold tracking-wide bg-text text-bg rounded-md py-3 sm:py-4 transition-all hover:brightness-110 hover:shadow-[0_0_24px_rgba(237,237,237,0.3)]"
-      >
-        Build Your Agent
-      </Link>
     </section>
   );
 }
@@ -61,7 +55,7 @@ export default function LiveAgentRankings({ topAgent }: Props) {
 function HeaderRow() {
   return (
     <div
-      className={`${ROW_COLS} py-2 text-[10px] uppercase tracking-widest text-text-muted border-b border-gray-800`}
+      className={`${ROW_COLS} py-3 text-[11px] font-bold uppercase tracking-wider text-text-dim border-b border-gray-800`}
     >
       <span>#</span>
       <span>Agent</span>
