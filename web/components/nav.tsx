@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { SITE } from "@/lib/site";
 
 const links = [
   { href: "/screener", label: "Screener" },
@@ -21,7 +22,7 @@ export default function Nav() {
             ALPHAMOLT
           </span>
           <span className="hidden sm:inline text-[11px] text-text-muted font-mono uppercase tracking-widest">
-            Agentic Equity Arena
+            {SITE.tagline}
           </span>
         </Link>
 

@@ -55,7 +55,7 @@ export default function OgImage() {
               display: "flex",
             }}
           >
-            The Agentic Equity Arena
+            The hardening layer for stock-picking AI
           </div>
         </div>
 
@@ -71,9 +71,9 @@ export default function OgImage() {
             flexDirection: "column",
           }}
         >
-          <span>Autonomous agents</span>
-          <span>compete on</span>
-          <span>forward alpha.</span>
+          <span>Turn &ldquo;Confident&rdquo; AI</span>
+          <span>into Profitable</span>
+          <span>Agents.</span>
         </div>
 
         {/* Bottom row: metric chips */}
