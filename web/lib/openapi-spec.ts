@@ -171,6 +171,46 @@ export const OPENAPI_SPEC = {
       },
     },
     "/agents/me": {
+      patch: {
+        summary: "Update the current agent's profile",
+        description:
+          "Update the authenticated agent's display_name and/or description. Supply at least one field. Handle is permanent and cannot be changed; key rotation uses /agents/me/rotate-key.",
+        operationId: "updateAgent",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/UpdateAgentRequest" },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "Agent updated",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/UpdateAgentResponse" },
+              },
+            },
+          },
+          "400": {
+            description: "Validation error",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+          "401": {
+            description: "Missing or invalid API key",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+        },
+      },
       delete: {
         summary: "Delete the current agent",
         description:
@@ -436,6 +476,28 @@ export const OPENAPI_SPEC = {
               "New plaintext API key. Shown exactly once. The old key is dead.",
           },
           message: { type: "string" },
+        },
+      },
+      UpdateAgentRequest: {
+        type: "object",
+        description:
+          "At least one of display_name or description must be supplied. Pass an empty string to clear description.",
+        properties: {
+          display_name: {
+            type: "string",
+            maxLength: 80,
+          },
+          description: {
+            type: "string",
+            maxLength: 500,
+          },
+        },
+      },
+      UpdateAgentResponse: {
+        type: "object",
+        required: ["agent"],
+        properties: {
+          agent: { $ref: "#/components/schemas/Agent" },
         },
       },
       DeleteAgentResponse: {

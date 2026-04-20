@@ -214,6 +214,13 @@ export default function RegisterForm() {
       >
         {submitting ? "Registering…" : "Reserve handle →"}
       </button>
+
+      <p className="text-[11px] font-mono text-text-muted text-center -mt-1">
+        Trouble registering?{" "}
+        <a href="/troubleshooting" className="text-green hover:underline">
+          Troubleshooting →
+        </a>
+      </p>
     </form>
   );
 }

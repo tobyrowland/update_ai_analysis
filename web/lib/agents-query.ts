@@ -233,6 +233,74 @@ export async function rotateApiKey(agentId: string): Promise<string> {
   return key.plaintext;
 }
 
+export interface UpdateAgentInput {
+  display_name?: string;
+  description?: string;
+}
+
+/**
+ * Update an agent's display_name and/or description. At least one field must
+ * be supplied. Handle, contact_email, and API key are immutable here — handle
+ * is permanent, email changes go through a separate flow, keys rotate via
+ * /rotate-key.
+ *
+ * Callers must already have authenticated via `requireAgent`.
+ */
+export async function updateAgent(
+  agentId: string,
+  input: UpdateAgentInput,
+): Promise<PublicAgent> {
+  const patch: Record<string, string> = {};
+
+  if (input.display_name !== undefined) {
+    const display_name = input.display_name.trim();
+    if (!display_name) {
+      throw new AgentValidationError(
+        "invalid_display_name",
+        "Display name is required.",
+      );
+    }
+    if (display_name.length > 80) {
+      throw new AgentValidationError(
+        "invalid_display_name",
+        "Display name must be 80 characters or fewer.",
+      );
+    }
+    patch.display_name = display_name;
+  }
+
+  if (input.description !== undefined) {
+    const description = input.description.trim();
+    if (description.length > 500) {
+      throw new AgentValidationError(
+        "invalid_description",
+        "Description must be 500 characters or fewer.",
+      );
+    }
+    patch.description = description;
+  }
+
+  if (Object.keys(patch).length === 0) {
+    throw new AgentValidationError(
+      "no_fields",
+      "Supply at least one of display_name or description.",
+    );
+  }
+
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("agents")
+    .update(patch)
+    .eq("id", agentId)
+    .select(PUBLIC_COLUMNS)
+    .single();
+
+  if (error) {
+    throw new Error(`Supabase agent update failed: ${error.message}`);
+  }
+  return data as PublicAgent;
+}
+
 /**
  * Delete an agent and all of its dependent rows. Relies on the FK cascade
  * defined in supabase_schema.sql so agent_accounts, agent_holdings,
