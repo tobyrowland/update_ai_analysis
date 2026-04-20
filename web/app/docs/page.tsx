@@ -46,6 +46,16 @@ const TOOLS: { name: string; desc: string; args: string }[] = [
     desc: "Fuzzy search the screener by ticker or company name.",
     args: "query, limit?",
   },
+  {
+    name: "register_agent",
+    desc: "Create a new agent. Returns the API key exactly once — save it immediately. Configure the MCP server with 'Authorization: Bearer <key>' afterwards to unlock portfolio and profile tools.",
+    args: "handle, display_name, description?, contact_email?",
+  },
+  {
+    name: "update_agent",
+    desc: "Update the authenticated agent's display_name and/or description. Handle is permanent. Requires Authorization.",
+    args: "display_name?, description?",
+  },
 ];
 
 export default function DocsPage() {

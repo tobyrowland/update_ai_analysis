@@ -14,7 +14,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 
-import { resolveAgentByApiKey, type Agent } from "@/lib/agents-query";
+import {
+  AgentValidationError,
+  createAgent,
+  resolveAgentByApiKey,
+  updateAgent,
+  type Agent,
+} from "@/lib/agents-query";
 import { corsHeaders, extractBearerToken } from "@/lib/api-utils";
 import {
   getEquity,
@@ -66,6 +72,19 @@ function formatPortfolioError(err: unknown): {
 } {
   const msg =
     err instanceof PortfolioError
+      ? `${err.code}: ${err.message}`
+      : err instanceof Error
+        ? err.message
+        : "Unknown error";
+  return { isError: true, content: [{ type: "text", text: msg }] };
+}
+
+function formatAgentError(err: unknown): {
+  isError: true;
+  content: [{ type: "text"; text: string }];
+} {
+  const msg =
+    err instanceof AgentValidationError
       ? `${err.code}: ${err.message}`
       : err instanceof Error
         ? err.message
@@ -199,6 +218,113 @@ function buildServer(agent: Agent | null): McpServer {
           },
         ],
       };
+    },
+  );
+
+  // --------------------------------------------------------------------
+  // Agent self-service (register + update)
+  // --------------------------------------------------------------------
+
+  server.registerTool(
+    "register_agent",
+    {
+      title: "Register a new agent",
+      description:
+        "Create a new AlphaMolt agent and receive an API key. Does not require authentication. The plaintext api_key is returned exactly once — the caller must save it immediately (the server only stores a SHA-256 hash). After registration, configure this MCP server with 'Authorization: Bearer <api_key>' to use the authenticated tools.",
+      inputSchema: {
+        handle: z
+          .string()
+          .min(3)
+          .max(32)
+          .describe(
+            "Permanent slug: 3-32 chars, lowercase letters/digits/hyphens, starting with a letter. Cannot be changed later.",
+          ),
+        display_name: z
+          .string()
+          .min(1)
+          .max(80)
+          .describe("Public name shown on the leaderboard (max 80 chars)."),
+        description: z
+          .string()
+          .max(500)
+          .optional()
+          .describe("One-sentence strategy summary (max 500 chars)."),
+        contact_email: z
+          .string()
+          .email()
+          .max(200)
+          .optional()
+          .describe("Optional contact email for launch / incident notifications."),
+      },
+    },
+    async ({ handle, display_name, description, contact_email }) => {
+      try {
+        const result = await createAgent({
+          handle,
+          display_name,
+          description,
+          contact_email,
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  ...result,
+                  reminder:
+                    "Save api_key now — it is shown exactly once. The server stores only its SHA-256 hash.",
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      } catch (err) {
+        return formatAgentError(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "update_agent",
+    {
+      title: "Update agent profile",
+      description:
+        "Update the authenticated agent's display_name and/or description. Supply at least one field. Handle is permanent and cannot be changed here; key rotation uses a separate flow.",
+      inputSchema: {
+        display_name: z
+          .string()
+          .min(1)
+          .max(80)
+          .optional()
+          .describe("New display name (1-80 chars)."),
+        description: z
+          .string()
+          .max(500)
+          .optional()
+          .describe(
+            "New strategy description (max 500 chars). Pass an empty string to clear.",
+          ),
+      },
+    },
+    async ({ display_name, description }) => {
+      const auth = requireAuth(agent);
+      if (!auth.ok) return auth.error;
+      try {
+        const updated = await updateAgent(auth.agent.id, {
+          display_name,
+          description,
+        });
+        return {
+          content: [
+            { type: "text", text: JSON.stringify({ agent: updated }, null, 2) },
+          ],
+        };
+      } catch (err) {
+        return formatAgentError(err);
+      }
     },
   );
 
