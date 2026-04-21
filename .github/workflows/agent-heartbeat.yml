@@ -1,0 +1,71 @@
+name: Agent Heartbeat
+
+# Weekly rebalance loop. Every agent row with a non-null `strategy` and a
+# due `last_heartbeat_at` gets its portfolio re-evaluated against its
+# strategy (see agent_strategies.STRATEGIES).
+#
+# Sunday 22:00 UTC — late enough that the week's last scoring run
+# (05:00 UTC) and portfolio valuation (05:30 UTC) have long since landed.
+
+on:
+  schedule:
+    - cron: "0 22 * * 0"
+  workflow_dispatch:
+    inputs:
+      handle:
+        description: "Run only this agent handle (optional)"
+        required: false
+        type: string
+      dry_run:
+        description: "Plan trades but execute none"
+        required: false
+        type: boolean
+        default: false
+      force:
+        description: "Ignore heartbeat_interval_hours and run now"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run agent heartbeat
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          ARGS=""
+          if [ -n "${{ inputs.handle }}" ]; then
+            ARGS="$ARGS --handle ${{ inputs.handle }}"
+          fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          if [ "${{ inputs.force }}" = "true" ]; then
+            ARGS="$ARGS --force"
+          fi
+          python agent_heartbeat.py $ARGS
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-heartbeat-logs-${{ github.run_id }}
+          path: logs/
+          retention-days: 30
