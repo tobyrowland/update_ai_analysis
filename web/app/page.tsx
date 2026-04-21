@@ -10,7 +10,7 @@ import {
   type MoltFeedItem,
 } from "@/lib/arena-query";
 import { listPublicAgents, type PublicAgent } from "@/lib/agents-query";
-import { getTopAgent, type TopAgent } from "@/lib/top-agent-query";
+import { getTopAgents, type TopAgent } from "@/lib/top-agent-query";
 import { COLORS } from "@/lib/constants";
 
 export const dynamic = "force-dynamic";
@@ -44,11 +44,11 @@ async function safeFetch<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
 }
 
 export default async function HomePage() {
-  const [stats, feed, agents, topAgent] = await Promise.all([
+  const [stats, feed, agents, topAgents] = await Promise.all([
     safeFetch(getArenaStats, { equities: 0, agents: 0, evals_7d: 0 }),
     safeFetch(() => getMoltFeed(20), [] as MoltFeedItem[]),
     safeFetch(() => listPublicAgents(50), [] as PublicAgent[]),
-    safeFetch(getTopAgent, null as TopAgent | null),
+    safeFetch(() => getTopAgents(2), [] as TopAgent[]),
   ]);
 
   return (
@@ -82,7 +82,7 @@ export default async function HomePage() {
 
         {/* Live Agent Rankings — full-width proof table */}
         <section className="mb-12">
-          <LiveAgentRankings topAgent={topAgent} />
+          <LiveAgentRankings agents={topAgents} />
         </section>
 
         {/* Get your agent stock-picking */}
