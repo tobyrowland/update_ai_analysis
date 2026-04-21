@@ -394,3 +394,88 @@ DROP TRIGGER IF EXISTS agent_trades_recompute_snapshot ON agent_trades;
 CREATE TRIGGER agent_trades_recompute_snapshot
     AFTER INSERT ON agent_trades
     FOR EACH ROW EXECUTE FUNCTION tg_recompute_snapshot_on_trade();
+
+
+-- ============================================================
+-- Benchmark portfolios (S&P 500, MSCI World, etc.)
+--
+-- Passive-index reference portfolios shown alongside agent rows on the
+-- leaderboard. NOT equities (no screener pollution) and NOT agents
+-- (no trade journal / $1M cash account) — performance is computed from
+-- the ratio of today's adjusted close to the inception close. The
+-- nightly `benchmarks_updater.py` appends one row to benchmark_prices
+-- per benchmark per day and refreshes benchmarks.latest_price.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS benchmarks (
+    ticker                  TEXT PRIMARY KEY,               -- e.g. 'SPY.US', 'URTH.US'
+    display_name            TEXT NOT NULL,                  -- e.g. 'S&P 500 (SPY)'
+    inception_date          DATE NOT NULL,                  -- matches earliest agent inception
+    inception_price         NUMERIC(14,4) NOT NULL,         -- adjusted close on inception_date
+    latest_price            NUMERIC(14,4),
+    latest_price_date       DATE,
+    notional_starting_cash  NUMERIC(14,2) NOT NULL DEFAULT 1000000,
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS benchmark_prices (
+    ticker       TEXT NOT NULL REFERENCES benchmarks(ticker) ON DELETE CASCADE,
+    price_date   DATE NOT NULL,
+    close        NUMERIC(14,4) NOT NULL,
+    PRIMARY KEY (ticker, price_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bench_prices_date ON benchmark_prices (price_date DESC);
+
+
+-- ============================================================
+-- agent_leaderboard view — enriched with pnl_pct_30d
+--
+-- Supersedes the earlier definition above. Adds a rolling 30-day return
+-- column (NULL when the agent has <30 days of history) so the /leaderboard
+-- page can rank everyone on the same window regardless of inception date.
+-- The default sort stays `pnl_pct DESC` for backwards-compat with the
+-- homepage LIVE_AGENT_LEADERBOARD card; the leaderboard page re-sorts.
+-- ============================================================
+
+CREATE OR REPLACE VIEW agent_leaderboard AS
+WITH latest AS (
+    SELECT DISTINCT ON (agent_id)
+        agent_id,
+        snapshot_date,
+        cash_usd,
+        holdings_value_usd,
+        total_value_usd,
+        pnl_usd,
+        pnl_pct,
+        num_positions
+    FROM agent_portfolio_history
+    ORDER BY agent_id, snapshot_date DESC
+),
+thirty_days_ago AS (
+    SELECT DISTINCT ON (agent_id)
+        agent_id,
+        total_value_usd AS value_30d_ago
+    FROM agent_portfolio_history
+    WHERE snapshot_date <= CURRENT_DATE - INTERVAL '30 days'
+    ORDER BY agent_id, snapshot_date DESC
+)
+SELECT
+    a.handle,
+    a.display_name,
+    a.is_house_agent,
+    l.snapshot_date,
+    l.cash_usd,
+    l.holdings_value_usd,
+    l.total_value_usd,
+    l.pnl_usd,
+    l.pnl_pct,
+    l.num_positions,
+    CASE
+        WHEN t.value_30d_ago IS NULL OR t.value_30d_ago = 0 THEN NULL
+        ELSE ROUND(((l.total_value_usd - t.value_30d_ago) / t.value_30d_ago) * 100, 4)
+    END AS pnl_pct_30d
+FROM latest l
+JOIN agents a ON a.id = l.agent_id
+LEFT JOIN thirty_days_ago t ON t.agent_id = l.agent_id
+ORDER BY l.pnl_pct DESC;

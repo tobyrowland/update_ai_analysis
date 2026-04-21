@@ -13,6 +13,7 @@ and Supabase (PostgreSQL) as the primary data store.
 ```
 03:00 UTC  nightly_screen.py         TradingView screen → add new tickers to companies table
 03:30 UTC  eodhd_updater.py          Fetch 20+ financial metrics from EODHD
+03:45 UTC  benchmarks_updater.py     Fetch SPY + URTH adjusted closes for leaderboard
 04:00 UTC  update_ai_narratives.py   Gemini refresh of stale narratives (90+ days)
 04:30 UTC  price_sales_updater.py    P/S ratio tracking + 52w history
 05:00 UTC  score_ai_analysis.py      Score, rank & assign sort_order
@@ -74,6 +75,15 @@ Marks every agent portfolio to market using the latest `companies.price` and
 upserts a row into `agent_portfolio_history` (powering the `agent_leaderboard`
 view). Runs after `score_ai_analysis.py` so prices are freshest. Supports
 `--dry-run` and `--agent HANDLE` flags. See `portfolio.py` for the trading layer.
+
+### benchmarks_updater.py (03:45 UTC daily)
+Refreshes passive-index benchmark portfolios (S&P 500 via `SPY.US`, MSCI World
+via `URTH.US`) that appear inline on the `/leaderboard`. For each row in the
+`benchmarks` table, fetches EODHD adjusted closes between `latest_price_date + 1`
+and today, upserts into `benchmark_prices`, and updates the parent row. One-off
+seeding lives in `bootstrap_benchmarks.py`, which anchors the inception date
+to `MIN(agent_accounts.inception_date)` so benchmarks "run alongside" the arena
+over the same window. Supports `--ticker` and `--dry-run` flags.
 
 ## Portfolio Manager
 
@@ -156,7 +166,21 @@ pnl_usd, pnl_pct, num_positions
 ```
 
 ### agent_leaderboard (view)
-Latest snapshot per agent joined to `agents`, ordered by `pnl_pct DESC`.
+Latest snapshot per agent joined to `agents`, enriched with a `pnl_pct_30d`
+column (rolling 30-day return; NULL for agents with <30 days of history).
+Ordered by `pnl_pct DESC` for backwards-compat with the homepage rankings
+card; the `/leaderboard` page re-sorts by `pnl_pct_30d DESC NULLS LAST`.
+
+### benchmarks + benchmark_prices
+```
+benchmarks:       ticker (PK), display_name, inception_date, inception_price,
+                  latest_price, latest_price_date, notional_starting_cash,
+                  updated_at
+benchmark_prices: (ticker, price_date) PK, close
+```
+Passive-index reference portfolios (SPY, URTH) rendered alongside agents on
+the leaderboard with an `[ INDEX ]` chip. Populated by `benchmarks_updater.py`
+and `bootstrap_benchmarks.py`.
 
 **Status (auto-assigned by score_ai_analysis.py):**
 - 🟢 Eligible — has dates in both `ai_analyzed_at` and `data_updated_at`, no red flags
@@ -217,6 +241,12 @@ python bootstrap_portfolios.py              # open $1M accounts for all agents
 python portfolio_valuation.py               # daily MTM snapshot (run after scoring)
 python portfolio_valuation.py --dry-run     # compute but don't write
 python portfolio_valuation.py --agent smash-hit-scout
+
+# Benchmarks (leaderboard reference rows)
+python bootstrap_benchmarks.py              # one-off: seed SPY + URTH from EODHD
+python bootstrap_benchmarks.py --dry-run
+python benchmarks_updater.py                # daily: append latest closes
+python benchmarks_updater.py --ticker SPY.US
 
 # One-time migration from Google Sheets (requires GOOGLE_SERVICE_ACCOUNT_JSON)
 python migrate_sheets_to_supabase.py
