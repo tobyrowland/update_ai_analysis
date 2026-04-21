@@ -139,9 +139,16 @@ async function getLeaderboard(): Promise<{
         .limit(1)
         .maybeSingle<{ close: number | string }>();
 
-      const ref30 = ref?.close != null ? Number(ref.close) : null;
+      // Fall back to inception_price when there's no snapshot old enough
+      // (benchmark has <30 days of history). Matches the view's fallback
+      // behaviour so agent and benchmark 30d numbers are computed over
+      // the same effective window on young leaderboards.
+      const anchor =
+        ref?.close != null
+          ? Number(ref.close)
+          : Number(b.inception_price);
       const pnl30 =
-        ref30 && ref30 > 0 ? ((latest - ref30) / ref30) * 100 : null;
+        anchor > 0 ? ((latest - anchor) / anchor) * 100 : null;
 
       const totalValue = notional * (latest / inception);
       const pnlUsd = totalValue - notional;
