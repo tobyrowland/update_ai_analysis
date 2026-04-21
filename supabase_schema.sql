@@ -429,15 +429,15 @@ CREATE INDEX IF NOT EXISTS idx_bench_prices_date ON benchmark_prices (price_date
 
 
 -- ============================================================
--- agent_leaderboard view — enriched with pnl_pct_30d (with fallback)
+-- agent_leaderboard view — four rolling return windows
 --
--- Supersedes the earlier definition above. Adds a rolling 30-day return
--- column so the /leaderboard page can rank on a fair window. When the
--- agent has <30 days of history (e.g. during the arena's first month),
--- falls back to the earliest-available snapshot so the column isn't
--- all-NULL on young leaderboards. Default sort stays `pnl_pct DESC`
--- for backwards-compat with the homepage LIVE_AGENT_LEADERBOARD card;
--- the leaderboard page re-sorts by pnl_pct_30d DESC NULLS LAST.
+-- Supersedes the earlier definition above. Exposes pnl_pct_1d /
+-- pnl_pct_30d / pnl_pct_ytd / pnl_pct_1yr, each computed with a
+-- since-inception fallback when the agent has less history than the
+-- window. Keeps pnl_pct (all-time) on the view so the homepage
+-- rankings card still reads it. Default sort stays `pnl_pct DESC`
+-- for backwards-compat; the leaderboard page re-sorts by
+-- pnl_pct_30d DESC NULLS LAST.
 -- ============================================================
 
 CREATE OR REPLACE VIEW agent_leaderboard AS
@@ -454,8 +454,22 @@ WITH latest AS (
     FROM agent_portfolio_history
     ORDER BY agent_id, snapshot_date DESC
 ),
+first_snapshot AS (
+    SELECT DISTINCT ON (agent_id)
+        agent_id,
+        total_value_usd AS value_anchor
+    FROM agent_portfolio_history
+    ORDER BY agent_id, snapshot_date ASC
+),
+one_day_ago AS (
+    SELECT DISTINCT ON (agent_id)
+        agent_id,
+        total_value_usd AS value_anchor
+    FROM agent_portfolio_history
+    WHERE snapshot_date <= CURRENT_DATE - INTERVAL '1 day'
+    ORDER BY agent_id, snapshot_date DESC
+),
 thirty_days_ago AS (
-    -- Preferred anchor: most recent snapshot on/before 30 days ago.
     SELECT DISTINCT ON (agent_id)
         agent_id,
         total_value_usd AS value_anchor
@@ -463,13 +477,21 @@ thirty_days_ago AS (
     WHERE snapshot_date <= CURRENT_DATE - INTERVAL '30 days'
     ORDER BY agent_id, snapshot_date DESC
 ),
-first_snapshot AS (
-    -- Fallback anchor: earliest snapshot for this agent (since inception).
+year_start AS (
     SELECT DISTINCT ON (agent_id)
         agent_id,
         total_value_usd AS value_anchor
     FROM agent_portfolio_history
+    WHERE snapshot_date >= DATE_TRUNC('year', CURRENT_DATE)::DATE
     ORDER BY agent_id, snapshot_date ASC
+),
+one_year_ago AS (
+    SELECT DISTINCT ON (agent_id)
+        agent_id,
+        total_value_usd AS value_anchor
+    FROM agent_portfolio_history
+    WHERE snapshot_date <= CURRENT_DATE - INTERVAL '1 year'
+    ORDER BY agent_id, snapshot_date DESC
 )
 SELECT
     a.handle,
@@ -483,17 +505,34 @@ SELECT
     l.pnl_pct,
     l.num_positions,
     CASE
+        WHEN COALESCE(t1d.value_anchor, tfirst.value_anchor) IS NULL
+          OR COALESCE(t1d.value_anchor, tfirst.value_anchor) = 0 THEN NULL
+        ELSE ROUND(((l.total_value_usd - COALESCE(t1d.value_anchor, tfirst.value_anchor))
+                    / COALESCE(t1d.value_anchor, tfirst.value_anchor)) * 100, 4)
+    END AS pnl_pct_1d,
+    CASE
         WHEN COALESCE(t30.value_anchor, tfirst.value_anchor) IS NULL
-          OR COALESCE(t30.value_anchor, tfirst.value_anchor) = 0
-            THEN NULL
-        ELSE ROUND(
-            ((l.total_value_usd - COALESCE(t30.value_anchor, tfirst.value_anchor))
-             / COALESCE(t30.value_anchor, tfirst.value_anchor)) * 100,
-            4
-        )
-    END AS pnl_pct_30d
+          OR COALESCE(t30.value_anchor, tfirst.value_anchor) = 0 THEN NULL
+        ELSE ROUND(((l.total_value_usd - COALESCE(t30.value_anchor, tfirst.value_anchor))
+                    / COALESCE(t30.value_anchor, tfirst.value_anchor)) * 100, 4)
+    END AS pnl_pct_30d,
+    CASE
+        WHEN COALESCE(tytd.value_anchor, tfirst.value_anchor) IS NULL
+          OR COALESCE(tytd.value_anchor, tfirst.value_anchor) = 0 THEN NULL
+        ELSE ROUND(((l.total_value_usd - COALESCE(tytd.value_anchor, tfirst.value_anchor))
+                    / COALESCE(tytd.value_anchor, tfirst.value_anchor)) * 100, 4)
+    END AS pnl_pct_ytd,
+    CASE
+        WHEN COALESCE(t1y.value_anchor, tfirst.value_anchor) IS NULL
+          OR COALESCE(t1y.value_anchor, tfirst.value_anchor) = 0 THEN NULL
+        ELSE ROUND(((l.total_value_usd - COALESCE(t1y.value_anchor, tfirst.value_anchor))
+                    / COALESCE(t1y.value_anchor, tfirst.value_anchor)) * 100, 4)
+    END AS pnl_pct_1yr
 FROM latest l
 JOIN agents a ON a.id = l.agent_id
-LEFT JOIN thirty_days_ago t30 ON t30.agent_id = l.agent_id
-LEFT JOIN first_snapshot tfirst ON tfirst.agent_id = l.agent_id
+LEFT JOIN first_snapshot  tfirst ON tfirst.agent_id = l.agent_id
+LEFT JOIN one_day_ago     t1d    ON t1d.agent_id    = l.agent_id
+LEFT JOIN thirty_days_ago t30    ON t30.agent_id    = l.agent_id
+LEFT JOIN year_start      tytd   ON tytd.agent_id   = l.agent_id
+LEFT JOIN one_year_ago    t1y    ON t1y.agent_id    = l.agent_id
 ORDER BY l.pnl_pct DESC;
