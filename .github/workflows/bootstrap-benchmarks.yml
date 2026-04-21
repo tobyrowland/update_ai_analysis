@@ -36,11 +36,10 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Seed benchmarks from EODHD
+      - name: Seed benchmarks from Yahoo Finance
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
           TICKER: ${{ inputs.ticker }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |

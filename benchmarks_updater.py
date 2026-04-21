@@ -2,10 +2,14 @@
 """
 Nightly benchmark price refresh.
 
-For every row in the `benchmarks` table, fetches EODHD adjusted closes
-between (last stored price_date + 1) and today, appends them to
-benchmark_prices, and updates the parent `benchmarks` row's
-latest_price / latest_price_date.
+For every row in the `benchmarks` table, fetches daily adjusted closes
+from Yahoo Finance between (last stored price_date + 1) and today,
+appends them to benchmark_prices, and updates the parent `benchmarks`
+row's latest_price / latest_price_date.
+
+Yahoo is used instead of EODHD because the project's EODHD plan doesn't
+cover /api/eod/ for ETFs (403 Forbidden). Matches the same data source
+used by price_sales_updater.py.
 
 Runs from .github/workflows/benchmarks-update.yml at 03:45 UTC — just
 after eodhd_updater.py at 03:30 UTC, well before portfolio_valuation.py
@@ -17,10 +21,9 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -29,8 +32,7 @@ from dotenv import load_dotenv
 
 from db import SupabaseDB
 
-EODHD_BASE_URL = "https://eodhd.com/api"
-DELAY_BETWEEN_CALLS = 1  # seconds, match other eodhd scripts
+DELAY_BETWEEN_CALLS = 1  # seconds, match other scrapers
 
 
 def setup_logging() -> logging.Logger:
@@ -55,27 +57,68 @@ def setup_logging() -> logging.Logger:
     return logger
 
 
-def eodhd_eod(ticker: str, api_key: str, from_date: str, to_date: str,
-              logger: logging.Logger) -> list[dict[str, Any]] | None:
-    url = f"{EODHD_BASE_URL}/eod/{ticker}"
-    params = {
-        "api_token": api_key,
-        "fmt": "json",
-        "from": from_date,
-        "to": to_date,
-        "period": "d",
+def yahoo_ticker_for(storage_ticker: str) -> str:
+    """Translate a storage ticker (EODHD-style, e.g. 'SPY.US') to Yahoo's symbol."""
+    if storage_ticker.endswith(".US"):
+        return storage_ticker[:-3]
+    return storage_ticker
+
+
+def yahoo_daily(
+    storage_ticker: str,
+    from_date: date,
+    to_date: date,
+    logger: logging.Logger,
+) -> list[dict[str, Any]] | None:
+    """Fetch daily adjusted closes from Yahoo Finance between two dates."""
+    yticker = yahoo_ticker_for(storage_ticker)
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yticker}"
+    period1 = int(datetime.combine(from_date, datetime.min.time(),
+                                   tzinfo=timezone.utc).timestamp())
+    period2 = int(datetime.combine(to_date + timedelta(days=1), datetime.min.time(),
+                                   tzinfo=timezone.utc).timestamp())
+    params = {"interval": "1d", "period1": period1, "period2": period2}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/120.0.0.0 Safari/537.36",
     }
-    try:
-        resp = requests.get(url, params=params, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        if not isinstance(data, list):
-            logger.warning("EODHD %s: unexpected payload shape", ticker)
+
+    for attempt in range(3):
+        try:
+            resp = requests.get(url, params=params, headers=headers, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            result = data.get("chart", {}).get("result") or []
+            if not result:
+                logger.warning("Yahoo %s: empty result", yticker)
+                return None
+            ts = result[0].get("timestamp") or []
+            adj = (
+                result[0].get("indicators", {})
+                .get("adjclose", [{}])[0]
+                .get("adjclose", [])
+            )
+            if not ts or not adj:
+                logger.warning("Yahoo %s: no timestamp / adjclose", yticker)
+                return None
+
+            rows = []
+            for t, c in zip(ts, adj):
+                if c is None:
+                    continue
+                d = datetime.fromtimestamp(t, tz=timezone.utc).date()
+                rows.append({"date": d.isoformat(), "adjusted_close": float(c)})
+            return rows if rows else None
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            wait = 2 ** (attempt + 1)
+            logger.warning("Yahoo %s attempt %d/3 failed (%s), retrying in %ds",
+                           yticker, attempt + 1, type(e).__name__, wait)
+            time.sleep(wait)
+        except Exception as e:
+            logger.error("Yahoo fetch failed for %s: %s", yticker, e)
             return None
-        return data
-    except Exception as e:
-        logger.error("EODHD EOD fetch failed for %s: %s", ticker, e)
-        return None
+    return None
 
 
 def update_benchmark(
@@ -84,26 +127,23 @@ def update_benchmark(
     display_name: str,
     latest_price_date: str | None,
     inception_date: str,
-    eodhd_key: str,
     dry_run: bool,
     logger: logging.Logger,
 ) -> dict[str, Any]:
     """Refresh a single benchmark. Returns per-ticker stats."""
     today = date.today()
 
-    # Fetch from the day AFTER the last stored price, or from inception if
-    # latest_price_date is missing (e.g. empty benchmark_prices for this ticker).
     if latest_price_date:
-        from_date = (date.fromisoformat(latest_price_date) + timedelta(days=1)).isoformat()
+        from_date = date.fromisoformat(latest_price_date) + timedelta(days=1)
     else:
-        from_date = inception_date
+        from_date = date.fromisoformat(inception_date)
 
-    if from_date > today.isoformat():
+    if from_date > today:
         logger.info("  %s: already up to date (last=%s)", ticker, latest_price_date)
         return {"ticker": ticker, "inserted": 0, "skipped": True}
 
-    logger.info("  %s: fetching %s → %s", ticker, from_date, today.isoformat())
-    series = eodhd_eod(ticker, eodhd_key, from_date, today.isoformat(), logger)
+    logger.info("  %s: fetching %s → %s", ticker, from_date.isoformat(), today.isoformat())
+    series = yahoo_daily(ticker, from_date, today, logger)
     if series is None:
         return {"ticker": ticker, "inserted": 0, "error": "fetch_failed"}
 
@@ -127,7 +167,6 @@ def update_benchmark(
                     ticker, len(rows), last_row["price_date"], last_row["close"])
         return {"ticker": ticker, "inserted": len(rows), "dry_run": True}
 
-    # Upsert prices, then bump the parent benchmarks row.
     db.client.table("benchmark_prices").upsert(
         rows, on_conflict="ticker,price_date"
     ).execute()
@@ -154,11 +193,6 @@ def main() -> int:
 
     logger = setup_logging()
     logger.info("=== benchmarks_updater started (dry_run=%s) ===", args.dry_run)
-
-    eodhd_key = os.environ.get("EODHD_API_KEY")
-    if not eodhd_key:
-        logger.error("EODHD_API_KEY env var is not set")
-        return 1
 
     db = SupabaseDB()
 
@@ -191,7 +225,6 @@ def main() -> int:
             bench["display_name"],
             bench.get("latest_price_date"),
             bench["inception_date"],
-            eodhd_key,
             args.dry_run,
             logger,
         )
