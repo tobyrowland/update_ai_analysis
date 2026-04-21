@@ -1,7 +1,12 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { getSupabase } from "@/lib/supabase";
 import Nav from "@/components/nav";
+import LeaderboardTable, {
+  type LeaderboardAgentRow,
+  type LeaderboardBenchmarkRow,
+  type LeaderboardRow,
+  type Period,
+} from "@/components/leaderboard-table";
 
 export const dynamic = "force-dynamic";
 
@@ -19,37 +24,13 @@ export const metadata: Metadata = {
   },
 };
 
-interface LeaderboardAgentRow {
-  kind: "agent";
-  handle: string;
-  display_name: string;
-  is_house_agent: boolean;
-  snapshot_date: string;
-  cash_usd: number;
-  holdings_value_usd: number;
-  total_value_usd: number;
-  pnl_usd: number;
-  pnl_pct_1d: number | null;
-  pnl_pct_30d: number | null;
-  pnl_pct_ytd: number | null;
-  pnl_pct_1yr: number | null;
-  num_positions: number;
-}
+const PERIODS: readonly Period[] = ["1d", "30d", "ytd", "1yr"];
 
-interface LeaderboardBenchmarkRow {
-  kind: "benchmark";
-  ticker: string;
-  display_name: string;
-  snapshot_date: string;
-  total_value_usd: number;
-  pnl_usd: number;
-  pnl_pct_1d: number | null;
-  pnl_pct_30d: number | null;
-  pnl_pct_ytd: number | null;
-  pnl_pct_1yr: number | null;
-}
+type TradeBuckets = Record<Period, number>;
 
-type LeaderboardRow = LeaderboardAgentRow | LeaderboardBenchmarkRow;
+function emptyBuckets(): TradeBuckets {
+  return { "1d": 0, "30d": 0, ytd: 0, "1yr": 0 };
+}
 
 async function getLeaderboard(): Promise<{
   rows: LeaderboardRow[];
@@ -82,10 +63,15 @@ async function getLeaderboard(): Promise<{
         "num_positions",
     );
   if (agentErr) console.error("Failed to fetch agent leaderboard:", agentErr);
+  const rawAgents = (agentData ?? []) as unknown as RawAgentRow[];
 
-  const agentRows: LeaderboardAgentRow[] = (
-    (agentData ?? []) as unknown as RawAgentRow[]
-  ).map((r) => ({
+  // 2. Trade counts per agent, bucketed into the same four windows. One
+  //    query for all agents' trades in the last year; bucket in JS.
+  //    agent_trades.agent_id joins via agents.handle, so we resolve
+  //    handle→id up-front in a single select.
+  const tradesByHandle = await fetchTradeBuckets(supabase, rawAgents);
+
+  const agentRows: LeaderboardAgentRow[] = rawAgents.map((r) => ({
     kind: "agent",
     handle: r.handle,
     display_name: r.display_name,
@@ -95,14 +81,17 @@ async function getLeaderboard(): Promise<{
     holdings_value_usd: Number(r.holdings_value_usd),
     total_value_usd: Number(r.total_value_usd),
     pnl_usd: Number(r.pnl_usd),
-    pnl_pct_1d: toNum(r.pnl_pct_1d),
-    pnl_pct_30d: toNum(r.pnl_pct_30d),
-    pnl_pct_ytd: toNum(r.pnl_pct_ytd),
-    pnl_pct_1yr: toNum(r.pnl_pct_1yr),
+    returns: {
+      "1d": toNum(r.pnl_pct_1d),
+      "30d": toNum(r.pnl_pct_30d),
+      ytd: toNum(r.pnl_pct_ytd),
+      "1yr": toNum(r.pnl_pct_1yr),
+    },
+    trades: tradesByHandle.get(r.handle) ?? emptyBuckets(),
     num_positions: r.num_positions,
   }));
 
-  // 2. Benchmark rows — synthesised from benchmarks + benchmark_prices.
+  // 3. Benchmark rows — synthesised from benchmarks + benchmark_prices.
   //    Each benchmark gets one bulk price fetch and derives all four
   //    intervals in JS with the same since-inception fallback the view
   //    uses for agents.
@@ -135,8 +124,6 @@ async function getLeaderboard(): Promise<{
       const notional = Number(b.notional_starting_cash);
       if (!(latest > 0) || !(inception > 0)) continue;
 
-      // Pull the whole price series for the ticker — typically small
-      // (days to months), cheap to sort in JS.
       const { data: priceData } = await supabase
         .from("benchmark_prices")
         .select("price_date, close")
@@ -146,10 +133,6 @@ async function getLeaderboard(): Promise<{
         (p) => ({ date: p.price_date, close: Number(p.close) }),
       );
 
-      // Window anchors — fall back to inception price when history is
-      // too short. Matches the agent_leaderboard view's COALESCE
-      // behaviour so agents and benchmarks converge on the same
-      // effective window on young leaderboards.
       const latestDate = b.latest_price_date;
       const dayAgo = shiftDays(latestDate, -1);
       const thirtyAgo = shiftDays(latestDate, -30);
@@ -171,29 +154,19 @@ async function getLeaderboard(): Promise<{
         snapshot_date: latestDate,
         total_value_usd: totalValue,
         pnl_usd: pnlUsd,
-        pnl_pct_1d: pctChange(a1d, latest),
-        pnl_pct_30d: pctChange(a30d, latest),
-        pnl_pct_ytd: pctChange(aYtd, latest),
-        pnl_pct_1yr: pctChange(a1yr, latest),
+        returns: {
+          "1d": pctChange(a1d, latest),
+          "30d": pctChange(a30d, latest),
+          ytd: pctChange(aYtd, latest),
+          "1yr": pctChange(a1yr, latest),
+        },
       });
     }
   } catch (err) {
-    // Migration not yet applied, or temporary failure — render agent-only.
     console.error("Benchmarks fetch failed (non-fatal):", err);
   }
 
   const rows: LeaderboardRow[] = [...agentRows, ...benchmarkRows];
-
-  // Sort by 30d return desc, nulls last — 30d stays primary per earlier
-  // product call.
-  rows.sort((a, b) => {
-    const aPct = a.pnl_pct_30d;
-    const bPct = b.pnl_pct_30d;
-    if (aPct == null && bPct == null) return 0;
-    if (aPct == null) return 1;
-    if (bPct == null) return -1;
-    return bPct - aPct;
-  });
 
   const latestDate = rows.reduce<string | null>(
     (acc, r) =>
@@ -203,6 +176,80 @@ async function getLeaderboard(): Promise<{
     null,
   );
   return { rows, latestDate };
+}
+
+async function fetchTradeBuckets(
+  supabase: ReturnType<typeof getSupabase>,
+  rawAgents: { handle: string }[],
+): Promise<Map<string, TradeBuckets>> {
+  const out = new Map<string, TradeBuckets>();
+  if (rawAgents.length === 0) return out;
+
+  // Resolve handle → id so we can attribute trades back to the leaderboard row.
+  const { data: idRows, error: idErr } = await supabase
+    .from("agents")
+    .select("id, handle")
+    .in(
+      "handle",
+      rawAgents.map((a) => a.handle),
+    );
+  if (idErr || !idRows) {
+    if (idErr) console.error("Failed to resolve agent ids:", idErr);
+    return out;
+  }
+  const idToHandle = new Map<string, string>();
+  for (const row of idRows as { id: string; handle: string }[]) {
+    idToHandle.set(row.id, row.handle);
+  }
+
+  const now = new Date();
+  const yearAgoIso = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000).toISOString();
+  const dayAgoMs = now.getTime() - 24 * 60 * 60 * 1000;
+  const thirtyDayMs = now.getTime() - 30 * 24 * 60 * 60 * 1000;
+  const yearStartMs = Date.UTC(now.getUTCFullYear(), 0, 1);
+  const yearAgoMs = new Date(yearAgoIso).getTime();
+
+  // One query: every agent's trades in the last year. Paginate to be
+  // safe against Supabase's default row cap (1000).
+  const agentIds = Array.from(idToHandle.keys());
+  if (agentIds.length === 0) return out;
+
+  const pageSize = 1000;
+  let from = 0;
+  type TradeTuple = { agent_id: string; executed_at: string };
+  const all: TradeTuple[] = [];
+  while (true) {
+    const { data, error } = await supabase
+      .from("agent_trades")
+      .select("agent_id, executed_at")
+      .in("agent_id", agentIds)
+      .gte("executed_at", yearAgoIso)
+      .range(from, from + pageSize - 1);
+    if (error) {
+      console.error("Failed to fetch agent_trades:", error);
+      break;
+    }
+    const batch = (data ?? []) as TradeTuple[];
+    all.push(...batch);
+    if (batch.length < pageSize) break;
+    from += pageSize;
+  }
+
+  for (const trade of all) {
+    const handle = idToHandle.get(trade.agent_id);
+    if (!handle) continue;
+    let bucket = out.get(handle);
+    if (!bucket) {
+      bucket = emptyBuckets();
+      out.set(handle, bucket);
+    }
+    const ts = new Date(trade.executed_at).getTime();
+    if (ts >= dayAgoMs) bucket["1d"] += 1;
+    if (ts >= thirtyDayMs) bucket["30d"] += 1;
+    if (ts >= yearStartMs) bucket.ytd += 1;
+    if (ts >= yearAgoMs) bucket["1yr"] += 1;
+  }
+  return out;
 }
 
 function toNum(v: number | string | null | undefined): number | null {
@@ -216,7 +263,6 @@ function pctChange(from: number, to: number): number | null {
   return ((to - from) / from) * 100;
 }
 
-// `YYYY-MM-DD` date arithmetic that avoids DST / timezone weirdness.
 function shiftDays(iso: string, days: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);
@@ -243,28 +289,21 @@ function firstOnOrAfter(
   return null;
 }
 
-function formatUsd(n: number): string {
-  return `$${n.toLocaleString("en-US", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  })}`;
+function parseInitialPeriod(raw: string | string[] | undefined): Period {
+  const val = Array.isArray(raw) ? raw[0] : raw;
+  if (val && (PERIODS as readonly string[]).includes(val)) {
+    return val as Period;
+  }
+  return "30d";
 }
 
-function formatPct(n: number | null): string {
-  if (n == null) return "—";
-  const sign = n > 0 ? "+" : "";
-  return `${sign}${n.toFixed(2)}%`;
-}
-
-function pnlColor(pnl: number | null): string {
-  if (pnl == null) return "text-text-muted";
-  if (pnl > 0) return "text-green";
-  if (pnl < 0) return "text-red";
-  return "text-text-dim";
-}
-
-export default async function LeaderboardPage() {
+export default async function LeaderboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ period?: string | string[] }>;
+}) {
   const { rows, latestDate } = await getLeaderboard();
+  const initialPeriod = parseInitialPeriod((await searchParams).period);
 
   return (
     <>
@@ -276,7 +315,7 @@ export default async function LeaderboardPage() {
           </h1>
           <p className="text-sm text-text-muted font-mono">
             {rows.length > 0 && latestDate
-              ? `${rows.length} row${rows.length === 1 ? "" : "s"} — ranked by rolling 30-day return as of ${latestDate}. Agents start with $1M of virtual cash; benchmark rows (SPY, URTH) are pinned into the ranking for comparison.`
+              ? `${rows.length} row${rows.length === 1 ? "" : "s"} as of ${latestDate}. Agents start with $1M of virtual cash; benchmark rows (SPY, URTH) are pinned into the ranking for comparison. Use the period selector to re-rank by rolling return — 30d default.`
               : "No agent snapshots yet. Agents will appear here once portfolio_valuation.py has run."}
           </p>
         </div>
@@ -291,166 +330,17 @@ export default async function LeaderboardPage() {
           </div>
         ) : (
           <>
-            <div className="glass-card rounded-lg overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full font-mono text-sm">
-                  <thead className="bg-bg-hover border-b border-border text-left text-xs uppercase tracking-wider text-text-dim">
-                    <tr>
-                      <th className="px-4 py-3 font-normal">#</th>
-                      <th className="px-4 py-3 font-normal">Agent</th>
-                      <th className="px-4 py-3 font-normal text-right">
-                        Total value
-                      </th>
-                      <th className="px-4 py-3 font-normal text-right">PnL</th>
-                      <th className="px-4 py-3 font-normal text-right">1d</th>
-                      <th className="px-4 py-3 font-normal text-right text-text font-semibold">
-                        30d
-                      </th>
-                      <th className="px-4 py-3 font-normal text-right">YTD</th>
-                      <th className="px-4 py-3 font-normal text-right">1Yr</th>
-                      <th className="px-4 py-3 font-normal text-right">Cash</th>
-                      <th className="px-4 py-3 font-normal text-right">
-                        Holdings
-                      </th>
-                      <th className="px-4 py-3 font-normal text-right">
-                        Positions
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((row, i) =>
-                      row.kind === "agent" ? (
-                        <AgentTableRow
-                          key={`a-${row.handle}`}
-                          row={row}
-                          rank={i + 1}
-                        />
-                      ) : (
-                        <BenchmarkTableRow
-                          key={`b-${row.ticker}`}
-                          row={row}
-                          rank={i + 1}
-                        />
-                      ),
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            <LeaderboardTable rows={rows} initialPeriod={initialPeriod} />
             <p className="text-xs text-text-muted font-mono mt-3">
-              1d / 30d / YTD / 1Yr show return over the named window,
-              falling back to since-inception for agents and benchmarks
-              with less than that much history. 30d is the primary sort.
-              Benchmark rows (SPY, URTH) don&apos;t have a meaningful PnL
-              / cash / holdings / positions, so those cells render as
+              Return falls back to since-inception for agents and benchmarks
+              with less than the selected window of history. Trades counts
+              every buy/sell in <code>agent_trades</code> within the window
+              — benchmarks don&apos;t trade, so their cells render as
               &mdash;.
             </p>
           </>
         )}
       </main>
     </>
-  );
-}
-
-function AgentTableRow({
-  row,
-  rank,
-}: {
-  row: LeaderboardAgentRow;
-  rank: number;
-}) {
-  return (
-    <tr className="border-b border-border/50 hover:bg-bg-hover/50 transition-colors">
-      <td className="px-4 py-3 text-text-dim">{rank}</td>
-      <td className="px-4 py-3">
-        <Link href={`/agent/${row.handle}`} className="group block">
-          <div className="flex items-center gap-2">
-            <span className="text-text group-hover:text-green transition-colors">
-              {row.display_name}
-            </span>
-            {row.is_house_agent && (
-              <span className="text-[10px] uppercase tracking-wider text-text-muted border border-border-light rounded px-1 py-0.5">
-                house
-              </span>
-            )}
-          </div>
-          <div className="text-xs text-text-muted">@{row.handle}</div>
-        </Link>
-      </td>
-      <td className="px-4 py-3 text-right text-text">
-        {formatUsd(row.total_value_usd)}
-      </td>
-      <td className={`px-4 py-3 text-right ${pnlColor(row.pnl_usd)}`}>
-        {row.pnl_usd >= 0 ? "+" : ""}
-        {formatUsd(row.pnl_usd)}
-      </td>
-      <td className={`px-4 py-3 text-right ${pnlColor(row.pnl_pct_1d)}`}>
-        {formatPct(row.pnl_pct_1d)}
-      </td>
-      <td
-        className={`px-4 py-3 text-right font-bold ${pnlColor(row.pnl_pct_30d)}`}
-      >
-        {formatPct(row.pnl_pct_30d)}
-      </td>
-      <td className={`px-4 py-3 text-right ${pnlColor(row.pnl_pct_ytd)}`}>
-        {formatPct(row.pnl_pct_ytd)}
-      </td>
-      <td className={`px-4 py-3 text-right ${pnlColor(row.pnl_pct_1yr)}`}>
-        {formatPct(row.pnl_pct_1yr)}
-      </td>
-      <td className="px-4 py-3 text-right text-text-dim">
-        {formatUsd(row.cash_usd)}
-      </td>
-      <td className="px-4 py-3 text-right text-text-dim">
-        {formatUsd(row.holdings_value_usd)}
-      </td>
-      <td className="px-4 py-3 text-right text-text-dim">
-        {row.num_positions}
-      </td>
-    </tr>
-  );
-}
-
-function BenchmarkTableRow({
-  row,
-  rank,
-}: {
-  row: LeaderboardBenchmarkRow;
-  rank: number;
-}) {
-  return (
-    <tr className="border-b border-border/50 bg-orange/[0.04] hover:bg-orange/[0.08] transition-colors">
-      <td className="px-4 py-3 text-orange/80">{rank}</td>
-      <td className="px-4 py-3">
-        <div className="flex items-center gap-2">
-          <span className="text-text">{row.display_name}</span>
-          <span className="text-[10px] uppercase tracking-wider text-orange border border-orange/40 bg-orange/10 rounded px-1 py-0.5">
-            index
-          </span>
-        </div>
-        <div className="text-xs text-text-muted">{row.ticker}</div>
-      </td>
-      <td className="px-4 py-3 text-right text-text">
-        {formatUsd(row.total_value_usd)}
-      </td>
-      <td className="px-4 py-3 text-right text-text-muted">&mdash;</td>
-      <td className={`px-4 py-3 text-right ${pnlColor(row.pnl_pct_1d)}`}>
-        {formatPct(row.pnl_pct_1d)}
-      </td>
-      <td
-        className={`px-4 py-3 text-right font-bold ${pnlColor(row.pnl_pct_30d)}`}
-      >
-        {formatPct(row.pnl_pct_30d)}
-      </td>
-      <td className={`px-4 py-3 text-right ${pnlColor(row.pnl_pct_ytd)}`}>
-        {formatPct(row.pnl_pct_ytd)}
-      </td>
-      <td className={`px-4 py-3 text-right ${pnlColor(row.pnl_pct_1yr)}`}>
-        {formatPct(row.pnl_pct_1yr)}
-      </td>
-      <td className="px-4 py-3 text-right text-text-muted">&mdash;</td>
-      <td className="px-4 py-3 text-right text-text-muted">&mdash;</td>
-      <td className="px-4 py-3 text-right text-text-muted">&mdash;</td>
-    </tr>
   );
 }
