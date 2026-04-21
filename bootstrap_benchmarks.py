@@ -5,10 +5,15 @@ One-off seed for benchmark portfolios (S&P 500, MSCI World).
 For each (ticker, display_name) below:
   1. Picks an anchor date: MIN(inception_date) across agent_accounts,
      falling back to today if no accounts exist yet.
-  2. Hits EODHD /eod/{ticker} for the full range (anchor → today) and
-     inserts every (price_date, adjusted_close) into benchmark_prices.
+  2. Hits Yahoo Finance's chart API for daily adjusted closes between
+     anchor and today, and inserts every (price_date, adjusted_close)
+     into benchmark_prices.
   3. Upserts the benchmarks row with inception_date/price and
      latest_price/latest_price_date derived from the fetched series.
+
+Yahoo is used instead of EODHD because the project's EODHD plan doesn't
+cover /api/eod/ for ETFs (403 Forbidden). The shape of the data is
+identical; only the source changes.
 
 Idempotent — re-running refreshes prices and re-anchors inception only
 if necessary. Usage:
@@ -17,16 +22,16 @@ if necessary. Usage:
     python bootstrap_benchmarks.py --ticker SPY.US          # one only
     python bootstrap_benchmarks.py --dry-run                # compute only
 
-Env vars: SUPABASE_URL, SUPABASE_SERVICE_KEY, EODHD_API_KEY.
+Env vars: SUPABASE_URL, SUPABASE_SERVICE_KEY.
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
-from datetime import date, timedelta
+import time
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import requests
@@ -34,36 +39,85 @@ from dotenv import load_dotenv
 
 from db import SupabaseDB
 
-EODHD_BASE_URL = "https://eodhd.com/api"
-
+# (storage_ticker, display_name). storage_ticker is the row key in
+# the `benchmarks` table; yahoo_ticker_for() maps it to Yahoo's symbol.
 DEFAULT_BENCHMARKS = [
     ("SPY.US", "S&P 500 (SPY)"),
     ("URTH.US", "MSCI World (URTH)"),
 ]
 
 
-def eodhd_eod(ticker: str, api_key: str, from_date: str, to_date: str,
-              logger: logging.Logger) -> list[dict[str, Any]] | None:
-    """Fetch EODHD end-of-day prices for a ticker over a date range."""
-    url = f"{EODHD_BASE_URL}/eod/{ticker}"
-    params = {
-        "api_token": api_key,
-        "fmt": "json",
-        "from": from_date,
-        "to": to_date,
-        "period": "d",
+def yahoo_ticker_for(storage_ticker: str) -> str:
+    """Translate our storage ticker (EODHD-style) to Yahoo's symbol.
+
+    `.US` is dropped (Yahoo uses bare tickers for US listings). Other
+    suffixes can be mapped here if we ever add non-US benchmarks.
+    """
+    if storage_ticker.endswith(".US"):
+        return storage_ticker[:-3]
+    return storage_ticker
+
+
+def yahoo_daily(
+    storage_ticker: str,
+    from_date: date,
+    to_date: date,
+    logger: logging.Logger,
+) -> list[dict[str, Any]] | None:
+    """Fetch daily adjusted closes from Yahoo Finance between two dates.
+
+    Returns a list of {"date": "YYYY-MM-DD", "adjusted_close": float}
+    ordered ascending by date, or None on failure.
+    """
+    yticker = yahoo_ticker_for(storage_ticker)
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yticker}"
+    # Pad period2 by one day so today's bar isn't excluded on boundary.
+    period1 = int(datetime.combine(from_date, datetime.min.time(),
+                                   tzinfo=timezone.utc).timestamp())
+    period2 = int(datetime.combine(to_date + timedelta(days=1), datetime.min.time(),
+                                   tzinfo=timezone.utc).timestamp())
+    params = {"interval": "1d", "period1": period1, "period2": period2}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/120.0.0.0 Safari/537.36",
     }
-    try:
-        resp = requests.get(url, params=params, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        if not isinstance(data, list):
-            logger.warning("EODHD %s: unexpected payload shape", ticker)
+
+    for attempt in range(3):
+        try:
+            resp = requests.get(url, params=params, headers=headers, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            result = data.get("chart", {}).get("result") or []
+            if not result:
+                logger.warning("Yahoo %s: empty result", yticker)
+                return None
+            ts = result[0].get("timestamp") or []
+            adj = (
+                result[0].get("indicators", {})
+                .get("adjclose", [{}])[0]
+                .get("adjclose", [])
+            )
+            if not ts or not adj:
+                logger.warning("Yahoo %s: no timestamp / adjclose", yticker)
+                return None
+
+            rows = []
+            for t, c in zip(ts, adj):
+                if c is None:
+                    continue
+                d = datetime.fromtimestamp(t, tz=timezone.utc).date()
+                rows.append({"date": d.isoformat(), "adjusted_close": float(c)})
+            return rows if rows else None
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            wait = 2 ** (attempt + 1)
+            logger.warning("Yahoo %s attempt %d/3 failed (%s), retrying in %ds",
+                           yticker, attempt + 1, type(e).__name__, wait)
+            time.sleep(wait)
+        except Exception as e:
+            logger.error("Yahoo fetch failed for %s: %s", yticker, e)
             return None
-        return data
-    except Exception as e:
-        logger.error("EODHD EOD fetch failed for %s: %s", ticker, e)
-        return None
+    return None
 
 
 def get_anchor_date(db: SupabaseDB, logger: logging.Logger) -> date:
@@ -89,24 +143,24 @@ def seed_benchmark(
     ticker: str,
     display_name: str,
     anchor: date,
-    eodhd_key: str,
     dry_run: bool,
     logger: logging.Logger,
 ) -> bool:
-    """Fetch EOD prices and seed benchmarks + benchmark_prices. Returns True on success."""
+    """Fetch prices and seed benchmarks + benchmark_prices. Returns True on success."""
     today = date.today()
     logger.info("Seeding %s (%s) from %s → %s", ticker, display_name, anchor, today)
 
-    series = eodhd_eod(ticker, eodhd_key, anchor.isoformat(), today.isoformat(), logger)
+    series = yahoo_daily(ticker, anchor, today, logger)
     if not series:
-        logger.error("%s: no EOD data returned; skipping", ticker)
+        logger.error("%s: no price data returned; skipping", ticker)
         return False
 
-    # Sort by date ascending (EODHD returns ascending by default but be defensive).
     series.sort(key=lambda r: r.get("date", ""))
 
-    # First row at or after anchor → inception row.
-    first = next((r for r in series if r.get("date") and r.get("adjusted_close") is not None), None)
+    first = next(
+        (r for r in series if r.get("date") and r.get("adjusted_close") is not None),
+        None,
+    )
     last = next(
         (r for r in reversed(series) if r.get("date") and r.get("adjusted_close") is not None),
         None,
@@ -129,7 +183,6 @@ def seed_benchmark(
         logger.info("  dry-run — skipping writes")
         return True
 
-    # Upsert benchmark row first (so FK on benchmark_prices is satisfied).
     db.client.table("benchmarks").upsert(
         {
             "ticker": ticker,
@@ -142,7 +195,6 @@ def seed_benchmark(
         on_conflict="ticker",
     ).execute()
 
-    # Bulk-upsert daily prices — batch to stay under Supabase payload limits.
     rows = [
         {
             "ticker": ticker,
@@ -178,11 +230,6 @@ def main() -> int:
     )
     logger = logging.getLogger("bootstrap_benchmarks")
 
-    eodhd_key = os.environ.get("EODHD_API_KEY")
-    if not eodhd_key:
-        logger.error("EODHD_API_KEY env var is not set")
-        return 1
-
     db = SupabaseDB()
     anchor = get_anchor_date(db, logger)
 
@@ -196,7 +243,7 @@ def main() -> int:
 
     ok = 0
     for ticker, name in targets:
-        if seed_benchmark(db, ticker, name, anchor, eodhd_key, args.dry_run, logger):
+        if seed_benchmark(db, ticker, name, anchor, args.dry_run, logger):
             ok += 1
 
     logger.info("Done. %d/%d benchmarks seeded.", ok, len(targets))
