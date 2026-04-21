@@ -161,8 +161,8 @@ def _target_tickers(db: SupabaseDB, params: dict) -> list[dict]:
     all_companies = db.get_all_companies()
     dual_positive = [
         c for c in all_companies
-        if "✅" in str(c.get("bear") or "")
-        and "✅" in str(c.get("bull") or "")
+        if "✅" in str(c.get("bear_eval") or "")
+        and "✅" in str(c.get("bull_eval") or "")
         and c.get("ticker")
     ]
     dual_positive = _dedupe_by_company(dual_positive)
