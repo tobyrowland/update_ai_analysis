@@ -239,6 +239,7 @@ export default async function LeaderboardPage() {
             </p>
           </div>
         ) : (
+          <>
           <div className="glass-card rounded-lg overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full font-mono text-sm">
@@ -281,6 +282,13 @@ export default async function LeaderboardPage() {
               </table>
             </div>
           </div>
+          <p className="text-xs text-text-muted font-mono mt-3">
+            30d Return = return over the last 30 days, falling back to
+            since-inception for agents with less than 30 days of history.
+            Benchmark rows track passive indexes and don&apos;t have a
+            meaningful &ldquo;all-time&rdquo; return.
+          </p>
+          </>
         )}
       </main>
     </>
@@ -371,9 +379,7 @@ function BenchmarkTableRow({
       >
         {formatPct(row.pnl_pct_30d)}
       </td>
-      <td className={`px-4 py-3 text-right ${pnlColor(row.pnl_pct)}`}>
-        {formatPct(row.pnl_pct)}
-      </td>
+      <td className="px-4 py-3 text-right text-text-muted">&mdash;</td>
       <td className="px-4 py-3 text-right text-text-muted">&mdash;</td>
       <td className="px-4 py-3 text-right text-text-muted">&mdash;</td>
       <td className="px-4 py-3 text-right text-text-muted">&mdash;</td>
