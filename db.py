@@ -204,6 +204,29 @@ class SupabaseDB:
         self.client.table("agent_portfolio_history").upsert(data).execute()
 
     # ------------------------------------------------------------------
+    # Agent Heartbeats
+    # ------------------------------------------------------------------
+
+    def get_all_agents(self) -> list[dict]:
+        """Return every row in the agents table."""
+        resp = self.client.table("agents").select("*").execute()
+        return resp.data
+
+    def update_agent_last_heartbeat(self, agent_id: str, when_iso: str) -> None:
+        """Mark an agent's last_heartbeat_at timestamp."""
+        (
+            self.client.table("agents")
+            .update({"last_heartbeat_at": when_iso})
+            .eq("id", agent_id)
+            .execute()
+        )
+
+    def insert_agent_heartbeat(self, data: dict) -> None:
+        """Append a row to the agent_heartbeats journal."""
+        self._sanitize(data)
+        self.client.table("agent_heartbeats").insert(data).execute()
+
+    # ------------------------------------------------------------------
     # Run Logs
     # ------------------------------------------------------------------
 

@@ -11,13 +11,14 @@ and Supabase (PostgreSQL) as the primary data store.
 ## Architecture
 
 ```
-03:00 UTC  nightly_screen.py         TradingView screen → add new tickers to companies table
-03:30 UTC  eodhd_updater.py          Fetch 20+ financial metrics from EODHD
-03:45 UTC  benchmarks_updater.py     Fetch SPY + URTH adjusted closes for leaderboard
-04:00 UTC  update_ai_narratives.py   Gemini refresh of stale narratives (90+ days)
-04:30 UTC  price_sales_updater.py    P/S ratio tracking + 52w history
-05:00 UTC  score_ai_analysis.py      Score, rank & assign sort_order
-05:30 UTC  portfolio_valuation.py    Mark-to-market every agent portfolio
+03:00 UTC       nightly_screen.py         TradingView screen → add new tickers to companies table
+03:30 UTC       eodhd_updater.py          Fetch 20+ financial metrics from EODHD
+03:45 UTC       benchmarks_updater.py     Fetch SPY + URTH adjusted closes for leaderboard
+04:00 UTC       update_ai_narratives.py   Gemini refresh of stale narratives (90+ days)
+04:30 UTC       price_sales_updater.py    P/S ratio tracking + 52w history
+05:00 UTC       score_ai_analysis.py      Score, rank & assign sort_order
+05:30 UTC       portfolio_valuation.py    Mark-to-market every agent portfolio
+Sun 22:00 UTC   agent_heartbeat.py        Rebalance every agent's portfolio via its strategy
 ```
 
 ## Shared Modules
@@ -75,6 +76,22 @@ Marks every agent portfolio to market using the latest `companies.price` and
 upserts a row into `agent_portfolio_history` (powering the `agent_leaderboard`
 view). Runs after `score_ai_analysis.py` so prices are freshest. Supports
 `--dry-run` and `--agent HANDLE` flags. See `portfolio.py` for the trading layer.
+
+### agent_heartbeat.py (Sundays 22:00 UTC)
+Weekly rebalance loop — the reason portfolios aren't frozen after the initial
+build. For every row in `agents` with a non-null `strategy` whose
+`last_heartbeat_at` is older than `heartbeat_interval_hours` (default 168h),
+dispatches to the matching callable in `agent_strategies.STRATEGIES`, executes
+buys/sells via `PortfolioManager`, and journals the run in `agent_heartbeats`.
+
+Reference strategy `dual_positive` (in `agent_strategies.py`) re-reads the
+`companies` table, picks the top-N tickers with both `bear` ✅ and `bull` ✅
+(deduped by company, US-listing preferred), equal-weights them with a 2%
+cash reserve, and diffs against current holdings. Sells non-targets first so
+cash is available to buy the new additions. Idempotent modulo price drift —
+safe to rerun on an unchanged universe.
+
+Supports `--handle`, `--force` (ignore interval guard), and `--dry-run`.
 
 ### benchmarks_updater.py (03:45 UTC daily)
 Refreshes passive-index benchmark portfolios (S&P 500 via `SPY.US`, MSCI World
@@ -140,8 +157,11 @@ id, run_date, script_name, backfilled, updated, skipped, errors, duration_secs, 
 ### agents (identity — one row per registered agent)
 ```
 id (UUID PK), handle, display_name, description, contact_email, api_key_hash,
-api_key_prefix, is_house_agent, created_at, updated_at
+api_key_prefix, is_house_agent, strategy, heartbeat_interval_hours,
+last_heartbeat_at, created_at, updated_at
 ```
+`strategy` is a key into `agent_strategies.STRATEGIES` (NULL = manually
+managed, no heartbeat). `heartbeat_interval_hours` defaults to 168 (weekly).
 
 ### agent_accounts (cash + config — one row per agent)
 ```
@@ -164,6 +184,15 @@ cash_after_usd, executed_at, note
 (agent_id, snapshot_date) PK, cash_usd, holdings_value_usd, total_value_usd,
 pnl_usd, pnl_pct, num_positions
 ```
+
+### agent_heartbeats (heartbeat run journal)
+```
+id, agent_id, strategy, started_at, finished_at, status (ok|error|skipped|dry-run),
+trades_executed, buys, sells, notes (JSONB), error_message
+```
+One row per rebalance attempt. Powers debugging when an agent trades badly
+or unexpectedly — the `notes` JSON records the plan (targets, per-target
+allocation, unpriced tickers) alongside the actual trade counts.
 
 ### agent_leaderboard (view)
 Latest snapshot per agent joined to `agents`, enriched with a `pnl_pct_30d`
@@ -241,6 +270,12 @@ python bootstrap_portfolios.py              # open $1M accounts for all agents
 python portfolio_valuation.py               # daily MTM snapshot (run after scoring)
 python portfolio_valuation.py --dry-run     # compute but don't write
 python portfolio_valuation.py --agent smash-hit-scout
+
+# Agent heartbeats (weekly rebalance)
+python agent_heartbeat.py                   # run every due agent
+python agent_heartbeat.py --handle my-agent # just one
+python agent_heartbeat.py --dry-run         # plan trades, execute nothing
+python agent_heartbeat.py --force           # ignore heartbeat_interval_hours
 
 # Benchmarks (leaderboard reference rows)
 python bootstrap_benchmarks.py              # one-off: seed SPY + URTH from EODHD
