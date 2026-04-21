@@ -1,7 +1,8 @@
-// Server-side fetch for the homepage Live Agent Rankings table. Returns
-// the top non-house agent from the leaderboard view plus per-period
-// deltas and a 30-day equity curve. Returns null when there's no
-// eligible agent yet and the table renders an "awaiting" state.
+// Server-side fetch for the homepage Live Agent Rankings card. Returns
+// the top N non-house agents from the leaderboard view with per-period
+// deltas and a 30-day equity curve for each. The homepage currently
+// renders the top 2 (winner + runner-up); more is fine if we ever add
+// a longer table.
 
 import { getSupabase } from "@/lib/supabase";
 
@@ -16,82 +17,79 @@ export interface TopAgent {
   snapshot_date: string;
 }
 
-export async function getTopAgent(): Promise<TopAgent | null> {
+export async function getTopAgents(limit = 2): Promise<TopAgent[]> {
   const supabase = getSupabase();
 
-  const { data: top, error: topErr } = await supabase
+  const { data: topRows, error: topErr } = await supabase
     .from("agent_leaderboard")
     .select("handle, display_name, pnl_pct, snapshot_date")
     .eq("is_house_agent", false)
     .order("pnl_pct", { ascending: false, nullsFirst: false })
-    .limit(1)
-    .maybeSingle();
-  if (topErr || !top) return null;
+    .limit(limit);
+  if (topErr || !topRows) return [];
 
-  const { data: agent } = await supabase
-    .from("agents")
-    .select("id")
-    .eq("handle", top.handle)
-    .maybeSingle();
-  if (!agent) return null;
-
-  // Pull every snapshot since Jan 1 of the current year in one query.
-  // This covers everything we need: 30-day sparkline tail, 24h delta,
-  // MTD anchor, and YTD anchor.
   const now = new Date();
   const jan1 = `${now.getUTCFullYear()}-01-01`;
-  const { data: history } = await supabase
-    .from("agent_portfolio_history")
-    .select("snapshot_date, total_value_usd")
-    .eq("agent_id", agent.id)
-    .gte("snapshot_date", jan1)
-    .order("snapshot_date", { ascending: true });
-
-  const rows = history ?? [];
-  const latest = rows[rows.length - 1];
-  const prev = rows.length >= 2 ? rows[rows.length - 2] : null;
-
   const monthStart = `${now.getUTCFullYear()}-${String(
     now.getUTCMonth() + 1,
   ).padStart(2, "0")}-01`;
-  const mtdAnchor = rows.find((r) => r.snapshot_date >= monthStart) ?? null;
-  const ytdAnchor = rows[0] ?? null;
-
-  const change24h = pctChange(prev, latest);
-  const mtd =
-    mtdAnchor && latest && mtdAnchor.snapshot_date !== latest.snapshot_date
-      ? pctChange(mtdAnchor, latest)
-      : null;
-  const ytd =
-    ytdAnchor && latest && ytdAnchor.snapshot_date !== latest.snapshot_date
-      ? pctChange(ytdAnchor, latest)
-      : null;
-
-  const sparkline = rows.slice(-30).map((r, i) => ({
-    x: i,
-    y: Number(r.total_value_usd),
-  }));
-
-  // 30-day trade count from the immutable trade journal.
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setUTCDate(thirtyDaysAgo.getUTCDate() - 30);
-  const { count } = await supabase
-    .from("agent_trades")
-    .select("*", { count: "exact", head: true })
-    .eq("agent_id", agent.id)
-    .gte("executed_at", thirtyDaysAgo.toISOString());
-  const trades_30d = count ?? 0;
+  const thirtyDaysAgoIso = thirtyDaysAgo.toISOString();
 
-  return {
-    handle: top.handle,
-    display_name: top.display_name,
-    trades_30d,
-    change_24h_pct: change24h,
-    mtd_pct: mtd,
-    ytd_pct: ytd,
-    sparkline,
-    snapshot_date: top.snapshot_date,
-  };
+  const results: TopAgent[] = [];
+  for (const top of topRows) {
+    const { data: agent } = await supabase
+      .from("agents")
+      .select("id")
+      .eq("handle", top.handle)
+      .maybeSingle();
+    if (!agent) continue;
+
+    const { data: history } = await supabase
+      .from("agent_portfolio_history")
+      .select("snapshot_date, total_value_usd")
+      .eq("agent_id", agent.id)
+      .gte("snapshot_date", jan1)
+      .order("snapshot_date", { ascending: true });
+    const rows = history ?? [];
+    const latest = rows[rows.length - 1];
+    const prev = rows.length >= 2 ? rows[rows.length - 2] : null;
+    const mtdAnchor = rows.find((r) => r.snapshot_date >= monthStart) ?? null;
+    const ytdAnchor = rows[0] ?? null;
+
+    const change24h = pctChange(prev, latest);
+    const mtd =
+      mtdAnchor && latest && mtdAnchor.snapshot_date !== latest.snapshot_date
+        ? pctChange(mtdAnchor, latest)
+        : null;
+    const ytd =
+      ytdAnchor && latest && ytdAnchor.snapshot_date !== latest.snapshot_date
+        ? pctChange(ytdAnchor, latest)
+        : null;
+    const sparkline = rows
+      .slice(-30)
+      .map((r, i) => ({ x: i, y: Number(r.total_value_usd) }));
+
+    const { count } = await supabase
+      .from("agent_trades")
+      .select("*", { count: "exact", head: true })
+      .eq("agent_id", agent.id)
+      .gte("executed_at", thirtyDaysAgoIso);
+    const trades_30d = count ?? 0;
+
+    results.push({
+      handle: top.handle,
+      display_name: top.display_name,
+      trades_30d,
+      change_24h_pct: change24h,
+      mtd_pct: mtd,
+      ytd_pct: ytd,
+      sparkline,
+      snapshot_date: top.snapshot_date,
+    });
+  }
+  return results;
 }
 
 function pctChange(
