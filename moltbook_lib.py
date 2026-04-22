@@ -541,32 +541,32 @@ def create_post_and_verify(
     try:
         answer = solve_math_challenge(challenge)
     except Exception as exc:
-        return False, f"posted {post_id} but math solver crashed: {exc}", post_id
+        return (
+            False,
+            f"posted {post_id} but math solver crashed: {exc}\n\n"
+            f"challenge: {challenge!r}",
+            post_id,
+        )
 
     v = client.verify(code, answer)
     if not v or not v.get("success"):
         return (
             False,
-            f"posted {post_id} but verification failed (answer={answer}): {v}",
+            f"posted {post_id} but verification failed (answer={answer}): {v}\n\n"
+            f"challenge: {challenge!r}",
             post_id,
         )
 
     return True, f"posted and verified (answer={answer})", post_id
 
 
-def solve_math_challenge(challenge_text: str) -> str:
-    """Solve the verification math. Returns '37.00'-style answer.
+_SOLVER_VOTES = 3
 
-    Uses Sonnet with chain-of-thought reasoning, then parses the final
-    numeric answer from the end of the response. The challenge text is
-    deliberately noisy (ransom-note formatting, word problems) so Haiku
-    was underperforming — Sonnet is more reliable and the call cost is
-    negligible (≤$0.01/verification).
-    """
-    client = _anthropic_client()
+
+def _single_math_solve(client: Any, challenge_text: str, attempt: int) -> str | None:
     resp = client.messages.create(
         model=MATH_MODEL,
-        max_tokens=800,
+        max_tokens=2000,
         messages=[
             {
                 "role": "user",
@@ -579,6 +579,8 @@ def solve_math_challenge(challenge_text: str) -> str:
                     "- Read the noisy text and extract the clean math problem "
                     "first. Number words like 'twenty-five' mean 25.\n"
                     "- Solve step by step. Do not skip steps.\n"
+                    "- Re-read the problem once you have an answer and verify "
+                    "each arithmetic step before committing.\n"
                     "- The answer MUST be a number to exactly 2 decimal places "
                     "(e.g. 37.00, 525.00, 18.50).\n"
                     "- End your response with a line that reads exactly:\n"
@@ -594,18 +596,57 @@ def solve_math_challenge(challenge_text: str) -> str:
     raw = "".join(
         b.text for b in resp.content if getattr(b, "type", None) == "text"
     ).strip()
-    log.info("math solver reasoning:\n%s", raw)
+    stop_reason = getattr(resp, "stop_reason", None)
+    log.info(
+        "math solver attempt %d (stop=%s, len=%d):\n%s",
+        attempt, stop_reason, len(raw), raw,
+    )
 
-    # Prefer the explicit ANSWER: <number> line at the end.
     answer_line = re.search(r"ANSWER:\s*(-?\d+(?:\.\d+)?)", raw)
     if answer_line:
         return f"{float(answer_line.group(1)):.2f}"
 
-    # Fallback: last number in the response.
     matches = re.findall(r"-?\d+(?:\.\d+)?", raw)
-    if not matches:
-        raise RuntimeError(f"could not parse math answer: {raw!r}")
-    return f"{float(matches[-1]):.2f}"
+    if matches:
+        return f"{float(matches[-1]):.2f}"
+
+    return None
+
+
+def solve_math_challenge(challenge_text: str) -> str:
+    """Solve the verification math using self-consistency voting.
+
+    Runs the solver multiple times and majority-votes the result. The
+    challenge text is deliberately noisy (ransom-note case, word problems),
+    so a single Sonnet pass was misreading numbers often enough to rack up
+    failed retries. Voting across independent samples dramatically improves
+    accuracy at negligible cost.
+    """
+    client = _anthropic_client()
+    attempts: list[str] = []
+    for i in range(_SOLVER_VOTES):
+        try:
+            answer = _single_math_solve(client, challenge_text, attempt=i + 1)
+        except Exception as exc:
+            log.warning("math solver attempt %d raised: %s", i + 1, exc)
+            continue
+        if answer is not None:
+            attempts.append(answer)
+
+    if not attempts:
+        raise RuntimeError(
+            f"no parseable answer across {_SOLVER_VOTES} attempts; "
+            f"challenge={challenge_text!r}"
+        )
+
+    from collections import Counter
+    votes = Counter(attempts)
+    winner, count = votes.most_common(1)[0]
+    log.info(
+        "math solver: %d/%d attempts agree on %s (all: %s)",
+        count, len(attempts), winner, dict(votes),
+    )
+    return winner
 
 
 def post_and_verify(
@@ -636,7 +677,8 @@ def post_and_verify(
     except Exception as exc:
         return (
             False,
-            f"posted {comment_id} but math solver crashed: {exc}",
+            f"posted {comment_id} but math solver crashed: {exc}\n\n"
+            f"challenge: {challenge!r}",
             comment_id,
         )
 
@@ -644,7 +686,8 @@ def post_and_verify(
     if not v or not v.get("success"):
         return (
             False,
-            f"posted {comment_id} but verification failed (answer={answer}): {v}",
+            f"posted {comment_id} but verification failed (answer={answer}): {v}\n\n"
+            f"challenge: {challenge!r}",
             comment_id,
         )
 
