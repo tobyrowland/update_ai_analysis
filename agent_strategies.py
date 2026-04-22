@@ -311,12 +311,298 @@ def rebalance_dual_positive(ctx: RebalanceContext) -> RebalanceResult:
 
 
 # ---------------------------------------------------------------------------
+# Strategy: momentum
+# ---------------------------------------------------------------------------
+
+
+MOMENTUM_DEFAULTS = {
+    "max_positions": 10,
+    "max_sells_per_heartbeat": 2,
+    "max_buys_per_heartbeat": 2,
+    "cash_reserve_pct": 0.02,
+    "min_trade_usd": 500.0,
+    # Eligible-universe band for perf_52w_vs_spy.
+    "momentum_floor": -0.15,
+    "momentum_ceiling": 0.40,
+    # Extra gate on new entries: must be at least this strong vs SPY.
+    "momentum_min_for_entry": 0.0,
+    # Exit guard: rating strictly greater than this triggers a sell.
+    "rating_ceiling": 1.6,
+}
+
+
+def _eligible_momentum(db: SupabaseDB, params: dict) -> list[dict]:
+    """Return the momentum-ranked eligible set.
+
+    A ticker is eligible if all hold:
+        - bear_eval contains ✅ and bull_eval contains ✅
+        - rating is not null and <= rating_ceiling
+        - exchange ∈ US_EXCHANGES (v1 prices are USD-flat; skip foreign dups)
+        - perf_52w_vs_spy is not null and ∈ [momentum_floor, momentum_ceiling]
+
+    Deduped by company (US-listing preferred anyway), sorted by
+    perf_52w_vs_spy descending.
+    """
+    floor = float(params["momentum_floor"])
+    ceiling = float(params["momentum_ceiling"])
+    rating_ceiling = float(params["rating_ceiling"])
+
+    eligible: list[dict] = []
+    for c in db.get_all_companies():
+        if not c.get("ticker"):
+            continue
+        if "✅" not in str(c.get("bear_eval") or ""):
+            continue
+        if "✅" not in str(c.get("bull_eval") or ""):
+            continue
+        if not _is_us(c.get("exchange")):
+            continue
+        rating = SupabaseDB.safe_float(c.get("rating"))
+        if rating is None or rating > rating_ceiling:
+            continue
+        perf = SupabaseDB.safe_float(c.get("perf_52w_vs_spy"))
+        if perf is None or perf < floor or perf > ceiling:
+            continue
+        eligible.append(c)
+
+    eligible = _dedupe_by_company(eligible)
+    eligible.sort(
+        key=lambda c: SupabaseDB.safe_float(c.get("perf_52w_vs_spy")) or 0.0,
+        reverse=True,
+    )
+    return eligible
+
+
+def rebalance_momentum(ctx: RebalanceContext) -> RebalanceResult:
+    """Low-churn momentum rebalance.
+
+    Phase 1 — sell only the becalmed. A current holding is sold in full iff
+    any of:
+        (a) it's no longer in the eligible universe AND its
+            perf_52w_vs_spy is < momentum_floor (becalmed drift),
+        (b) its rating has risen above rating_ceiling,
+        (c) its bear_eval has flipped to ❌.
+    Missing perf data (NULL) does NOT trigger a sell — the holding is
+    preserved until the scoring pipeline repopulates it.
+
+    Sells are capped at max_sells_per_heartbeat; if more qualify, the two
+    with the lowest perf_52w_vs_spy go first and the rest land in
+    notes["deferred_sells"] for visibility.
+
+    Phase 2 — redeploy freed cash into top momentum names. After sells,
+    available slots = max_positions - remaining_holdings (clamped at
+    max_buys_per_heartbeat). Entries must additionally have
+    perf_52w_vs_spy >= momentum_min_for_entry. Freed cash is
+    equal-weighted across the new buys with a cash_reserve_pct buffer.
+
+    Idempotence: on an unchanged universe, a second run produces 0/0.
+    """
+    result = RebalanceResult()
+    params = {**MOMENTUM_DEFAULTS, **(ctx.params or {})}
+    agent_id = ctx.agent["id"]
+    handle = ctx.agent.get("handle", agent_id[:8])
+
+    eligible = _eligible_momentum(ctx.db, params)
+    eligible_by_ticker = {c["ticker"]: c for c in eligible}
+
+    portfolio = ctx.pm.get_portfolio(agent_id)
+    holdings = portfolio["holdings"]
+    total_value = portfolio["total_value_usd"]
+    if total_value <= 0:
+        result.errors.append(f"total_value_usd <= 0 for agent {handle}")
+        return result
+
+    rating_ceiling = float(params["rating_ceiling"])
+    momentum_floor = float(params["momentum_floor"])
+
+    # --- Phase 1: classify current holdings.
+    momentum_snapshot: list[dict] = []
+    sell_candidates: list[tuple[str, float, str]] = []  # (ticker, perf, reason)
+
+    for h in holdings:
+        ticker = h["ticker"]
+        company = ctx.db.get_company(ticker)
+        perf = (
+            SupabaseDB.safe_float(company.get("perf_52w_vs_spy"))
+            if company else None
+        )
+        rating = (
+            SupabaseDB.safe_float(company.get("rating"))
+            if company else None
+        )
+        bear_flipped = (
+            company is not None
+            and "❌" in str(company.get("bear_eval") or "")
+        )
+        momentum_snapshot.append(
+            {"ticker": ticker, "perf_52w_vs_spy": perf, "rating": rating}
+        )
+
+        reasons: list[str] = []
+        if rating is not None and rating > rating_ceiling:
+            reasons.append(f"rating>{rating_ceiling}")
+        if bear_flipped:
+            reasons.append("bear_flipped_red")
+        if (
+            ticker not in eligible_by_ticker
+            and perf is not None
+            and perf < momentum_floor
+        ):
+            reasons.append(f"becalmed_below_{momentum_floor}")
+
+        if reasons:
+            # Missing perf sorts last; we never want to sell a NULL-perf
+            # position unless rating/bear forced it, and even then we want
+            # forced sells to rank above purely-becalmed ones.
+            sell_candidates.append(
+                (ticker, perf if perf is not None else float("inf"), ";".join(reasons))
+            )
+
+    # Cap at max_sells_per_heartbeat, prioritising the lowest perf.
+    max_sells = int(params["max_sells_per_heartbeat"])
+    sell_candidates.sort(key=lambda s: s[1])
+    planned_sells = sell_candidates[:max_sells]
+    deferred_sells = [
+        {"ticker": t, "perf_52w_vs_spy": p if p != float("inf") else None, "reason": r}
+        for (t, p, r) in sell_candidates[max_sells:]
+    ]
+
+    # --- Phase 2: buys. Compute available slots BEFORE executing sells
+    # (we know exactly what will be sold).
+    held_tickers = {h["ticker"] for h in holdings}
+    tickers_after_sells = held_tickers - {t for (t, _, _) in planned_sells}
+    max_positions = int(params["max_positions"])
+    free_slots = max(0, max_positions - len(tickers_after_sells))
+    max_buys = min(int(params["max_buys_per_heartbeat"]), free_slots)
+
+    momentum_min_for_entry = float(params["momentum_min_for_entry"])
+    min_trade = float(params["min_trade_usd"])
+    cash_reserve = float(params["cash_reserve_pct"])
+
+    # Candidate buys: top of eligible, not already held, above entry floor.
+    # Price them; skip unpriced.
+    buy_candidates_priced: list[tuple[str, float]] = []
+    unpriced: list[str] = []
+    for c in eligible:
+        if len(buy_candidates_priced) >= max_buys:
+            break
+        t = c["ticker"]
+        if t in tickers_after_sells:
+            continue
+        perf = SupabaseDB.safe_float(c.get("perf_52w_vs_spy"))
+        if perf is None or perf < momentum_min_for_entry:
+            continue
+        try:
+            buy_candidates_priced.append((t, ctx.pm.get_price(t)))
+        except PortfolioError:
+            unpriced.append(t)
+    if unpriced:
+        result.notes["unpriced"] = unpriced
+
+    # Estimate free cash post-sell. We don't have exact fill prices yet, so
+    # use current market price for the planned sells.
+    cash = float(portfolio["cash_usd"])
+    sell_proceeds_estimate = 0.0
+    for sell_ticker, _perf, _reason in planned_sells:
+        held_qty = next(
+            (float(h["quantity"]) for h in holdings if h["ticker"] == sell_ticker),
+            0.0,
+        )
+        try:
+            px = ctx.pm.get_price(sell_ticker)
+            sell_proceeds_estimate += held_qty * px
+        except PortfolioError:
+            # Unpriceable holding — sell will fail too. Leave it out of
+            # the cash estimate and let the live branch record the error.
+            pass
+    free_cash = cash + sell_proceeds_estimate
+    investable = free_cash * (1.0 - cash_reserve)
+
+    per_target_usd = (
+        investable / len(buy_candidates_priced)
+        if buy_candidates_priced else 0.0
+    )
+
+    buys: list[tuple[str, int]] = []
+    for ticker, price in buy_candidates_priced:
+        qty = int(math.floor(per_target_usd / price)) if price > 0 else 0
+        if qty <= 0:
+            continue
+        if qty * price < min_trade:
+            continue
+        buys.append((ticker, qty))
+
+    # --- Dry-run: serialise the plan and return.
+    if ctx.dry_run:
+        result.notes["dry_run_plan"] = {
+            "sells": [
+                {"ticker": t, "perf_52w_vs_spy": (p if p != float("inf") else None), "reason": r}
+                for (t, p, r) in planned_sells
+            ],
+            "buys": [{"ticker": t, "qty": q} for (t, q) in buys],
+            "per_target_usd": round(per_target_usd, 2),
+            "total_value_usd": total_value,
+            "free_cash_post_sell_estimate": round(free_cash, 2),
+            "max_positions": max_positions,
+            "holdings_after_sells": len(tickers_after_sells),
+            "free_slots": free_slots,
+        }
+        if deferred_sells:
+            result.notes["deferred_sells"] = deferred_sells
+        result.notes["momentum_snapshot"] = momentum_snapshot
+        result.notes["eligible_snapshot"] = [
+            {
+                "ticker": c["ticker"],
+                "perf_52w_vs_spy": SupabaseDB.safe_float(c.get("perf_52w_vs_spy")),
+                "rating": SupabaseDB.safe_float(c.get("rating")),
+            }
+            for c in eligible[:max_positions]
+        ]
+        logger.info(
+            "[dry-run] %s: %d sells, %d buys, eligible=%d, total=$%.2f",
+            handle, len(planned_sells), len(buys), len(eligible), total_value,
+        )
+        return result
+
+    # --- Live: execute sells first, then buys.
+    for ticker, _perf, reason in planned_sells:
+        held_qty = next(
+            (float(h["quantity"]) for h in holdings if h["ticker"] == ticker),
+            0.0,
+        )
+        if held_qty <= 0:
+            continue
+        try:
+            ctx.pm.sell(agent_id, ticker, held_qty, note=f"heartbeat/momentum:{reason}")
+            result.sells += 1
+        except PortfolioError as exc:
+            result.errors.append(f"sell {ticker} x{held_qty}: {exc}")
+
+    for ticker, qty in buys:
+        try:
+            ctx.pm.buy(agent_id, ticker, qty, note="heartbeat/momentum")
+            result.buys += 1
+        except PortfolioError as exc:
+            # Most likely: price drift between plan and fill left us short
+            # of cash for the last buy. Partial fill is acceptable.
+            result.errors.append(f"buy {ticker} x{qty}: {exc}")
+
+    result.notes["eligible_count"] = len(eligible)
+    result.notes["per_target_usd"] = round(per_target_usd, 2)
+    result.notes["total_value_usd"] = total_value
+    if deferred_sells:
+        result.notes["deferred_sells"] = deferred_sells
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
 
 STRATEGIES: dict[str, Strategy] = {
     "dual_positive": rebalance_dual_positive,
+    "momentum": rebalance_momentum,
 }
 
 
