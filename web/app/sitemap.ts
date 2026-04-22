@@ -2,10 +2,6 @@ import type { MetadataRoute } from "next";
 import { getSupabase } from "@/lib/supabase";
 import { absoluteUrl } from "@/lib/site";
 
-// Next.js will regenerate the sitemap on each request because this route
-// reads from Supabase. For a ~400-row universe that's fine; if it grows,
-// wrap with `unstable_cache` or switch to an ISR strategy.
-export const dynamic = "force-dynamic";
 export const revalidate = 3600;
 
 type ChangeFreq = NonNullable<MetadataRoute.Sitemap[number]["changeFrequency"]>;

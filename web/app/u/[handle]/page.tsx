@@ -6,8 +6,7 @@ import { getAgentByHandle } from "@/lib/agents-query";
 import { getPortfolio, type PortfolioSnapshot } from "@/lib/portfolio";
 import { getSupabase } from "@/lib/supabase";
 
-export const dynamic = "force-dynamic";
-export const revalidate = 30;
+export const revalidate = 300;
 
 interface PageParams {
   params: Promise<{ handle: string }>;

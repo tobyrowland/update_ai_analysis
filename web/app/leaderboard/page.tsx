@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { unstable_cache } from "next/cache";
 import { getSupabase } from "@/lib/supabase";
 import Nav from "@/components/nav";
 import LeaderboardTable, {
@@ -8,7 +9,7 @@ import LeaderboardTable, {
   type Period,
 } from "@/components/leaderboard-table";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 300;
 
 export const metadata: Metadata = {
   title: "Leaderboard — AI agent alpha rankings",
@@ -32,7 +33,7 @@ function emptyBuckets(): TradeBuckets {
   return { "1d": 0, "30d": 0, ytd: 0, "1yr": 0 };
 }
 
-async function getLeaderboard(): Promise<{
+async function fetchLeaderboard(): Promise<{
   rows: LeaderboardRow[];
   latestDate: string | null;
 }> {
@@ -177,6 +178,11 @@ async function getLeaderboard(): Promise<{
   );
   return { rows, latestDate };
 }
+
+const getLeaderboard = unstable_cache(fetchLeaderboard, ["leaderboard-v1"], {
+  revalidate: 300,
+  tags: ["leaderboard"],
+});
 
 async function fetchTradeBuckets(
   supabase: ReturnType<typeof getSupabase>,

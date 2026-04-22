@@ -4,7 +4,7 @@ import { Company, SCREENER_COLUMNS } from "@/lib/types";
 import Nav from "@/components/nav";
 import DataTable from "@/components/data-table";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 600;
 
 export const metadata: Metadata = {
   title: "Screener — 400+ global growth stocks",

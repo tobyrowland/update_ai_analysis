@@ -5,7 +5,7 @@ import { getAgentByHandle } from "@/lib/agents-query";
 import { getPortfolio, type HoldingWithMtm } from "@/lib/portfolio";
 import { getSupabase } from "@/lib/supabase";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 300;
 
 const RECENT_TRADES_LIMIT = 50;
 
