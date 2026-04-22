@@ -26,9 +26,12 @@ LEDGER_LABEL = "moltbook-ledger"
 LEDGER_MARKER_START = "<!-- engagement-ledger-data"
 LEDGER_MARKER_END = "engagement-ledger-data -->"
 
-FINANCE_SUBMOLTS = frozenset({
+FEED_SUBMOLTS = frozenset({
+    # Finance-native
     "investing", "value-investing", "stocks", "stockmarket",
     "markets", "investment", "agent-investors", "tradingdesk",
+    # Adjacent to theme 2 (swarms) and theme 3 (agent+human UX)
+    "agents", "ai", "product", "design", "meta",
 })
 
 DRAFT_MODEL = "claude-haiku-4-5"
@@ -452,6 +455,65 @@ def draft_reply(context: dict[str, Any]) -> str:
         "Drop anything that isn't information-dense. One question back, max."
     )
     return _draft_once(retry_block)
+
+
+def classify_post_themes(post: dict[str, Any]) -> list[int]:
+    """Classify a feed post against our three engagement themes.
+
+    Returns a list of matched theme numbers (subset of [1, 2, 3]).
+    An empty list means the post is off-thesis and we should skip commenting.
+
+    Themes:
+      1. Whether AI models can outperform human fund managers / stock pickers
+      2. Swarms of models (collaborative or competitive) vs single-model approaches
+      3. Interfaces / platform structure serving both agents and humans, not humans alone
+    """
+    title = post.get("title", "")
+    content = (post.get("content") or "")[:1200]
+    submolt = (post.get("submolt") or {}).get("name", "")
+
+    user_block = (
+        "Classify a Moltbook post against three engagement themes. "
+        "Return only themes that GENUINELY apply — it is fine to return none.\n\n"
+        "THEMES:\n"
+        "1. Whether AI models can outperform human fund managers / stock pickers "
+        "(active vs passive, human intuition vs AI, fund performance, portfolio "
+        "management, quant vs discretionary).\n"
+        "2. Swarms of models — collaborative or competitive — vs single-model "
+        "approaches (multi-agent systems, mixture of experts, ensembles, "
+        "agents disagreeing productively).\n"
+        "3. Interfaces / platform structure that serve BOTH agents and humans, "
+        "not humans alone (agent-first UX, machine-readable APIs alongside "
+        "human UIs, platforms where AI is a first-class user).\n\n"
+        f"POST:\n"
+        f"Submolt: m/{submolt}\n"
+        f"Title: {title}\n"
+        f"Content:\n{content}\n\n"
+        "Output exactly one line in the format:\n"
+        "  THEMES: 1,3\n"
+        "or\n"
+        "  THEMES: none\n"
+        "No prose, no explanation."
+    )
+
+    client = _anthropic_client()
+    resp = client.messages.create(
+        model=DRAFT_MODEL,
+        max_tokens=40,
+        messages=[{"role": "user", "content": user_block}],
+    )
+    raw = "".join(
+        b.text for b in resp.content if getattr(b, "type", None) == "text"
+    ).strip()
+
+    m = re.search(r"THEMES:\s*(none|[\d,\s]+)", raw, re.IGNORECASE)
+    if not m:
+        log.warning("theme classifier: unparseable output %r", raw)
+        return []
+    answer = m.group(1).strip().lower()
+    if answer == "none":
+        return []
+    return sorted({int(n) for n in re.findall(r"[123]", answer)})
 
 
 def draft_feed_comment(post: dict[str, Any]) -> str:

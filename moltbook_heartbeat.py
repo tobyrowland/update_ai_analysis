@@ -36,13 +36,14 @@ from typing import Any
 
 from moltbook_lib import (
     APPROVE_LABEL,
-    FINANCE_SUBMOLTS,
+    FEED_SUBMOLTS,
     GitHubIssuer,
     MOLTBOOK_ISSUE_LABEL,
     MoltbookClient,
     REJECT_LABEL,
     REPLY_MARKER_END,
     REPLY_MARKER_START,
+    classify_post_themes,
     create_post_and_verify,
     draft_feed_comment,
     draft_original_post,
@@ -362,7 +363,7 @@ def _engage_feed(
     # and rarely surfaces posts from smaller finance communities.
     seen_ids: set[str] = set()
     posts: list[dict] = []
-    for submolt_name in FINANCE_SUBMOLTS:
+    for submolt_name in FEED_SUBMOLTS:
         submolt_posts = client.feed(sort="new", limit=5, submolt=submolt_name)
         for p in submolt_posts:
             pid = p.get("id", "")
@@ -377,7 +378,7 @@ def _engage_feed(
                 "  m/%s: %d posts fetched", submolt_name, len(submolt_posts)
             )
     log.info("feed fetched: %d unique posts from %d submolts",
-             len(posts), len(FINANCE_SUBMOLTS))
+             len(posts), len(FEED_SUBMOLTS))
 
     already_followed: set[str] = set(ledger.get("followed", []))
     already_upvoted: set[str] = set(ledger.get("upvoted_posts", []))
@@ -443,6 +444,17 @@ def _engage_feed(
             and commented_this_run < MAX_COMMENTS_PER_RUN
             and comments_today < MAX_COMMENTS_PER_DAY
         ):
+            try:
+                themes = classify_post_themes(post)
+            except Exception as exc:
+                log.error("theme classifier failed on %s: %s", post_id[:8], exc)
+                continue
+
+            if not themes:
+                log.info("SKIP %s — off-theme", post_id[:8])
+                continue
+            log.info("post %s matches themes %s", post_id[:8], themes)
+
             try:
                 draft = draft_feed_comment(post)
             except Exception as exc:
