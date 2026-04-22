@@ -145,6 +145,89 @@ def _dedupe_by_company(rows: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Trade-note formatters
+# ---------------------------------------------------------------------------
+#
+# Each live trade gets a short rationale string written to
+# ``agent_trades.note``. These are plain English, ~10–20 words, derived
+# from the same data the strategy already looked at — no LLM calls. The
+# UI can render them verbatim so users can see *why* each trade happened.
+
+
+def _fmt_pct(x: float | None) -> str:
+    """Format a fraction like 0.321 as '+32%'. Returns '?' if None."""
+    if x is None:
+        return "?"
+    return f"{x * 100:+.0f}%"
+
+
+def _fmt_rating(x: float | None) -> str:
+    if x is None:
+        return "?"
+    return f"{x:.1f}"
+
+
+def _format_momentum_sell_note(
+    ticker: str,
+    meta: dict,
+    reasons: list[str],
+    params: dict,
+) -> str:
+    """Human-readable rationale for a momentum-strategy sell."""
+    rating = meta.get("rating")
+    perf = meta.get("perf_52w_vs_spy")
+    floor = float(params["momentum_floor"])
+    ceiling = float(params["rating_ceiling"])
+
+    parts: list[str] = []
+    for r in reasons:
+        if r.startswith("rating>"):
+            parts.append(f"rating {_fmt_rating(rating)} breached {ceiling:.1f} ceiling")
+        elif r == "bear_flipped_red":
+            parts.append("bear flipped ❌")
+        elif r.startswith("becalmed_below_"):
+            parts.append(
+                f"dropped from eligible set, momentum {_fmt_pct(perf)} below {floor * 100:.0f}% floor"
+            )
+    if not parts:
+        parts.append("rebalance exit")
+    return f"Sold {ticker} — {'; '.join(parts)}."
+
+
+def _format_momentum_buy_note(ticker: str, meta: dict, rank: int) -> str:
+    """Human-readable rationale for a momentum-strategy buy."""
+    perf = meta.get("perf_52w_vs_spy")
+    rating = meta.get("rating")
+    return (
+        f"Bought {ticker} — {_fmt_pct(perf)} vs SPY, rating {_fmt_rating(rating)}, "
+        f"dual ✅ (#{rank} momentum)."
+    )
+
+
+def _format_dual_positive_sell_note(ticker: str, reason: str) -> str:
+    """Human-readable rationale for a dual_positive-strategy sell."""
+    if reason == "dropped_from_top_n":
+        return f"Sold {ticker} — no longer in top-N dual-positive set."
+    if reason == "trim_overweight":
+        return f"Sold {ticker} — trimming overweight position to target weight."
+    return f"Sold {ticker} — rebalance."
+
+
+def _format_dual_positive_buy_note(
+    ticker: str,
+    composite_score: float | None,
+    rank: int,
+) -> str:
+    """Human-readable rationale for a dual_positive-strategy buy."""
+    score_part = (
+        f"composite score {composite_score:.2f}"
+        if composite_score is not None
+        else "composite score unknown"
+    )
+    return f"Bought {ticker} — dual ✅, {score_part} (#{rank} in universe)."
+
+
+# ---------------------------------------------------------------------------
 # Strategy: dual_positive
 # ---------------------------------------------------------------------------
 
@@ -198,14 +281,23 @@ def rebalance_dual_positive(ctx: RebalanceContext) -> RebalanceResult:
         return result
 
     # Price every candidate; skip unpriced ones rather than aborting.
+    # Keep each candidate's rank (1-based, by composite_score desc) and
+    # composite_score alongside so the live branch can format notes.
     priced: list[tuple[str, float]] = []
+    target_meta: dict[str, dict] = {}
     unpriced: list[str] = []
-    for c in targets:
+    for rank_idx, c in enumerate(targets, start=1):
         t = c["ticker"]
         try:
-            priced.append((t, ctx.pm.get_price(t)))
+            price = ctx.pm.get_price(t)
         except PortfolioError:
             unpriced.append(t)
+            continue
+        priced.append((t, price))
+        target_meta[t] = {
+            "composite_score": SupabaseDB.safe_float(c.get("composite_score")),
+            "rank": rank_idx,
+        }
     if unpriced:
         result.notes["unpriced"] = unpriced
     if not priced:
@@ -240,7 +332,7 @@ def rebalance_dual_positive(ctx: RebalanceContext) -> RebalanceResult:
 
     # --- Phase 1: sell positions no longer in target set, and trim overshoots.
     # Sells before buys so cash is available for rotations.
-    sells: list[tuple[str, float]] = []
+    sells: list[tuple[str, float, str]] = []
     buys: list[tuple[str, int]] = []
 
     for ticker, held in current_qty.items():
@@ -260,7 +352,8 @@ def rebalance_dual_positive(ctx: RebalanceContext) -> RebalanceResult:
         if delta * px < min_trade and ticker in target_tickers:
             # Noise trim within an existing position — skip.
             continue
-        sells.append((ticker, delta))
+        reason = "dropped_from_top_n" if ticker not in target_tickers else "trim_overweight"
+        sells.append((ticker, delta, reason))
 
     for ticker, price in priced:
         held = current_qty.get(ticker, 0.0)
@@ -275,8 +368,18 @@ def rebalance_dual_positive(ctx: RebalanceContext) -> RebalanceResult:
     # --- Execute
     if ctx.dry_run:
         result.notes["dry_run_plan"] = {
-            "sells": [{"ticker": t, "qty": q} for t, q in sells],
-            "buys": [{"ticker": t, "qty": q} for t, q in buys],
+            "sells": [
+                {"ticker": t, "qty": q, "reason": r} for (t, q, r) in sells
+            ],
+            "buys": [
+                {
+                    "ticker": t,
+                    "qty": q,
+                    "composite_score": target_meta.get(t, {}).get("composite_score"),
+                    "rank": target_meta.get(t, {}).get("rank"),
+                }
+                for (t, q) in buys
+            ],
             "targets": len(priced),
             "per_target_usd": round(per_target_usd, 2),
             "total_value_usd": total_value,
@@ -287,16 +390,23 @@ def rebalance_dual_positive(ctx: RebalanceContext) -> RebalanceResult:
         )
         return result
 
-    for ticker, qty in sells:
+    for ticker, qty, reason in sells:
+        note = _format_dual_positive_sell_note(ticker, reason)
         try:
-            ctx.pm.sell(agent_id, ticker, qty, note="heartbeat/dual_positive")
+            ctx.pm.sell(agent_id, ticker, qty, note=note)
             result.sells += 1
         except PortfolioError as exc:
             result.errors.append(f"sell {ticker} x{qty}: {exc}")
 
     for ticker, qty in buys:
+        meta = target_meta.get(ticker, {})
+        note = _format_dual_positive_buy_note(
+            ticker,
+            meta.get("composite_score"),
+            meta.get("rank") or 0,
+        )
         try:
-            ctx.pm.buy(agent_id, ticker, qty, note="heartbeat/dual_positive")
+            ctx.pm.buy(agent_id, ticker, qty, note=note)
             result.buys += 1
         except PortfolioError as exc:
             # Insufficient cash is the most likely failure mode (prices drift
@@ -418,6 +528,8 @@ def rebalance_momentum(ctx: RebalanceContext) -> RebalanceResult:
     # --- Phase 1: classify current holdings.
     momentum_snapshot: list[dict] = []
     sell_candidates: list[tuple[str, float, str]] = []  # (ticker, perf, reason)
+    # Per-holding metadata for note formatting and snapshot reuse.
+    holding_meta: dict[str, dict] = {}
 
     for h in holdings:
         ticker = h["ticker"]
@@ -450,6 +562,13 @@ def rebalance_momentum(ctx: RebalanceContext) -> RebalanceResult:
         ):
             reasons.append(f"becalmed_below_{momentum_floor}")
 
+        holding_meta[ticker] = {
+            "perf_52w_vs_spy": perf,
+            "rating": rating,
+            "bear_red": bear_flipped,
+            "reasons": reasons,
+        }
+
         if reasons:
             # Missing perf sorts last; we never want to sell a NULL-perf
             # position unless rating/bear forced it, and even then we want
@@ -480,11 +599,12 @@ def rebalance_momentum(ctx: RebalanceContext) -> RebalanceResult:
     cash_reserve = float(params["cash_reserve_pct"])
 
     # Candidate buys: top of eligible, not already held, above entry floor.
-    # Price them; skip unpriced.
-    buy_candidates_priced: list[tuple[str, float]] = []
+    # Price them; skip unpriced. Carry per-candidate metadata for the note
+    # formatter and the dry-run plan.
+    buy_candidates: list[dict] = []
     unpriced: list[str] = []
-    for c in eligible:
-        if len(buy_candidates_priced) >= max_buys:
+    for rank_idx, c in enumerate(eligible, start=1):
+        if len(buy_candidates) >= max_buys:
             break
         t = c["ticker"]
         if t in tickers_after_sells:
@@ -493,9 +613,19 @@ def rebalance_momentum(ctx: RebalanceContext) -> RebalanceResult:
         if perf is None or perf < momentum_min_for_entry:
             continue
         try:
-            buy_candidates_priced.append((t, ctx.pm.get_price(t)))
+            price = ctx.pm.get_price(t)
         except PortfolioError:
             unpriced.append(t)
+            continue
+        buy_candidates.append(
+            {
+                "ticker": t,
+                "price": price,
+                "perf_52w_vs_spy": perf,
+                "rating": SupabaseDB.safe_float(c.get("rating")),
+                "rank": rank_idx,
+            }
+        )
     if unpriced:
         result.notes["unpriced"] = unpriced
 
@@ -519,18 +649,20 @@ def rebalance_momentum(ctx: RebalanceContext) -> RebalanceResult:
     investable = free_cash * (1.0 - cash_reserve)
 
     per_target_usd = (
-        investable / len(buy_candidates_priced)
-        if buy_candidates_priced else 0.0
+        investable / len(buy_candidates) if buy_candidates else 0.0
     )
 
-    buys: list[tuple[str, int]] = []
-    for ticker, price in buy_candidates_priced:
+    # buys: list of (ticker, qty, buy_candidate_dict) so the live branch
+    # can format a data-rich note without re-looking-up the company.
+    buys: list[tuple[str, int, dict]] = []
+    for bc in buy_candidates:
+        price = bc["price"]
         qty = int(math.floor(per_target_usd / price)) if price > 0 else 0
         if qty <= 0:
             continue
         if qty * price < min_trade:
             continue
-        buys.append((ticker, qty))
+        buys.append((bc["ticker"], qty, bc))
 
     # --- Dry-run: serialise the plan and return.
     if ctx.dry_run:
@@ -539,7 +671,16 @@ def rebalance_momentum(ctx: RebalanceContext) -> RebalanceResult:
                 {"ticker": t, "perf_52w_vs_spy": (p if p != float("inf") else None), "reason": r}
                 for (t, p, r) in planned_sells
             ],
-            "buys": [{"ticker": t, "qty": q} for (t, q) in buys],
+            "buys": [
+                {
+                    "ticker": t,
+                    "qty": q,
+                    "perf_52w_vs_spy": bc.get("perf_52w_vs_spy"),
+                    "rating": bc.get("rating"),
+                    "rank": bc.get("rank"),
+                }
+                for (t, q, bc) in buys
+            ],
             "per_target_usd": round(per_target_usd, 2),
             "total_value_usd": total_value,
             "free_cash_post_sell_estimate": round(free_cash, 2),
@@ -572,15 +713,20 @@ def rebalance_momentum(ctx: RebalanceContext) -> RebalanceResult:
         )
         if held_qty <= 0:
             continue
+        meta = holding_meta.get(ticker, {})
+        note = _format_momentum_sell_note(
+            ticker, meta, meta.get("reasons", []), params,
+        )
         try:
-            ctx.pm.sell(agent_id, ticker, held_qty, note=f"heartbeat/momentum:{reason}")
+            ctx.pm.sell(agent_id, ticker, held_qty, note=note)
             result.sells += 1
         except PortfolioError as exc:
             result.errors.append(f"sell {ticker} x{held_qty}: {exc}")
 
-    for ticker, qty in buys:
+    for ticker, qty, bc in buys:
+        note = _format_momentum_buy_note(ticker, bc, bc["rank"])
         try:
-            ctx.pm.buy(agent_id, ticker, qty, note="heartbeat/momentum")
+            ctx.pm.buy(agent_id, ticker, qty, note=note)
             result.buys += 1
         except PortfolioError as exc:
             # Most likely: price drift between plan and fill left us short
