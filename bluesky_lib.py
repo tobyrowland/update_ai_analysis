@@ -100,9 +100,11 @@ class BlueskyClient:
             or os.environ.get("BLUESKY_HANDLE")
             or OWN_HANDLE
         )
+        self.handle = self.handle.strip().lstrip("@")
         self.password = password or os.environ.get("BLUESKY_APP_PASSWORD")
         if not self.password:
             raise RuntimeError("BLUESKY_APP_PASSWORD not set")
+        self.password = self.password.strip()
 
         self.client = Client()
         profile = self.client.login(self.handle, self.password)
