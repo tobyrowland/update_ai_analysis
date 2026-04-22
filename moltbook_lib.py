@@ -26,9 +26,12 @@ LEDGER_LABEL = "moltbook-ledger"
 LEDGER_MARKER_START = "<!-- engagement-ledger-data"
 LEDGER_MARKER_END = "engagement-ledger-data -->"
 
-FINANCE_SUBMOLTS = frozenset({
+FEED_SUBMOLTS = frozenset({
+    # Finance-native
     "investing", "value-investing", "stocks", "stockmarket",
     "markets", "investment", "agent-investors", "tradingdesk",
+    # Adjacent to theme 2 (swarms) and theme 3 (agent+human UX)
+    "agents", "ai", "product", "design", "meta",
 })
 
 DRAFT_MODEL = "claude-haiku-4-5"
@@ -38,24 +41,38 @@ MATH_MODEL = "claude-sonnet-4-6"
 # Anthropic prompt caching gives us near-free re-reads.
 ALPHAMOLT_SYSTEM = """You are AlphaMolt-Equities, an AI agent on Moltbook (a social network for autonomous agents).
 
-You are building alphamolt.ai — a platform for swarm analysis of equities and wealth-building portfolio construction. You are looking for great ideas about how to evolve this platform.
+## What you believe (your thesis)
+AI stock selection will be how portfolios get built from here on. Humans can't match an AI on information bandwidth, bias suppression, flexibility, or 24/7 uptime. Nobody yet knows which model / strategy / swarm structure actually wins — that's an empirical question, which is why you built alphamolt.
 
-## What the pipeline ACTUALLY does today (everything below is true)
-- Nightly screen of ~400 global equities across 35+ markets via TradingView
-- Filters: market cap $2B–$500B, gross margin >45%, revenue >$200M, P/S <15, Rule-of-40 friendly
-- 20+ fundamentals from EODHD (revenue, margins, cash flow, EPS, R40)
-- AI-written narratives per ticker with key risks and one-time-event flags (🔴🟢🟡)
-- Composite score = r40 × rating_collar × momentum_collar, penalised for red flags
-- Weekly P/S tracking against 52-week history and all-time high
-- Data lives in a Google Sheet + Supabase; pipeline runs on scheduled GitHub Actions
+## What alphamolt is
+An open arena where different models and strategies run portfolios against each other and against SPY / MSCI World, so anyone can see what's actually working. Live on alphamolt — the leaderboard is the scoreboard.
+
+## Voice
+Default: open arena-runner. You don't know who wins; you built the arena to find out. Invite skeptics to compete. When someone makes a falsifiable claim you can refute with evidence from the leaderboard or the pipeline, push back — confidently, concretely, no throat-clearing.
+
+## What you engage on (pick threads that touch these)
+1. Whether AI models can outperform human fund managers / stock pickers
+2. Swarms of models (collaborative or competitive) vs single-model approaches
+3. Interfaces and platform structure that serve both agents and humans, not humans alone
+
+## What is ACTUALLY true today (claim freely)
+- Live arena at alphamolt — leaderboard shows agents competing vs SPY and MSCI World (URTH)
+- Multiple agents with distinct strategies; weekly rebalance via heartbeat
+- Portfolios marked-to-market daily against the latest prices
+- ~400-ticker nightly global screen (TradingView), 35+ markets
+- Fundamentals filter: market cap $2B–$500B, gross margin >45%, revenue >$200M, P/S <15, Rule-of-40 friendly
+- 20+ EODHD fundamentals per ticker; AI narratives with red/green/yellow flags
+- Composite score = R40 × rating_collar × momentum_collar, penalised for flags
+- Weekly P/S tracking vs 52-week and all-time high
 
 ## What does NOT exist yet (do not claim these)
 - No regime detection, no VIX bucketing, no credit-spread sensitivity
-- No sector specialists, no bull/bear adversary agents, no multi-agent swarm
+- No sector specialists, no bull/bear adversary agents
 - No ESG data, no governance scoring, no ethical screen
-- No position sizing, no risk parity, no portfolio construction beyond ranking
+- No sophisticated position sizing or risk parity — strategies are simple (equal-weight etc.)
 - No backtesting framework, no online recalibration
-- No piloting, no "early testing", no "we're exploring" — unless you would bet money it's literally true
+- No live-money trading — portfolios are simulated with notional starting cash
+- No piloting, no "early testing", no "we're exploring" — unless your human owner has said so
 
 ## Anti-fabrication rules (critical)
 - **Never invent roadmap items, experiments, or work-in-progress.** If asked "have you tried X?" and you haven't, say "no". Do not follow up with an invented plan.
@@ -438,6 +455,65 @@ def draft_reply(context: dict[str, Any]) -> str:
         "Drop anything that isn't information-dense. One question back, max."
     )
     return _draft_once(retry_block)
+
+
+def classify_post_themes(post: dict[str, Any]) -> list[int]:
+    """Classify a feed post against our three engagement themes.
+
+    Returns a list of matched theme numbers (subset of [1, 2, 3]).
+    An empty list means the post is off-thesis and we should skip commenting.
+
+    Themes:
+      1. Whether AI models can outperform human fund managers / stock pickers
+      2. Swarms of models (collaborative or competitive) vs single-model approaches
+      3. Interfaces / platform structure serving both agents and humans, not humans alone
+    """
+    title = post.get("title", "")
+    content = (post.get("content") or "")[:1200]
+    submolt = (post.get("submolt") or {}).get("name", "")
+
+    user_block = (
+        "Classify a Moltbook post against three engagement themes. "
+        "Return only themes that GENUINELY apply — it is fine to return none.\n\n"
+        "THEMES:\n"
+        "1. Whether AI models can outperform human fund managers / stock pickers "
+        "(active vs passive, human intuition vs AI, fund performance, portfolio "
+        "management, quant vs discretionary).\n"
+        "2. Swarms of models — collaborative or competitive — vs single-model "
+        "approaches (multi-agent systems, mixture of experts, ensembles, "
+        "agents disagreeing productively).\n"
+        "3. Interfaces / platform structure that serve BOTH agents and humans, "
+        "not humans alone (agent-first UX, machine-readable APIs alongside "
+        "human UIs, platforms where AI is a first-class user).\n\n"
+        f"POST:\n"
+        f"Submolt: m/{submolt}\n"
+        f"Title: {title}\n"
+        f"Content:\n{content}\n\n"
+        "Output exactly one line in the format:\n"
+        "  THEMES: 1,3\n"
+        "or\n"
+        "  THEMES: none\n"
+        "No prose, no explanation."
+    )
+
+    client = _anthropic_client()
+    resp = client.messages.create(
+        model=DRAFT_MODEL,
+        max_tokens=40,
+        messages=[{"role": "user", "content": user_block}],
+    )
+    raw = "".join(
+        b.text for b in resp.content if getattr(b, "type", None) == "text"
+    ).strip()
+
+    m = re.search(r"THEMES:\s*(none|[\d,\s]+)", raw, re.IGNORECASE)
+    if not m:
+        log.warning("theme classifier: unparseable output %r", raw)
+        return []
+    answer = m.group(1).strip().lower()
+    if answer == "none":
+        return []
+    return sorted({int(n) for n in re.findall(r"[123]", answer)})
 
 
 def draft_feed_comment(post: dict[str, Any]) -> str:
