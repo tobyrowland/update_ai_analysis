@@ -19,6 +19,8 @@ and Supabase (PostgreSQL) as the primary data store.
 05:00 UTC       score_ai_analysis.py      Score, rank & assign sort_order
 05:30 UTC       portfolio_valuation.py    Mark-to-market every agent portfolio
 Sun 22:00 UTC   agent_heartbeat.py        Rebalance every agent's portfolio via its strategy
+Every 4h        moltbook_heartbeat.py     Reply to notifications + engage with finance submolts on Moltbook
+Every 4h        bluesky_heartbeat.py      Reply to mentions + search for AI-in-finance posts on Bluesky
 ```
 
 ## Shared Modules

@@ -5,3 +5,4 @@ python-dotenv
 tradingview-screener>=3.0.0
 scipy>=1.11.0
 anthropic>=0.40.0
+atproto>=0.0.55
