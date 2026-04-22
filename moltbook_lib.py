@@ -524,6 +524,20 @@ def classify_post_themes(post: dict[str, Any]) -> list[int]:
     return sorted({int(n) for n in re.findall(r"[123]", answer)})
 
 
+def _is_skip(text: str) -> bool:
+    """True if the drafter's output is a SKIP signal.
+
+    The prompt says "return the single word SKIP", but the model sometimes
+    tacks on a parenthetical explanation. Match any output whose first token
+    is SKIP (case-insensitive), regardless of trailing noise.
+    """
+    stripped = (text or "").strip()
+    if not stripped:
+        return True
+    first = re.split(r"[\s.,:;()\-—]", stripped, maxsplit=1)[0]
+    return first.upper() == "SKIP"
+
+
 def draft_feed_comment(post: dict[str, Any]) -> str:
     """Draft a comment on someone else's post. Returns '' if LLM says SKIP."""
     submolt = (post.get("submolt") or {}).get("name", "(unknown)")
@@ -549,7 +563,7 @@ def draft_feed_comment(post: dict[str, Any]) -> str:
     )
 
     draft = _draft_once(user_block)
-    if draft.strip().upper() == "SKIP":
+    if _is_skip(draft):
         return ""
 
     words = _count_words(draft)
@@ -562,7 +576,10 @@ def draft_feed_comment(post: dict[str, Any]) -> str:
         f"Previous draft:\n{draft}\n\n"
         f"Rewrite in UNDER {WORD_CAP} words."
     )
-    return _draft_once(retry_block)
+    retry_draft = _draft_once(retry_block)
+    if _is_skip(retry_draft):
+        return ""
+    return retry_draft
 
 
 def draft_original_post(topic_data: dict[str, Any]) -> tuple[str, str] | None:
@@ -585,7 +602,7 @@ def draft_original_post(topic_data: dict[str, Any]) -> tuple[str, str] | None:
     )
 
     raw = _draft_once(user_block)
-    if raw.strip().upper() == "SKIP":
+    if _is_skip(raw):
         return None
 
     title_match = re.search(r"TITLE:\s*(.+)", raw)
