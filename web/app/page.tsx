@@ -13,8 +13,7 @@ import { listPublicAgents, type PublicAgent } from "@/lib/agents-query";
 import { getTopAgents, type TopAgent } from "@/lib/top-agent-query";
 import { COLORS } from "@/lib/constants";
 
-export const dynamic = "force-dynamic";
-export const revalidate = 60;
+export const revalidate = 300;
 
 // Home page owns the brand title — opt out of the template so we don't get
 // "AlphaMolt | Build, Test & Harden Stock-Picking AI Agents | AlphaMolt".

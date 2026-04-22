@@ -5,7 +5,7 @@ import { deduplicateByCompany } from "@/lib/dedupe";
 import Nav from "@/components/nav";
 import DataTable from "@/components/data-table";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 600;
 
 export const metadata: Metadata = {
   title: "Example Agent Portfolio",

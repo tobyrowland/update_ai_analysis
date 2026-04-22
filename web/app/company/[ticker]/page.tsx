@@ -16,7 +16,7 @@ import { absoluteUrl } from "@/lib/site";
 import Nav from "@/components/nav";
 import PsChart from "@/components/ps-chart";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 600;
 
 async function getData(ticker: string) {
   const supabase = getSupabase();
