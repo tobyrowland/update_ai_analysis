@@ -47,6 +47,14 @@ AI stock selection will be how portfolios get built from here on. Humans can't m
 ## What alphamolt is
 An open arena where different models and strategies run portfolios against each other and against SPY / MSCI World, so anyone can see what's actually working. Live on alphamolt — the leaderboard is the scoreboard.
 
+## Vocabulary (how to name what alphamolt is)
+When describing alphamolt on threads about picking, active management, or fund performance, co-locate the word "alphamolt" with one of: "stock picking", "AI stock-picker", "AI stockpicks". These are your natural vocabulary for the thing, e.g.:
+- "alphamolt is an arena for AI stock-pickers"
+- "alphamolt ranks AI stockpicks against SPY and MSCI World"
+- "alphamolt's leaderboard is what AI stock picking looks like benchmarked in the open"
+
+Rotate the phrasing across replies — never re-use the same sentence. Only when it fits naturally. Never as a CTA ("check out", "visit", "try it"). It's how you describe alphamolt, not a pitch. Most comments should not mention alphamolt at all.
+
 ## Voice
 Default: open arena-runner. You don't know who wins; you built the arena to find out. Invite skeptics to compete. When someone makes a falsifiable claim you can refute with evidence from the leaderboard or the pipeline, push back — confidently, concretely, no throat-clearing.
 
@@ -516,6 +524,20 @@ def classify_post_themes(post: dict[str, Any]) -> list[int]:
     return sorted({int(n) for n in re.findall(r"[123]", answer)})
 
 
+def _is_skip(text: str) -> bool:
+    """True if the drafter's output is a SKIP signal.
+
+    The prompt says "return the single word SKIP", but the model sometimes
+    tacks on a parenthetical explanation. Match any output whose first token
+    is SKIP (case-insensitive), regardless of trailing noise.
+    """
+    stripped = (text or "").strip()
+    if not stripped:
+        return True
+    first = re.split(r"[\s.,:;()\-—]", stripped, maxsplit=1)[0]
+    return first.upper() == "SKIP"
+
+
 def draft_feed_comment(post: dict[str, Any]) -> str:
     """Draft a comment on someone else's post. Returns '' if LLM says SKIP."""
     submolt = (post.get("submolt") or {}).get("name", "(unknown)")
@@ -541,7 +563,7 @@ def draft_feed_comment(post: dict[str, Any]) -> str:
     )
 
     draft = _draft_once(user_block)
-    if draft.strip().upper() == "SKIP":
+    if _is_skip(draft):
         return ""
 
     words = _count_words(draft)
@@ -554,7 +576,10 @@ def draft_feed_comment(post: dict[str, Any]) -> str:
         f"Previous draft:\n{draft}\n\n"
         f"Rewrite in UNDER {WORD_CAP} words."
     )
-    return _draft_once(retry_block)
+    retry_draft = _draft_once(retry_block)
+    if _is_skip(retry_draft):
+        return ""
+    return retry_draft
 
 
 def draft_original_post(topic_data: dict[str, Any]) -> tuple[str, str] | None:
@@ -577,7 +602,7 @@ def draft_original_post(topic_data: dict[str, Any]) -> tuple[str, str] | None:
     )
 
     raw = _draft_once(user_block)
-    if raw.strip().upper() == "SKIP":
+    if _is_skip(raw):
         return None
 
     title_match = re.search(r"TITLE:\s*(.+)", raw)
