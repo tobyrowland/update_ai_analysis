@@ -4,6 +4,11 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { COLORS } from "@/lib/constants";
 import Sparkline from "./sparkline";
+import {
+  getMyAgent,
+  subscribeToMyAgent,
+  type MyAgent,
+} from "@/lib/my-agent";
 import type { TopAgent } from "@/lib/top-agent-query";
 
 interface Props {
@@ -20,6 +25,23 @@ export default function LiveAgentRankings({ agents }: Props) {
   const winner = agents[0] ?? null;
   const runnerUp = agents[1] ?? null;
 
+  // Start null on both client and server to keep hydration stable, then
+  // populate from localStorage after mount. Also subscribes to the custom
+  // event so registering in the sidebar form swaps slot 03 live — no
+  // reload required.
+  const [myAgent, setLocalMyAgent] = useState<MyAgent | null>(null);
+  useEffect(() => {
+    setLocalMyAgent(getMyAgent());
+    return subscribeToMyAgent(setLocalMyAgent);
+  }, []);
+
+  // If the user's handle happens to already be in the top 2 (unlikely but
+  // not impossible), don't show it twice — fall back to the generic
+  // sandbox CTA in the third slot.
+  const myHandleInTop =
+    myAgent != null &&
+    agents.some((a) => a.handle === myAgent.handle);
+
   return (
     <section className="glass-card rounded-lg border border-border p-4 sm:p-6">
       <header className="flex items-baseline justify-between mb-4">
@@ -35,9 +57,54 @@ export default function LiveAgentRankings({ agents }: Props) {
         <HeaderRow />
         <AgentRow slot="01" agent={winner} highlight />
         <AgentRow slot="02" agent={runnerUp} />
-        <SandboxRow />
+        {myAgent && !myHandleInTop ? (
+          <YourAgentRow myAgent={myAgent} />
+        ) : (
+          <SandboxRow />
+        )}
       </div>
     </section>
+  );
+}
+
+function YourAgentRow({ myAgent }: { myAgent: MyAgent }) {
+  return (
+    <div
+      className={`${ROW_COLS} py-3 items-center border-b border-dashed border-green/40`}
+      style={{ background: "rgba(0, 255, 65, 0.03)" }}
+    >
+      <span className="font-bold text-green">03</span>
+      <div className="min-w-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="font-bold text-green truncate">
+            {myAgent.display_name}
+          </span>
+          <StatusChip variant="ready" label="YOU / AWAITING FIRST SNAPSHOT" />
+        </div>
+        <Link
+          href={`/u/${myAgent.handle}`}
+          className="text-[10px] text-text-dim hover:text-green hover:underline truncate block"
+        >
+          @{myAgent.handle}
+        </Link>
+      </div>
+      <span className="hidden sm:block text-right text-text-muted">0</span>
+      <span className="text-right text-text-muted">0.0%</span>
+      <span className="hidden sm:block text-right text-text-dim font-semibold">
+        0.0%
+      </span>
+      <span className="text-right text-text-dim font-bold text-base">
+        0.0%
+      </span>
+      <div className="hidden sm:flex justify-end">
+        <Link
+          href={`/u/${myAgent.handle}`}
+          className="inline-block text-[10px] font-bold uppercase tracking-widest border border-green/70 text-green rounded px-3 py-1.5 bg-green/[0.04] shadow-[0_0_10px_rgba(0,255,65,0.25)] transition-all hover:bg-green/10 hover:border-green hover:shadow-[0_0_18px_rgba(0,255,65,0.6)]"
+        >
+          View profile &rarr;
+        </Link>
+      </div>
+    </div>
   );
 }
 

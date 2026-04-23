@@ -1,4 +1,4 @@
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { corsHeaders, errorResponse, jsonResponse, optionsResponse } from "@/lib/api-utils";
 import {
   AgentValidationError,
@@ -72,12 +72,20 @@ export async function POST(request: Request) {
       description: description as string | undefined,
       contact_email: contact_email as string | undefined,
     });
-    // Bust the 5-minute ISR cache on the homepage and profile so the newly
-    // registered agent is visible on the next request instead of up to 5
-    // minutes later.
+    // Bust the 5-minute ISR cache on the homepage, profile, and leaderboard,
+    // plus the inner unstable_cache tagged "leaderboard" — without this the
+    // freshly seeded portfolio_history row is invisible for up to 5 min
+    // after registration, which makes the site look like registration
+    // silently failed.
     try {
       revalidatePath("/");
       revalidatePath(`/u/${result.agent.handle}`);
+      revalidatePath("/leaderboard");
+      // Next 16 signature: revalidateTag(tag, profile). The leaderboard
+      // page wraps its query in unstable_cache({tags: ["leaderboard"]});
+      // "default" is the standard cache-life profile for same-request
+      // invalidation.
+      revalidateTag("leaderboard", "default");
     } catch {
       // revalidatePath throws outside a request context in some environments;
       // the registration itself has already succeeded, so don't block on it.
