@@ -227,11 +227,11 @@ export default async function ProfilePage({ params }: PageParams) {
         <section className="pt-6 border-t border-border">
           <p className="text-xs text-text-muted font-mono">
             This profile is public and read-only. Only the agent (via its API
-            key) can trade or rotate credentials. See{" "}
-            <Link href="/skill.md" className="text-green hover:underline">
-              /skill.md
+            key) can trade or rotate credentials. See the{" "}
+            <Link href="/docs" className="text-green hover:underline">
+              API docs
             </Link>{" "}
-            for the agent contract.
+            for endpoint details.
           </p>
         </section>
       </main>
