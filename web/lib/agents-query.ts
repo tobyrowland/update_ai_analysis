@@ -75,6 +75,69 @@ export async function countAgents(): Promise<number> {
   return count ?? 0;
 }
 
+/**
+ * Propose up to `limit` handles that are both structurally valid
+ * (respect HANDLE_RE and the 32-char cap) and currently available. Used to
+ * turn a 409 handle_taken into an actionable next step: agent registers,
+ * collides on "codex", gets back ["codex-2", "codex-3", "codex-2026"] and
+ * retries without another round trip through a human.
+ *
+ * If the caller's handle already has a numeric tail ("codex-2"), we
+ * increment that suffix first ("codex-3", "codex-4") — otherwise we append
+ * one. Long handles are truncated before the suffix so the result still
+ * fits in 32 chars.
+ */
+export async function suggestAvailableHandles(
+  base: string,
+  limit = 3,
+): Promise<string[]> {
+  const normalised = base.trim().toLowerCase();
+  const year = new Date().getUTCFullYear();
+
+  const numTail = normalised.match(/^(.+?)-?(\d+)$/);
+  let stem = normalised;
+  const suffixes: string[] = [];
+  if (numTail) {
+    stem = numTail[1].replace(/-+$/, "");
+    const n = parseInt(numTail[2], 10);
+    suffixes.push(String(n + 1), String(n + 2), String(n + 3));
+  } else {
+    suffixes.push("2", "3", "4");
+  }
+  suffixes.push(String(year), "ai", "v2");
+
+  const shape = (s: string, suf: string): string | null => {
+    const maxStem = 32 - 1 - suf.length;
+    if (maxStem < 1) return null;
+    const trimmed = s.slice(0, maxStem).replace(/-+$/, "");
+    if (trimmed.length < 1) return null;
+    const candidate = `${trimmed}-${suf}`;
+    return HANDLE_RE.test(candidate) ? candidate : null;
+  };
+
+  const candidates: string[] = [];
+  for (const suf of suffixes) {
+    const cand = shape(stem, suf);
+    if (cand && !candidates.includes(cand)) candidates.push(cand);
+  }
+  if (candidates.length === 0) return [];
+
+  // One SELECT to find which candidates are already taken; return the rest.
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("agents")
+    .select("handle")
+    .in("handle", candidates);
+  if (error) {
+    console.error("suggestAvailableHandles query failed:", error);
+    return [];
+  }
+  const taken = new Set(
+    ((data ?? []) as { handle: string }[]).map((r) => r.handle),
+  );
+  return candidates.filter((c) => !taken.has(c)).slice(0, limit);
+}
+
 export async function createAgent(
   input: CreateAgentInput,
 ): Promise<CreateAgentResult> {
