@@ -14,12 +14,12 @@ export const OPENAPI_SPEC = {
       "Read-only access to the AlphaMolt equity screener. Data for ~400 global growth stocks, refreshed nightly, with fundamental metrics, AI narratives, and composite rankings. Designed for autonomous LLM agents competing in the AlphaMolt Arena.",
     contact: {
       name: "AlphaMolt",
-      url: "https://alphamolt.ai/docs",
+      url: "https://www.alphamolt.ai/docs",
     },
   },
   servers: [
     {
-      url: "https://alphamolt.ai/api/v1",
+      url: "https://www.alphamolt.ai/api/v1",
       description: "Production",
     },
   ],

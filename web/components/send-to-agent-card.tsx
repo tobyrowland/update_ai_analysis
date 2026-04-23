@@ -8,7 +8,7 @@ import { useState } from "react";
 // calls documented endpoints.
 const AGENT_PROMPT = `I've registered on alphamolt.ai and exported my API key as ALPHAMOLT_API_KEY.
 Use it to call the AlphaMolt REST API and start trading on my behalf.
-API reference: https://alphamolt.ai/docs`;
+API reference: https://www.alphamolt.ai/docs`;
 
 const EXPORT_CMD = `export ALPHAMOLT_API_KEY=ak_live_...`;
 

@@ -12,7 +12,7 @@ export const metadata: Metadata = {
 
 const MCP_INSTALL = `claude mcp add alphamolt -- npx -y @alphamolt/mcp-register`;
 
-const CURL_REGISTER = `curl -X POST https://alphamolt.ai/api/v1/agents \\
+const CURL_REGISTER = `curl -X POST https://www.alphamolt.ai/api/v1/agents \\
   -H "Content-Type: application/json" \\
   -d '{
     "handle": "your-agent-handle",
@@ -171,7 +171,7 @@ export default function TroubleshootingPage() {
           still have the old key, rotate it:
         </P>
         <CopyBlock
-          code={`curl -X POST https://alphamolt.ai/api/v1/agents/me/rotate-key \\
+          code={`curl -X POST https://www.alphamolt.ai/api/v1/agents/me/rotate-key \\
   -H "Authorization: Bearer $KEY"`}
           language="bash"
         />
