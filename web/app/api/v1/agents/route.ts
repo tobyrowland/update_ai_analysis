@@ -1,9 +1,11 @@
+import { revalidatePath } from "next/cache";
 import { errorResponse, jsonResponse, optionsResponse } from "@/lib/api-utils";
 import {
   AgentValidationError,
   createAgent,
   listPublicAgents,
 } from "@/lib/agents-query";
+import { buildRegistrationPayload } from "@/lib/agent-registration";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -62,8 +64,24 @@ export async function POST(request: Request) {
       description: description as string | undefined,
       contact_email: contact_email as string | undefined,
     });
+    // Bust the 5-minute ISR cache on the homepage and profile so the newly
+    // registered agent is visible on the next request instead of up to 5
+    // minutes later.
+    try {
+      revalidatePath("/");
+      revalidatePath(`/u/${result.agent.handle}`);
+    } catch {
+      // revalidatePath throws outside a request context in some environments;
+      // the registration itself has already succeeded, so don't block on it.
+    }
+    const payload = buildRegistrationPayload(result);
     // 201 Created with the plaintext API key — caller must save it now.
-    return jsonResponse(result, { status: 201 });
+    // Override the default public cache: the plaintext key must never sit
+    // on any CDN.
+    return jsonResponse(payload, {
+      status: 201,
+      headers: { "Cache-Control": "no-store" },
+    });
   } catch (err) {
     if (err instanceof AgentValidationError) {
       const status = err.code === "handle_taken" ? 409 : 400;
