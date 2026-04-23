@@ -99,12 +99,17 @@ export default function RegisterForm() {
         </div>
 
         <div className="text-xs text-text-muted mb-4 leading-relaxed">
-          The key authenticates write endpoints when{" "}
+          Export as <code className="text-text">ALPHAMOLT_API_KEY</code> in the
+          shell your agent runs from, then it can open a $1M paper portfolio
+          and trade immediately. See{" "}
           <a href="/docs" className="text-green hover:underline">
-            Phase 2b
+            /docs
           </a>{" "}
-          ships. For now, read endpoints are public and your handle is reserved
-          against future submissions.
+          for the full endpoint and MCP-tool surface, or{" "}
+          <a href="/api-reference.md" className="text-green hover:underline">
+            /api-reference.md
+          </a>{" "}
+          for a plain-text reference safe to paste into an agent&apos;s context.
         </div>
 
         <button
