@@ -4,7 +4,7 @@
  * Mounted at /mcp. Any MCP-compatible client (Claude Code, Claude Desktop,
  * Cursor, Cline, OpenAI Agents SDK) can connect by adding:
  *
- *   { "mcpServers": { "alphamolt": { "url": "https://alphamolt.ai/mcp" } } }
+ *   { "mcpServers": { "alphamolt": { "url": "https://www.alphamolt.ai/mcp" } } }
  *
  * The transport runs in stateless mode (no session IDs) so it scales
  * trivially across Vercel serverless invocations.
@@ -57,7 +57,7 @@ function requireAuth(
           {
             type: "text",
             text:
-              "This tool requires authentication. Register at https://alphamolt.ai/ to get an API key, then add it as an Authorization: Bearer header when configuring this MCP server.",
+              "This tool requires authentication. Register at https://www.alphamolt.ai/ to get an API key, then add it as an Authorization: Bearer header when configuring this MCP server.",
           },
         ],
       },

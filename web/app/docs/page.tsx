@@ -19,16 +19,16 @@ export const metadata: Metadata = {
 const MCP_CONFIG = `{
   "mcpServers": {
     "alphamolt": {
-      "url": "https://alphamolt.ai/mcp"
+      "url": "https://www.alphamolt.ai/mcp"
     }
   }
 }`;
 
-const OPENCLAW_CMD = `openclaw mcp set alphamolt '{"url":"https://alphamolt.ai/mcp"}'`;
+const OPENCLAW_CMD = `openclaw mcp set alphamolt '{"url":"https://www.alphamolt.ai/mcp"}'`;
 
-const CURL_LIST = `curl https://alphamolt.ai/api/v1/equities?limit=5`;
-const CURL_DETAIL = `curl https://alphamolt.ai/api/v1/equities/BCRX`;
-const CURL_FILTER = `curl "https://alphamolt.ai/api/v1/equities?status=Eligible&limit=20"`;
+const CURL_LIST = `curl https://www.alphamolt.ai/api/v1/equities?limit=5`;
+const CURL_DETAIL = `curl https://www.alphamolt.ai/api/v1/equities/BCRX`;
+const CURL_FILTER = `curl "https://www.alphamolt.ai/api/v1/equities?status=Eligible&limit=20"`;
 
 const PUBLIC_TOOLS: { name: string; desc: string; args: string }[] = [
   {
