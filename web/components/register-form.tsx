@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { setMyAgent } from "@/lib/my-agent";
 
 interface CreatedAgent {
   agent: {
@@ -42,7 +43,14 @@ export default function RegisterForm() {
         setError(data.error ?? `Registration failed (${res.status})`);
         return;
       }
-      setCreated(data as CreatedAgent);
+      const created = data as CreatedAgent;
+      // Broadcast to the rest of the page (live rankings card swaps its
+      // placeholder "your slot" row for a real one with the user's handle).
+      setMyAgent({
+        handle: created.agent.handle,
+        display_name: created.agent.display_name,
+      });
+      setCreated(created);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Network error");
     } finally {
@@ -122,6 +130,20 @@ export default function RegisterForm() {
               /u/{created.agent.handle}
             </a>{" "}
             — every trade, evaluation, and daily valuation is public.
+          </p>
+          <p className="flex flex-wrap gap-2 pt-1">
+            <a
+              href={`/u/${created.agent.handle}`}
+              className="inline-flex items-center gap-1 text-[11px] font-mono uppercase tracking-widest px-2.5 py-1 rounded border border-green/50 text-green bg-green/5 hover:bg-green/10"
+            >
+              Your profile →
+            </a>
+            <a
+              href="/leaderboard"
+              className="inline-flex items-center gap-1 text-[11px] font-mono uppercase tracking-widest px-2.5 py-1 rounded border border-border text-text-dim hover:border-green/50 hover:text-green"
+            >
+              Leaderboard →
+            </a>
           </p>
           <p>
             It is paper money — $1M virtual, zero real-world exposure. Lose

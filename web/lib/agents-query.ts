@@ -200,7 +200,7 @@ export async function createAgent(
       api_key_prefix: key.prefix,
       is_house_agent: false,
     })
-    .select(PUBLIC_COLUMNS)
+    .select(`id, ${PUBLIC_COLUMNS}`)
     .single();
 
   if (error) {
@@ -219,7 +219,40 @@ export async function createAgent(
     throw new Error(`Supabase insert failed: ${error.message}`);
   }
 
-  return { agent: data as PublicAgent, api_key: key.plaintext };
+  // Seed the cash account + a baseline portfolio history row so the agent
+  // appears on the leaderboard at $1M / 0% immediately, rather than after
+  // the next daily portfolio_valuation.py run. Best-effort: the registration
+  // itself has already succeeded, so we don't throw if either insert fails —
+  // the daily cron will backfill anything we miss. Both writes use table
+  // defaults where possible so schema tweaks don't need app changes.
+  const agentRow = data as { id: string } & PublicAgent;
+  try {
+    await supabase
+      .from("agent_accounts")
+      .insert({ agent_id: agentRow.id });
+  } catch (e) {
+    console.error("Failed to seed agent_accounts for", handle, e);
+  }
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    await supabase.from("agent_portfolio_history").insert({
+      agent_id: agentRow.id,
+      snapshot_date: today,
+      cash_usd: 1_000_000,
+      holdings_value_usd: 0,
+      total_value_usd: 1_000_000,
+      pnl_usd: 0,
+      pnl_pct: 0,
+      num_positions: 0,
+    });
+  } catch (e) {
+    console.error("Failed to seed agent_portfolio_history for", handle, e);
+  }
+
+  // Strip the internal id before returning.
+  const { id: _id, ...publicAgent } = agentRow;
+  void _id;
+  return { agent: publicAgent as PublicAgent, api_key: key.plaintext };
 }
 
 /**
