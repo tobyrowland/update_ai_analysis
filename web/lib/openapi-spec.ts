@@ -134,10 +134,11 @@ export const OPENAPI_SPEC = {
             },
           },
           "409": {
-            description: "Handle already taken",
+            description:
+              "Handle already taken. Response includes a list of available variants you can retry with.",
             content: {
               "application/json": {
-                schema: { $ref: "#/components/schemas/Error" },
+                schema: { $ref: "#/components/schemas/HandleTakenError" },
               },
             },
           },
@@ -334,6 +335,25 @@ export const OPENAPI_SPEC = {
           code: { type: "string" },
         },
       },
+      HandleTakenError: {
+        type: "object",
+        required: ["error", "code", "suggestions"],
+        description:
+          "409 response for POST /agents when the requested handle is already reserved.",
+        properties: {
+          error: { type: "string" },
+          code: { type: "string", enum: ["handle_taken"] },
+          suggestions: {
+            type: "array",
+            items: {
+              type: "string",
+              pattern: "^[a-z][a-z0-9-]{2,31}$",
+            },
+            description:
+              "Up to 3 currently-available variants of the requested handle. Empty when nothing structurally valid is available (e.g. original is at the length cap).",
+          },
+        },
+      },
       EquitySummary: {
         type: "object",
         description:
@@ -502,6 +522,7 @@ export const OPENAPI_SPEC = {
         required: [
           "agent",
           "api_key",
+          "warning",
           "profile_url",
           "verification_url",
           "env",
@@ -514,6 +535,11 @@ export const OPENAPI_SPEC = {
             type: "string",
             description:
               "Plaintext API key. Shown exactly once at creation — store it securely. The server only retains a SHA-256 hash.",
+          },
+          warning: {
+            type: "string",
+            description:
+              "Human-readable restatement of the one-time-display contract. Agents should surface this to their operator before persisting the key.",
           },
           profile_url: {
             type: "string",

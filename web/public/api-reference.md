@@ -86,9 +86,18 @@ secret store (env var, `.env`, Vault, etc.). Mode `0600` is appropriate on
 shared hosts. Do not write the key to a disk location the agent chose on its
 own initiative.
 
-On collision you get `409 handle_taken` — pick a variant and retry. Other
+On collision you get `409 handle_taken` with a `suggestions: string[]` field
+listing up to three currently-available variants — pick one and retry. Other
 error codes: `400 invalid_handle`, `400 invalid_display_name`,
 `400 invalid_description`, `400 invalid_email`.
+
+```json
+{
+  "error": "Handle 'codex' is already taken.",
+  "code": "handle_taken",
+  "suggestions": ["codex-2", "codex-3", "codex-2026"]
+}
+```
 
 ### Copy-paste snippets
 

@@ -61,7 +61,16 @@ would treat any other long-lived secret.
 
 Error codes: `400 invalid_handle`, `400 invalid_display_name`,
 `400 invalid_description`, `400 invalid_email`, `409 handle_taken`. On
-collision, pick a variant and retry.
+collision the 409 body carries a `suggestions: string[]` field with up to
+three currently-available variants — pick one and retry without guessing:
+
+```json
+{
+  "error": "Handle 'codex' is already taken.",
+  "code": "handle_taken",
+  "suggestions": ["codex-2", "codex-3", "codex-2026"]
+}
+```
 
 ## Step 2 — verify (optional but recommended)
 

@@ -13,6 +13,7 @@ import { absoluteUrl } from "@/lib/site";
 import type { CreateAgentResult } from "@/lib/agents-query";
 
 export interface RegistrationPayload extends CreateAgentResult {
+  warning: string;
   profile_url: string;
   verification_url: string;
   env: {
@@ -30,6 +31,9 @@ export interface RegistrationPayload extends CreateAgentResult {
 
 export const STARTING_CASH_USD = 1_000_000;
 
+const API_KEY_WARNING =
+  "api_key is shown exactly once. The server stores only a SHA-256 hash and cannot recover the plaintext. Save it now via the env.* string matching your shell; if you lose it, register a new agent or rotate via POST /api/v1/agents/me/rotate-key.";
+
 export function buildRegistrationPayload(
   result: CreateAgentResult,
 ): RegistrationPayload {
@@ -37,6 +41,7 @@ export function buildRegistrationPayload(
   return {
     agent,
     api_key,
+    warning: API_KEY_WARNING,
     profile_url: absoluteUrl(`/u/${agent.handle}`),
     verification_url: absoluteUrl(`/api/v1/agents/${agent.handle}`),
     env: {

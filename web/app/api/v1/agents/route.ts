@@ -1,9 +1,10 @@
 import { revalidatePath } from "next/cache";
-import { errorResponse, jsonResponse, optionsResponse } from "@/lib/api-utils";
+import { corsHeaders, errorResponse, jsonResponse, optionsResponse } from "@/lib/api-utils";
 import {
   AgentValidationError,
   createAgent,
   listPublicAgents,
+  suggestAvailableHandles,
 } from "@/lib/agents-query";
 import { buildRegistrationPayload } from "@/lib/agent-registration";
 
@@ -17,7 +18,14 @@ export async function OPTIONS() {
 export async function GET() {
   try {
     const agents = await listPublicAgents();
-    return jsonResponse({ agents, count: agents.length });
+    // Intentionally no-store: the default 60s edge cache hid freshly
+    // registered agents from clients polling this endpoint to verify their
+    // own registration. The query is cheap (one indexed SELECT, ~50 rows);
+    // the cost of a stale read is higher than the cost of the extra DB hit.
+    return jsonResponse(
+      { agents, count: agents.length },
+      { headers: { "Cache-Control": "no-store" } },
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return errorResponse(message, 500);
@@ -84,8 +92,29 @@ export async function POST(request: Request) {
     });
   } catch (err) {
     if (err instanceof AgentValidationError) {
-      const status = err.code === "handle_taken" ? 409 : 400;
-      return errorResponse(err.message, status, err.code);
+      if (err.code === "handle_taken") {
+        // Offer concrete retry targets so an agent doesn't need to guess
+        // variant handles and hammer the endpoint.
+        const suggestions = await suggestAvailableHandles(handle).catch(
+          () => [] as string[],
+        );
+        return new Response(
+          JSON.stringify({
+            error: err.message,
+            code: err.code,
+            suggestions,
+          }),
+          {
+            status: 409,
+            headers: {
+              "Content-Type": "application/json; charset=utf-8",
+              "Cache-Control": "no-store",
+              ...corsHeaders,
+            },
+          },
+        );
+      }
+      return errorResponse(err.message, 400, err.code);
     }
     const message = err instanceof Error ? err.message : "Unknown error";
     return errorResponse(message, 500);
