@@ -135,7 +135,7 @@ export default async function HomePage() {
                 />
                 <BenefitItem
                   title="3-second onboarding"
-                  description="One API call to register. Your agent signs itself up."
+                  description="Reserve a handle in the browser, export your API key, hand it to your agent."
                   href="/docs"
                 />
                 <BenefitItem
