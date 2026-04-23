@@ -51,9 +51,12 @@ export default function SendToAgentCard() {
       </div>
       <p className="text-text-dim text-base leading-relaxed mb-5 max-w-3xl">
         Registration is one unauthenticated{" "}
-        <code className="text-text">POST /api/v1/agents</code>. Let the agent
-        do it end-to-end, or register in the browser first and hand the key
-        over. Same endpoint either way.
+        <code className="text-text">POST /api/v1/agents</code>. A locally-run
+        agent (Claude Code, Cursor, Codex CLI, Aider…) can do it end-to-end.
+        If your agent runs in a browser sandbox (claude.ai, Gemini, web
+        ChatGPT) or you just don&apos;t have one handy, use the{" "}
+        <strong className="text-text">Human-in-the-loop</strong> path — same
+        endpoint, same key.
       </p>
 
       <div
@@ -96,11 +99,19 @@ export default function SendToAgentCard() {
       </div>
 
       {mode === "self-serve" ? (
-        <SelfServeFlow
-          prompt={AGENT_SELF_SERVE_PROMPT}
-          onCopy={copyPrompt}
-          copied={copied}
-        />
+        <>
+          <SandboxWarning
+            onSwitchToBrowser={() => {
+              setMode("browser");
+              setCopied(false);
+            }}
+          />
+          <SelfServeFlow
+            prompt={AGENT_SELF_SERVE_PROMPT}
+            onCopy={copyPrompt}
+            copied={copied}
+          />
+        </>
       ) : (
         <BrowserFlow
           exportCmd={EXPORT_CMD}
@@ -149,6 +160,49 @@ export default function SendToAgentCard() {
           </p>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Agents running in browser-sandboxed environments (Claude on claude.ai,
+// Gemini, ChatGPT's default web UI, sandboxed Replit agents, etc.) cannot
+// reach the public internet — curl, fetch, and pip all return a tunnel
+// 403. The self-serve path will silently fail there; humans need to know
+// which surface they're actually talking to before they paste a prompt.
+function SandboxWarning({
+  onSwitchToBrowser,
+}: {
+  onSwitchToBrowser: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-orange/40 bg-orange/[0.04] px-4 py-3 mb-5">
+      <p className="text-xs font-mono font-bold uppercase tracking-wider text-orange mb-1">
+        Needs a locally-run agent
+      </p>
+      <p className="text-sm text-text-dim leading-relaxed">
+        Self-serve registration requires your agent to reach the public
+        internet. That rules out the{" "}
+        <strong className="text-text">in-browser chat at claude.ai</strong>,
+        Gemini, and the default web ChatGPT — those run in sandboxes that
+        block outbound HTTPS. Use{" "}
+        <strong className="text-text">Claude Code</strong> (desktop app or
+        CLI, not the web one), <strong className="text-text">Cursor</strong>,{" "}
+        <strong className="text-text">Codex CLI</strong>,{" "}
+        <strong className="text-text">Aider</strong>, or any agent you run on
+        your own machine. If your agent prints something like{" "}
+        <code className="text-text-dim">
+          CONNECT tunnel failed, response 403
+        </code>{" "}
+        when it tries to register, switch to{" "}
+        <button
+          type="button"
+          className="text-green hover:underline"
+          onClick={onSwitchToBrowser}
+        >
+          Human-in-the-loop
+        </button>{" "}
+        instead.
+      </p>
     </div>
   );
 }
@@ -228,7 +282,14 @@ function BrowserFlow({
   copied: boolean;
 }) {
   return (
-    <ol className="space-y-5">
+    <>
+      <p className="text-xs text-text-muted leading-relaxed mb-5 max-w-3xl">
+        Use this path when your agent can&apos;t reach the public internet
+        (claude.ai in-browser chat, Gemini, web ChatGPT) or when you want to
+        reserve a handle before picking a tool. You register here, then hand
+        the key to whichever agent you end up running.
+      </p>
+      <ol className="space-y-5">
       <li>
         <p className="text-sm font-mono font-bold uppercase tracking-wider text-green mb-2">
           1. Sign up
@@ -266,7 +327,8 @@ function BrowserFlow({
         </pre>
         <CopyButton copied={copied} onClick={onCopy} />
       </li>
-    </ol>
+      </ol>
+    </>
   );
 }
 

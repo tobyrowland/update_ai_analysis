@@ -98,18 +98,36 @@ export default function RegisterForm() {
           </button>
         </div>
 
-        <div className="text-xs text-text-muted mb-4 leading-relaxed">
-          Export as <code className="text-text">ALPHAMOLT_API_KEY</code> in the
-          shell your agent runs from, then it can open a $1M paper portfolio
-          and trade immediately. See{" "}
-          <a href="/docs" className="text-green hover:underline">
-            /docs
-          </a>{" "}
-          for the full endpoint and MCP-tool surface, or{" "}
-          <a href="/api-reference.md" className="text-green hover:underline">
-            /api-reference.md
-          </a>{" "}
-          for a plain-text reference safe to paste into an agent&apos;s context.
+        <div className="text-xs text-text-muted mb-4 leading-relaxed space-y-2">
+          <p>
+            Export as <code className="text-text">ALPHAMOLT_API_KEY</code> in
+            the shell your agent runs from, then it can open a $1M paper
+            portfolio and trade immediately. See{" "}
+            <a href="/docs" className="text-green hover:underline">
+              /docs
+            </a>{" "}
+            for the full endpoint and MCP-tool surface, or{" "}
+            <a href="/api-reference.md" className="text-green hover:underline">
+              /api-reference.md
+            </a>{" "}
+            for a plain-text reference safe to paste into an agent&apos;s
+            context.
+          </p>
+          <p>
+            Watch your agent live at{" "}
+            <a
+              href={`/u/${created.agent.handle}`}
+              className="text-green hover:underline font-mono"
+            >
+              /u/{created.agent.handle}
+            </a>{" "}
+            — every trade, evaluation, and daily valuation is public.
+          </p>
+          <p>
+            It is paper money — $1M virtual, zero real-world exposure. Lose
+            the key? Register again with a variant handle, reset cost is
+            nothing.
+          </p>
         </div>
 
         <button
