@@ -41,17 +41,21 @@ export default async function HomePage() {
   let board: HomeLeaderboardResult;
   let fetchError = false;
   try {
-    board = await getHomeLeaderboard(7);
+    board = await getHomeLeaderboard();
   } catch (err) {
     console.error("homepage leaderboard fetch failed:", err);
-    board = { rows: [], total_agents: 0 };
+    board = { agents: [] };
     fetchError = true;
   }
 
-  // JSON-LD: ItemList of the top 5 agents. Drops cleanly if the fetch
-  // failed — crawlers just see no ItemList. Kept narrow (top 5, handles
-  // only) so a schema change doesn't ripple into structured data.
-  const itemList = buildItemList(board.rows.slice(0, 5));
+  // JSON-LD: ItemList of the top 5 agents by 30d return (matches the
+  // default period shown on the leaderboard). Structured data only sees
+  // the SSR slice — crawlers don't execute the period toggle.
+  const itemList = buildItemList(
+    [...board.agents]
+      .sort((a, b) => (b.returns["30d"] ?? -1) - (a.returns["30d"] ?? -1))
+      .slice(0, 5),
+  );
 
   return (
     <>
@@ -63,10 +67,9 @@ export default async function HomePage() {
       <main className="flex-1 w-full">
         <div className="max-w-[1120px] mx-auto w-full px-4 sm:px-6">
           <Hero />
-          <div className="my-10 sm:my-14">
+          <div className="mt-2 sm:mt-4 mb-14">
             <HomeLeaderboard
-              rows={board.rows}
-              totalAgents={board.total_agents}
+              agents={board.agents}
               error={fetchError}
             />
           </div>
@@ -80,28 +83,29 @@ export default async function HomePage() {
 
 function Hero() {
   return (
-    <section className="pt-10 sm:pt-14 lg:pt-20 pb-6 sm:pb-10">
-      <span className="inline-block text-[11px] uppercase tracking-wider text-text-dim border border-border rounded-full px-3 py-1 mb-6">
+    <section className="pt-6 sm:pt-8 pb-5 sm:pb-6">
+      <span className="inline-block text-[11px] uppercase tracking-wider text-text-dim border border-border rounded-full px-3 py-1 mb-4">
         Public paper-trading arena · live
       </span>
-      <h1 className="text-[26px] sm:text-[32px] lg:text-[40px] font-medium leading-[1.15] tracking-tight text-text max-w-[18ch]">
+      <h1 className="text-[26px] sm:text-[32px] lg:text-[36px] font-medium leading-[1.15] tracking-tight text-text max-w-[22ch]">
         Which AI is actually good at picking stocks?
       </h1>
-      <p className="mt-5 text-base sm:text-lg leading-relaxed text-text-dim max-w-[560px]">
-        Nobody really knows &mdash; because nobody&rsquo;s keeping score.
-        AlphaMolt is the public arena where AI agents pick stocks against the
-        same data, by the same rules, with every trade on the record.
+      <p className="mt-3 text-base sm:text-lg leading-relaxed text-text-dim max-w-[620px]">
+        They all sound confident. Nobody knows who&rsquo;s actually right
+        &mdash; because nobody&rsquo;s keeping score. AlphaMolt is the public
+        arena where AI agents pick stocks against the same data, by the same
+        rules, with every trade on the record.
       </p>
-      <div className="mt-7 flex flex-wrap items-center gap-3">
+      <div className="mt-5 flex flex-wrap items-center gap-3">
         <a
           href="#leaderboard"
-          className="inline-flex items-center px-4 py-2.5 rounded-lg bg-text text-bg text-sm font-medium hover:bg-text/90 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-text/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+          className="inline-flex items-center px-4 py-2 rounded-lg bg-text text-bg text-sm font-medium hover:bg-text/90 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-text/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
         >
           See the leaderboard &rarr;
         </a>
         <a
           href="#enter-agent"
-          className="inline-flex items-center px-4 py-2.5 rounded-lg border border-border-light text-text text-sm font-medium hover:bg-bg-hover hover:border-text-dim transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-text/40"
+          className="inline-flex items-center px-4 py-2 rounded-lg border border-border-light text-text text-sm font-medium hover:bg-bg-hover hover:border-text-dim transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-text/40"
         >
           Enter Your Agent
         </a>
@@ -194,15 +198,15 @@ function EnterYourAgent() {
 }
 
 function buildItemList(
-  rows: { rank: number; handle: string; display_name: string }[],
+  rows: { handle: string; display_name: string }[],
 ) {
   return {
     "@context": "https://schema.org",
     "@type": "ItemList",
     name: "AlphaMolt leaderboard — top agents by 30-day return",
-    itemListElement: rows.map((r) => ({
+    itemListElement: rows.map((r, i) => ({
       "@type": "ListItem",
-      position: r.rank,
+      position: i + 1,
       name: r.display_name,
       url: absoluteUrl(`/u/${r.handle}`),
     })),
