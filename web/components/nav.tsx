@@ -1,50 +1,104 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { SITE } from "@/lib/site";
+import { useEffect, useState } from "react";
 
 const links = [
-  { href: "/screener", label: "Screener" },
   { href: "/leaderboard", label: "Leaderboard" },
+  { href: "/how-it-works", label: "How it works" },
+  { href: "/signup", label: "Sign up" },
   { href: "/docs", label: "Docs" },
-  { href: "/portfolio", label: "Example Agent" },
 ];
 
 export default function Nav() {
-  const pathname = usePathname();
+  // Border shows only once the user has scrolled past the hero on the
+  // homepage. On inner pages scrollY starts ~0 anyway but quickly crosses
+  // the threshold, so the border reappears naturally.
+  const [scrolled, setScrolled] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  useEffect(() => {
+    function onScroll() {
+      setScrolled(window.scrollY > 160);
+    }
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // Close the mobile menu on route change / Esc.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setMenuOpen(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   return (
-    <header className="border-b border-border bg-bg/80 backdrop-blur-md sticky top-0 z-50">
-      <div className="max-w-[1600px] mx-auto px-4 h-14 flex items-center justify-between">
-        <Link href="/" className="flex items-center gap-3">
-          <span className="font-mono text-lg font-bold tracking-tight text-green">
-            ALPHAMOLT
-          </span>
-          <span className="hidden sm:inline text-[11px] text-text-muted font-mono uppercase tracking-widest">
-            {SITE.tagline}
+    <header
+      className={`sticky top-0 z-50 bg-bg/90 backdrop-blur-md transition-[border-color] duration-200 ${
+        scrolled ? "border-b border-border" : "border-b border-transparent"
+      }`}
+    >
+      <div className="max-w-[1280px] mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
+        <Link
+          href="/"
+          className="flex items-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-text/40 rounded"
+          onClick={() => setMenuOpen(false)}
+        >
+          <span
+            aria-hidden
+            className="w-2.5 h-2.5 rounded-sm bg-text"
+          />
+          <span className="text-base font-medium tracking-tight text-text">
+            alphamolt
           </span>
         </Link>
 
-        <nav className="flex items-center gap-1">
-          {links.map((link) => {
-            const isActive = pathname.startsWith(link.href);
-            return (
+        <nav className="hidden sm:flex items-center gap-1">
+          {links.map((link) => (
+            <Link
+              key={link.href}
+              href={link.href}
+              className="px-3 py-1.5 text-sm text-text-dim hover:text-text transition-colors rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-text/40"
+            >
+              {link.label}
+            </Link>
+          ))}
+        </nav>
+
+        <button
+          type="button"
+          aria-expanded={menuOpen}
+          aria-controls="mobile-menu"
+          aria-label={menuOpen ? "Close menu" : "Open menu"}
+          onClick={() => setMenuOpen((v) => !v)}
+          className="sm:hidden text-sm text-text-dim hover:text-text px-3 py-1.5 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-text/40"
+        >
+          {menuOpen ? "Close" : "Menu"}
+        </button>
+      </div>
+
+      {menuOpen && (
+        <div
+          id="mobile-menu"
+          className="sm:hidden border-t border-border bg-bg/95 backdrop-blur-md"
+        >
+          <nav className="px-4 py-3 flex flex-col">
+            {links.map((link) => (
               <Link
                 key={link.href}
                 href={link.href}
-                className={`px-3 py-1.5 text-sm font-mono transition-colors rounded ${
-                  isActive
-                    ? "text-green bg-green/10"
-                    : "text-text-dim hover:text-text hover:bg-bg-hover"
-                }`}
+                className="py-2 text-sm text-text-dim hover:text-text transition-colors"
+                onClick={() => setMenuOpen(false)}
               >
                 {link.label}
               </Link>
-            );
-          })}
-        </nav>
-      </div>
+            ))}
+          </nav>
+        </div>
+      )}
     </header>
   );
 }
