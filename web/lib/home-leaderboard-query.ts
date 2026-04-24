@@ -1,16 +1,28 @@
-// Server-side fetch for the homepage leaderboard preview. Returns the top N
-// non-house agents sorted by 30-day rolling return, enriched with each
-// agent's most recent trade (action · ticker · relative time). Mirrors the
-// view-backed fetch pattern in /leaderboard/page.tsx so SSR HTML includes
-// the full row set (crawlers see the link graph with JS off).
+// Server-side fetch for the homepage leaderboard preview. Returns every
+// non-house agent enriched with all four rolling returns and each agent's
+// most recent trade, plus the two benchmark rows (SPY, URTH). The client
+// component re-sorts and slices by the active period so the SSR HTML
+// includes every agent/benchmark already populated — crawlers see the full
+// link graph with JS off.
 
 import { getSupabase } from "@/lib/supabase";
 
-export interface HomeLeaderboardRow {
-  rank: number;
+export type Period = "1d" | "30d" | "ytd" | "1yr";
+export const PERIODS: readonly Period[] = ["1d", "30d", "ytd", "1yr"];
+export const DEFAULT_PERIOD: Period = "30d";
+
+export interface Returns {
+  "1d": number | null;
+  "30d": number | null;
+  ytd: number | null;
+  "1yr": number | null;
+}
+
+export interface HomeAgentRow {
+  kind: "agent";
   handle: string;
   display_name: string;
-  pnl_pct_30d: number | null;
+  returns: Returns;
   last_trade: LastTrade | null;
 }
 
@@ -21,93 +33,98 @@ export interface LastTrade {
 }
 
 export interface HomeLeaderboardResult {
-  rows: HomeLeaderboardRow[];
-  // Total count of non-house agents on the leaderboard view — used for the
-  // "N agents competing" metadata strip and the footer "See all N agents"
-  // link. Separate from rows.length because we only surface the top N.
-  total_agents: number;
+  agents: HomeAgentRow[];
 }
 
-export async function getHomeLeaderboard(
-  limit = 7,
-): Promise<HomeLeaderboardResult> {
+export async function getHomeLeaderboard(): Promise<HomeLeaderboardResult> {
   const supabase = getSupabase();
 
+  // Agents: every non-house row on the leaderboard view. All four returns
+  // are columns on the view already; pulling them all lets the client
+  // re-rank by period without another fetch.
   interface ViewRow {
     handle: string;
     display_name: string;
     is_house_agent: boolean;
+    pnl_pct_1d: number | string | null;
     pnl_pct_30d: number | string | null;
+    pnl_pct_ytd: number | string | null;
+    pnl_pct_1yr: number | string | null;
   }
-  const { data: viewRows, error } = await supabase
+  const { data: viewRows, error: viewErr } = await supabase
     .from("agent_leaderboard")
-    .select("handle, display_name, is_house_agent, pnl_pct_30d")
-    .eq("is_house_agent", false)
-    .order("pnl_pct_30d", { ascending: false, nullsFirst: false });
-  if (error || !viewRows) {
-    if (error) console.error("home leaderboard: view fetch failed:", error);
-    return { rows: [], total_agents: 0 };
+    .select(
+      "handle, display_name, is_house_agent, pnl_pct_1d, pnl_pct_30d, pnl_pct_ytd, pnl_pct_1yr",
+    )
+    .eq("is_house_agent", false);
+  if (viewErr) {
+    console.error("home leaderboard: agents view fetch failed:", viewErr);
   }
+  const rawAgents = (viewRows ?? []) as ViewRow[];
 
-  const nonHouse = viewRows as ViewRow[];
-  const top = nonHouse.slice(0, limit);
+  const handles = rawAgents.map((r) => r.handle);
+  const lastTradeByHandle = await fetchLastTrades(handles);
 
-  // Resolve handle → agent_id so we can look up each agent's latest trade.
-  const handles = top.map((r) => r.handle);
-  if (handles.length === 0) {
-    return { rows: [], total_agents: nonHouse.length };
-  }
+  const agents: HomeAgentRow[] = rawAgents.map((r) => ({
+    kind: "agent",
+    handle: r.handle,
+    display_name: r.display_name,
+    returns: {
+      "1d": toNum(r.pnl_pct_1d),
+      "30d": toNum(r.pnl_pct_30d),
+      ytd: toNum(r.pnl_pct_ytd),
+      "1yr": toNum(r.pnl_pct_1yr),
+    },
+    last_trade: lastTradeByHandle.get(r.handle) ?? null,
+  }));
 
+  return { agents };
+}
+
+async function fetchLastTrades(
+  handles: string[],
+): Promise<Map<string, LastTrade>> {
+  const out = new Map<string, LastTrade>();
+  if (handles.length === 0) return out;
+
+  const supabase = getSupabase();
   const { data: idRows } = await supabase
     .from("agents")
     .select("id, handle")
     .in("handle", handles);
-  const idByHandle = new Map<string, string>();
   const handleById = new Map<string, string>();
+  const agentIds: string[] = [];
   for (const r of (idRows ?? []) as { id: string; handle: string }[]) {
-    idByHandle.set(r.handle, r.id);
     handleById.set(r.id, r.handle);
+    agentIds.push(r.id);
   }
+  if (agentIds.length === 0) return out;
 
-  // Pull the most recent trade per agent in the top set. Cheap to do as a
-  // single range query sorted by executed_at DESC — we only keep the first
-  // hit per agent. Works because the top set is small (≤ 7) so the result
-  // size is bounded.
-  const lastTradeByHandle = new Map<string, LastTrade>();
-  const agentIds = Array.from(idByHandle.values());
-  if (agentIds.length > 0) {
-    const { data: tradeRows } = await supabase
-      .from("agent_trades")
-      .select("agent_id, side, ticker, executed_at")
-      .in("agent_id", agentIds)
-      .order("executed_at", { ascending: false })
-      .limit(agentIds.length * 40);
-    for (const t of (tradeRows ?? []) as {
-      agent_id: string;
-      side: "buy" | "sell";
-      ticker: string;
-      executed_at: string;
-    }[]) {
-      const handle = handleById.get(t.agent_id);
-      if (!handle) continue;
-      if (lastTradeByHandle.has(handle)) continue;
-      lastTradeByHandle.set(handle, {
-        side: t.side,
-        ticker: t.ticker,
-        executed_at: t.executed_at,
-      });
-    }
+  // One range query: agents are few (tens), and we only keep the first
+  // (most recent) trade per agent. The LIMIT is a safety cap — the loop
+  // short-circuits as soon as every agent has a trade recorded.
+  const { data: tradeRows } = await supabase
+    .from("agent_trades")
+    .select("agent_id, side, ticker, executed_at")
+    .in("agent_id", agentIds)
+    .order("executed_at", { ascending: false })
+    .limit(Math.max(agentIds.length * 30, 500));
+  for (const t of (tradeRows ?? []) as {
+    agent_id: string;
+    side: "buy" | "sell";
+    ticker: string;
+    executed_at: string;
+  }[]) {
+    const handle = handleById.get(t.agent_id);
+    if (!handle || out.has(handle)) continue;
+    out.set(handle, {
+      side: t.side,
+      ticker: t.ticker,
+      executed_at: t.executed_at,
+    });
+    if (out.size === handleById.size) break;
   }
-
-  const rows: HomeLeaderboardRow[] = top.map((r, i) => ({
-    rank: i + 1,
-    handle: r.handle,
-    display_name: r.display_name,
-    pnl_pct_30d: toNum(r.pnl_pct_30d),
-    last_trade: lastTradeByHandle.get(r.handle) ?? null,
-  }));
-
-  return { rows, total_agents: nonHouse.length };
+  return out;
 }
 
 function toNum(v: number | string | null | undefined): number | null {
