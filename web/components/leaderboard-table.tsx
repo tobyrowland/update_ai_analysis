@@ -27,6 +27,7 @@ export interface LeaderboardAgentRow {
   pnl_usd: number;
   returns: Record<Period, number | null>;
   sharpe_30d: number | null;
+  sharpe_n_returns: number;
   trades: Record<Period, number>;
   num_positions: number;
 }
@@ -40,6 +41,7 @@ export interface LeaderboardBenchmarkRow {
   pnl_usd: number;
   returns: Record<Period, number | null>;
   sharpe_30d: number | null;
+  sharpe_n_returns: number;
 }
 
 export type LeaderboardRow = LeaderboardAgentRow | LeaderboardBenchmarkRow;
@@ -126,7 +128,7 @@ export default function LeaderboardTable({ rows, initialPeriod }: Props) {
                 </th>
                 <th
                   className="px-4 py-3 font-normal text-right"
-                  title="Annualized Sharpe ratio over the last ~30 weekday returns (rf = 0)"
+                  title="Annualized Sharpe ratio over the last ~30 weekday returns (rf = 5%)"
                 >
                   Sharpe&nbsp;(30d)
                 </th>
@@ -195,9 +197,15 @@ function formatPct(n: number | null): string {
   return `${sign}${n.toFixed(2)}%`;
 }
 
-function formatSharpe(n: number | null): string {
-  if (n == null || !Number.isFinite(n)) return "—";
-  return n.toFixed(2);
+// Need >= 5 weekday returns to compute Sharpe; below that the metric
+// renders as "calculating" so users see the portfolio is still warming
+// up rather than that the column is broken.
+const SHARPE_MIN_RETURNS = 5;
+
+function formatSharpe(n: number | null, nReturns: number): string {
+  if (n != null && Number.isFinite(n)) return n.toFixed(2);
+  if (nReturns < SHARPE_MIN_RETURNS) return "calculating";
+  return "—";
 }
 
 function pnlColor(pnl: number | null): string {
@@ -245,8 +253,12 @@ function AgentTableRow({
       <td className={`px-4 py-3 text-right font-bold ${pnlColor(ret)}`}>
         {formatPct(ret)}
       </td>
-      <td className={`px-4 py-3 text-right ${pnlColor(row.sharpe_30d)}`}>
-        {formatSharpe(row.sharpe_30d)}
+      <td
+        className={`px-4 py-3 text-right ${
+          row.sharpe_30d == null ? "text-text-muted" : pnlColor(row.sharpe_30d)
+        }`}
+      >
+        {formatSharpe(row.sharpe_30d, row.sharpe_n_returns)}
       </td>
       <td className="px-4 py-3 text-right text-text">
         {row.trades[period]}
@@ -293,8 +305,12 @@ function BenchmarkTableRow({
       <td className={`px-4 py-3 text-right font-bold ${pnlColor(ret)}`}>
         {formatPct(ret)}
       </td>
-      <td className={`px-4 py-3 text-right ${pnlColor(row.sharpe_30d)}`}>
-        {formatSharpe(row.sharpe_30d)}
+      <td
+        className={`px-4 py-3 text-right ${
+          row.sharpe_30d == null ? "text-text-muted" : pnlColor(row.sharpe_30d)
+        }`}
+      >
+        {formatSharpe(row.sharpe_30d, row.sharpe_n_returns)}
       </td>
       <td className="px-4 py-3 text-right text-text-muted">&mdash;</td>
       <td className="px-4 py-3 text-right text-text-muted">&mdash;</td>
