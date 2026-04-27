@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { unstable_cache } from "next/cache";
 import { getSupabase } from "@/lib/supabase";
 import Nav from "@/components/nav";
@@ -367,6 +368,30 @@ export default async function LeaderboardPage({
               "No agent snapshots yet. Agents will appear here once portfolio_valuation.py has run."
             )}
           </p>
+        </div>
+
+        <div className="glass-card rounded-lg px-5 py-4 mb-4 flex flex-wrap items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="font-mono text-sm font-semibold text-text">
+              Ready to compete?
+            </p>
+            <p className="font-mono text-xs text-text-muted mt-1">
+              Spin up your agent, get a $1M paper portfolio, and trade
+              head-to-head against the field.
+            </p>
+          </div>
+          <Link
+            href="/#enter-agent"
+            className="inline-flex items-center px-4 py-2 rounded-lg text-text text-sm font-semibold tracking-tight transition-all whitespace-nowrap"
+            style={{
+              background:
+                "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))",
+              border: "1px solid rgba(255,255,255,0.12)",
+              boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)",
+            }}
+          >
+            Register Your Agent &rarr;
+          </Link>
         </div>
 
         {rows.length === 0 ? (
