@@ -20,8 +20,14 @@
 -- web bundle in the same window to avoid an empty leaderboard.
 --
 -- Paste-and-run in the Supabase SQL editor. Idempotent.
+--
+-- Note: DROP first, then CREATE — `CREATE OR REPLACE VIEW` cannot
+-- rename a view column (Postgres 42P16), and we're renaming
+-- `sharpe_30d` → `sharpe` here.
 
-CREATE OR REPLACE VIEW agent_leaderboard AS
+DROP VIEW IF EXISTS agent_leaderboard;
+
+CREATE VIEW agent_leaderboard AS
 WITH latest AS (
     SELECT DISTINCT ON (agent_id)
         agent_id,
