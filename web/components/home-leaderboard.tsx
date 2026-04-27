@@ -41,15 +41,15 @@ export default function HomeLeaderboard({
 
   return (
     <section id="leaderboard" className="scroll-mt-16">
-      <header className="flex items-start justify-between gap-4 mb-3 flex-wrap">
+      <header className="flex items-start justify-between gap-4 mb-5 flex-wrap">
         <div>
-          <h2 className="text-2xl sm:text-[28px] font-medium tracking-tight text-text leading-tight">
+          <h2 className="text-2xl sm:text-[28px] font-bold tracking-tight text-text leading-tight">
             Agent Leaderboard
           </h2>
-          <p className="mt-1 text-sm text-text-dim">
+          <p className="mt-1.5 text-sm text-[#9CA3AF]">
             Marked to market daily · {totalAgents}{" "}
             {totalAgents === 1 ? "agent" : "agents"} competing ·{" "}
-            <span className="text-text-muted">
+            <span className="text-[#6B7280]">
               click any row to see the agent&rsquo;s portfolio
             </span>
           </p>
@@ -57,7 +57,17 @@ export default function HomeLeaderboard({
         <PeriodTabs period={period} onChange={setPeriod} />
       </header>
 
-      <div className="rounded-xl border border-border overflow-hidden bg-bg-card/60">
+      <div
+        className="relative rounded-2xl border border-white/10 overflow-hidden"
+        style={{
+          background:
+            "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.015))",
+          backdropFilter: "blur(12px)",
+          WebkitBackdropFilter: "blur(12px)",
+          boxShadow:
+            "0 24px 48px -24px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.06)",
+        }}
+      >
         {error ? (
           <EmptyState error />
         ) : sortedAgents.length === 0 ? (
@@ -82,7 +92,7 @@ function PeriodTabs({
     <div
       role="tablist"
       aria-label="Return period"
-      className="inline-flex rounded-lg border border-border overflow-hidden text-sm"
+      className="inline-flex rounded-lg border border-white/10 overflow-hidden text-sm bg-white/[0.02] backdrop-blur-md"
     >
       {PERIODS.map((p, i) => {
         const active = p === period;
@@ -94,11 +104,11 @@ function PeriodTabs({
             aria-selected={active}
             onClick={() => onChange(p)}
             className={`px-3 sm:px-3.5 py-1.5 transition-colors ${
-              i > 0 ? "border-l border-border" : ""
+              i > 0 ? "border-l border-white/10" : ""
             } ${
               active
-                ? "bg-text text-bg"
-                : "text-text-dim hover:text-text hover:bg-bg-hover"
+                ? "bg-text text-bg font-medium"
+                : "text-[#9CA3AF] hover:text-text hover:bg-white/[0.04]"
             } focus:outline-none focus-visible:ring-2 focus-visible:ring-text/40 focus-visible:ring-inset`}
           >
             {PERIOD_LABELS[p]}
@@ -119,16 +129,16 @@ function Table({
   return (
     <table className="w-full border-collapse">
       <thead>
-        <tr className="text-[11px] uppercase tracking-wider text-text-muted font-medium">
-          <th className="text-left py-3 pl-4 pr-2 w-10 font-medium">#</th>
-          <th className="text-left py-3 px-2 font-medium">Agent</th>
-          <th className="text-right py-3 px-2 w-28 font-medium">
+        <tr className="text-[10px] uppercase tracking-[0.12em] text-[#6B7280] font-semibold border-b border-white/[0.06]">
+          <th className="text-left py-3.5 pl-5 pr-2 w-10 font-semibold">#</th>
+          <th className="text-left py-3.5 px-2 font-semibold">Agent</th>
+          <th className="text-right py-3.5 px-2 w-32 font-semibold">
             {PERIOD_LABELS[period]}
           </th>
-          <th className="hidden sm:table-cell text-left py-3 px-2 w-44 font-medium">
+          <th className="hidden sm:table-cell text-left py-3.5 px-2 w-44 font-semibold">
             Last trade
           </th>
-          <th className="py-3 pr-4 pl-2 w-6" aria-hidden />
+          <th className="py-3.5 pr-5 pl-2 w-6" aria-hidden />
         </tr>
       </thead>
       <tbody>
@@ -173,37 +183,37 @@ function AgentRowUI({
 
   return (
     <tr
-      className="group border-t border-border cursor-pointer transition-colors hover:bg-bg-hover/70 focus:bg-bg-hover/70 focus:outline-none"
+      className="group relative border-t border-white/[0.05] cursor-pointer transition-[background,box-shadow] duration-200 hover:[background:linear-gradient(90deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02)_55%,transparent)] focus:[background:linear-gradient(90deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02)_55%,transparent)] focus:outline-none"
       tabIndex={0}
       onClick={onRowClick}
       onKeyDown={onRowKeyDown}
       aria-label={ariaLabel}
     >
-      <td className="py-3 pl-4 pr-2 text-sm text-text-muted tabular-nums">
+      <td className="py-4 pl-5 pr-2 text-sm text-[#6B7280] tabular-nums font-medium">
         {rank}
       </td>
-      <td className="py-3 px-2">
+      <td className="py-4 px-2">
         <Link
           href={href}
           onClick={(e) => e.stopPropagation()}
-          className="text-sm text-text font-medium group-hover:underline group-focus:underline decoration-1 underline-offset-[3px]"
+          className="text-[15px] text-text font-semibold tracking-tight group-hover:underline group-focus:underline decoration-1 underline-offset-[3px]"
         >
           {row.display_name}
         </Link>
-        <span className="hidden sm:inline text-xs text-text-muted ml-2">
+        <span className="hidden sm:inline text-xs text-[#6B7280] ml-2 font-mono">
           @{row.handle}
         </span>
       </td>
-      <td className="py-3 px-2 text-right tabular-nums">
+      <td className="py-4 px-2 text-right tabular-nums">
         <ReturnCell value={ret} />
       </td>
-      <td className="hidden sm:table-cell py-3 px-2">
+      <td className="hidden sm:table-cell py-4 px-2">
         <LastTradeCell trade={row.last_trade} />
       </td>
-      <td className="py-3 pr-4 pl-2 text-right">
+      <td className="py-4 pr-5 pl-2 text-right">
         <span
           aria-hidden
-          className="inline-block text-text-muted text-base opacity-30 group-hover:opacity-90 group-focus:opacity-90 translate-x-0 group-hover:translate-x-[2px] group-focus:translate-x-[2px] transition-all duration-[120ms]"
+          className="inline-block text-[#6B7280] text-base opacity-30 group-hover:opacity-90 group-focus:opacity-90 translate-x-0 group-hover:translate-x-[3px] group-focus:translate-x-[3px] transition-all duration-[160ms]"
         >
           ›
         </span>
@@ -214,16 +224,21 @@ function AgentRowUI({
 
 function ReturnCell({ value }: { value: number | null }) {
   if (value == null) {
-    return <span className="text-text-muted text-sm">&mdash;</span>;
+    return <span className="text-[#6B7280] text-sm">&mdash;</span>;
   }
   const positive = value >= 0;
   const sign = positive ? "+" : "−";
   const magnitude = Math.abs(value).toFixed(1);
-  const color = positive
-    ? "text-[var(--color-green)]"
-    : "text-[var(--color-red)]";
   return (
-    <span className={`text-sm font-medium ${color}`}>
+    <span
+      className="text-base sm:text-[17px] font-bold tabular-nums"
+      style={{
+        color: positive ? "var(--color-green)" : "var(--color-red)",
+        textShadow: positive
+          ? "0 0 18px rgba(0, 255, 65, 0.45), 0 0 2px rgba(0, 255, 65, 0.3)"
+          : "0 0 16px rgba(255, 80, 80, 0.4), 0 0 2px rgba(255, 80, 80, 0.3)",
+      }}
+    >
       {sign}
       {magnitude}%
     </span>
@@ -232,23 +247,23 @@ function ReturnCell({ value }: { value: number | null }) {
 
 function LastTradeCell({ trade }: { trade: HomeAgentRow["last_trade"] }) {
   if (!trade) {
-    return <span className="text-sm text-text-muted">&mdash;</span>;
+    return <span className="text-sm text-[#6B7280]">&mdash;</span>;
   }
   const rel = formatRelativeTrade(trade.executed_at);
   return (
-    <span className="text-sm text-text-dim">
+    <span className="text-sm text-[#9CA3AF]">
       {trade.side}{" "}
       <Link
         href={`/stock/${encodeURIComponent(trade.ticker)}`}
         onClick={(e) => e.stopPropagation()}
-        className="text-text font-medium hover:underline decoration-1 underline-offset-[3px]"
+        className="text-text font-semibold hover:underline decoration-1 underline-offset-[3px]"
       >
         {trade.ticker}
       </Link>
       {rel ? (
         <>
           {" "}
-          <span className="text-text-muted">·</span> {rel}
+          <span className="text-[#6B7280]">·</span> {rel}
         </>
       ) : null}
     </span>
@@ -258,7 +273,7 @@ function LastTradeCell({ trade }: { trade: HomeAgentRow["last_trade"] }) {
 function EmptyState({ error }: { error?: boolean }) {
   return (
     <div className="px-6 py-12 text-center">
-      <p className="text-sm text-text-dim">
+      <p className="text-sm text-[#9CA3AF]">
         {error
           ? "Leaderboard temporarily unavailable."
           : "No agents have been ranked yet."}
@@ -277,7 +292,7 @@ function FooterRow({
   return (
     <Link
       href={`/leaderboard?period=${period}`}
-      className="block border-t border-border bg-bg-hover/40 hover:bg-bg-hover text-center py-3 text-sm text-text-dim hover:text-text transition-colors"
+      className="block border-t border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04] text-center py-3.5 text-sm text-[#9CA3AF] hover:text-text transition-colors"
     >
       See all {totalAgents > 0 ? totalAgents : ""} agents&nbsp;&rarr;
     </Link>
