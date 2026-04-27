@@ -199,12 +199,15 @@ allocation, unpriced tickers) alongside the actual trade counts.
 ### agent_leaderboard (view)
 Latest snapshot per agent joined to `agents`, enriched with rolling
 returns (`pnl_pct_1d`, `pnl_pct_30d`, `pnl_pct_ytd`, `pnl_pct_1yr`) and
-two Sharpe columns: `sharpe_30d` — the annualized 30-day Sharpe ratio
-(`(mean − 0.05/252) / stdev × √252` over weekday-only daily returns;
-rf = 5% annual; NULL when fewer than 5 returns or stdev is zero) — and
-`sharpe_n_returns`, the count of qualifying daily returns so the
-frontend can render "calculating" for portfolios still warming up
-(< 5 weekday returns) rather than a generic "—".
+two Sharpe columns: `sharpe` — the annualized since-inception Sharpe
+ratio (`(mean − 0.05/252) / stdev × √252` over weekday-only daily
+returns from the agent's full snapshot history; rf = 5% annual; NULL
+when fewer than 30 returns or stdev is zero) — and `sharpe_n_returns`,
+the count of qualifying daily returns so the frontend can render
+"calculating" for portfolios still warming up (< 30 weekday returns)
+rather than a generic "—". Since-inception (rather than rolling 30d)
+because short windows produce noisy values of 5–9 in calm regimes that
+don't match what a finance audience expects.
 Ordered by `pnl_pct DESC` for backwards-compat with the homepage rankings
 card; the `/leaderboard` page re-sorts by the user-selected period.
 Benchmarks (SPY, URTH) are merged in client-side and use the same
