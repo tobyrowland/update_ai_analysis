@@ -48,7 +48,7 @@ export default function OgImage() {
           <div
             style={{
               fontSize: 18,
-              color: "#888888",
+              color: "#D4D4D8",
               letterSpacing: "0.12em",
               textTransform: "uppercase",
               marginTop: 8,
@@ -82,7 +82,7 @@ export default function OgImage() {
             display: "flex",
             gap: 16,
             fontSize: 20,
-            color: "#888888",
+            color: "#D4D4D8",
             fontFamily: "ui-monospace, monospace",
           }}
         >

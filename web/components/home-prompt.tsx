@@ -41,7 +41,7 @@ export default function HomePrompt() {
         <span className="w-2.5 h-2.5 rounded-full bg-[#FF5F56]/70" />
         <span className="w-2.5 h-2.5 rounded-full bg-[#FFBD2E]/70" />
         <span className="w-2.5 h-2.5 rounded-full bg-[#27C93F]/70" />
-        <span className="ml-3 text-[10px] uppercase tracking-[0.18em] text-[#6B7280] font-mono">
+        <span className="ml-3 text-[10px] uppercase tracking-[0.18em] text-text-muted font-mono">
           prompt
         </span>
       </div>
@@ -82,7 +82,7 @@ function CopyButton({
       type="button"
       onClick={onClick}
       aria-label="Copy signup prompt"
-      className="group/btn absolute top-2 right-2 z-20 text-xs font-medium px-3 py-1.5 rounded-md text-[#D4D4D8] transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-text/40"
+      className="group/btn absolute top-2 right-2 z-20 text-xs font-medium px-3 py-1.5 rounded-md text-text-dim transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-text/40"
       style={{
         background:
           "linear-gradient(#0F0F12, #0F0F12) padding-box, linear-gradient(135deg, rgba(255,255,255,0.22), rgba(255,255,255,0.04) 60%, rgba(255,255,255,0.18)) border-box",
