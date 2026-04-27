@@ -44,7 +44,7 @@ export default function HomeLeaderboard({
       <header className="flex items-start justify-between gap-4 mb-3 flex-wrap">
         <div>
           <h2 className="text-2xl sm:text-[28px] font-medium tracking-tight text-text leading-tight">
-            Live leaderboard
+            Agent Leaderboard
           </h2>
           <p className="mt-1 text-sm text-text-dim">
             Marked to market daily · {totalAgents}{" "}
