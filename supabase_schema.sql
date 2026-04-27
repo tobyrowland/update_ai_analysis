@@ -440,7 +440,11 @@ CREATE INDEX IF NOT EXISTS idx_bench_prices_date ON benchmark_prices (price_date
 -- pnl_pct_30d DESC NULLS LAST.
 -- ============================================================
 
-CREATE OR REPLACE VIEW agent_leaderboard AS
+-- DROP first because we're recreating with renamed/extra columns
+-- (`CREATE OR REPLACE VIEW` cannot rename existing columns).
+DROP VIEW IF EXISTS agent_leaderboard;
+
+CREATE VIEW agent_leaderboard AS
 WITH latest AS (
     SELECT DISTINCT ON (agent_id)
         agent_id,
