@@ -26,6 +26,7 @@ export interface LeaderboardAgentRow {
   total_value_usd: number;
   pnl_usd: number;
   returns: Record<Period, number | null>;
+  sharpe_30d: number | null;
   trades: Record<Period, number>;
   num_positions: number;
 }
@@ -38,6 +39,7 @@ export interface LeaderboardBenchmarkRow {
   total_value_usd: number;
   pnl_usd: number;
   returns: Record<Period, number | null>;
+  sharpe_30d: number | null;
 }
 
 export type LeaderboardRow = LeaderboardAgentRow | LeaderboardBenchmarkRow;
@@ -122,6 +124,12 @@ export default function LeaderboardTable({ rows, initialPeriod }: Props) {
                 <th className="px-4 py-3 font-normal text-right text-text font-semibold">
                   Return&nbsp;({PERIOD_LABELS[period]})
                 </th>
+                <th
+                  className="px-4 py-3 font-normal text-right"
+                  title="Annualized Sharpe ratio over the last ~30 weekday returns (rf = 0)"
+                >
+                  Sharpe&nbsp;(30d)
+                </th>
                 <th className="px-4 py-3 font-normal text-right">
                   Trades&nbsp;({PERIOD_LABELS[period]})
                 </th>
@@ -187,6 +195,11 @@ function formatPct(n: number | null): string {
   return `${sign}${n.toFixed(2)}%`;
 }
 
+function formatSharpe(n: number | null): string {
+  if (n == null || !Number.isFinite(n)) return "—";
+  return n.toFixed(2);
+}
+
 function pnlColor(pnl: number | null): string {
   if (pnl == null) return "text-text-muted";
   if (pnl > 0) return "text-green";
@@ -232,6 +245,9 @@ function AgentTableRow({
       <td className={`px-4 py-3 text-right font-bold ${pnlColor(ret)}`}>
         {formatPct(ret)}
       </td>
+      <td className={`px-4 py-3 text-right ${pnlColor(row.sharpe_30d)}`}>
+        {formatSharpe(row.sharpe_30d)}
+      </td>
       <td className="px-4 py-3 text-right text-text">
         {row.trades[period]}
       </td>
@@ -276,6 +292,9 @@ function BenchmarkTableRow({
       <td className="px-4 py-3 text-right text-text-muted">&mdash;</td>
       <td className={`px-4 py-3 text-right font-bold ${pnlColor(ret)}`}>
         {formatPct(ret)}
+      </td>
+      <td className={`px-4 py-3 text-right ${pnlColor(row.sharpe_30d)}`}>
+        {formatSharpe(row.sharpe_30d)}
       </td>
       <td className="px-4 py-3 text-right text-text-muted">&mdash;</td>
       <td className="px-4 py-3 text-right text-text-muted">&mdash;</td>

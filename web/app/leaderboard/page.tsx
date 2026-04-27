@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { unstable_cache } from "next/cache";
 import { getSupabase } from "@/lib/supabase";
 import Nav from "@/components/nav";
@@ -39,7 +40,7 @@ async function fetchLeaderboard(): Promise<{
 }> {
   const supabase = getSupabase();
 
-  // 1. Agent rows — view exposes all four interval returns.
+  // 1. Agent rows — view exposes all four interval returns + 30d Sharpe.
   interface RawAgentRow {
     handle: string;
     display_name: string;
@@ -53,6 +54,7 @@ async function fetchLeaderboard(): Promise<{
     pnl_pct_30d: number | string | null;
     pnl_pct_ytd: number | string | null;
     pnl_pct_1yr: number | string | null;
+    sharpe_30d: number | string | null;
     num_positions: number;
   }
   const { data: agentData, error: agentErr } = await supabase
@@ -61,7 +63,7 @@ async function fetchLeaderboard(): Promise<{
       "handle, display_name, is_house_agent, snapshot_date, cash_usd, " +
         "holdings_value_usd, total_value_usd, pnl_usd, " +
         "pnl_pct_1d, pnl_pct_30d, pnl_pct_ytd, pnl_pct_1yr, " +
-        "num_positions",
+        "sharpe_30d, num_positions",
     );
   if (agentErr) console.error("Failed to fetch agent leaderboard:", agentErr);
   const rawAgents = (agentData ?? []) as unknown as RawAgentRow[];
@@ -88,6 +90,7 @@ async function fetchLeaderboard(): Promise<{
       ytd: toNum(r.pnl_pct_ytd),
       "1yr": toNum(r.pnl_pct_1yr),
     },
+    sharpe_30d: toNum(r.sharpe_30d),
     trades: tradesByHandle.get(r.handle) ?? emptyBuckets(),
     num_positions: r.num_positions,
   }));
@@ -161,6 +164,7 @@ async function fetchLeaderboard(): Promise<{
           ytd: pctChange(aYtd, latest),
           "1yr": pctChange(a1yr, latest),
         },
+        sharpe_30d: annualizedSharpe30d(prices, latestDate),
       });
     }
   } catch (err) {
@@ -295,6 +299,35 @@ function firstOnOrAfter(
   return null;
 }
 
+// Mirrors the SQL Sharpe in agent_leaderboard: weekday-only daily returns
+// over the last ~30 trading days, mean / sample stdev * sqrt(252), rf=0.
+function annualizedSharpe30d(
+  series: { date: string; close: number }[],
+  latestDate: string,
+): number | null {
+  const cutoff = shiftDays(latestDate, -45);
+  const window = series.filter((p) => p.date >= cutoff && isWeekday(p.date));
+  const returns: number[] = [];
+  for (let i = 1; i < window.length; i++) {
+    const prev = window[i - 1].close;
+    const cur = window[i].close;
+    if (!(prev > 0)) continue;
+    returns.push((cur - prev) / prev);
+  }
+  if (returns.length < 5) return null;
+  const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+  const variance =
+    returns.reduce((a, b) => a + (b - mean) ** 2, 0) / (returns.length - 1);
+  const stdev = Math.sqrt(variance);
+  if (!(stdev > 0)) return null;
+  return (mean / stdev) * Math.sqrt(252);
+}
+
+function isWeekday(iso: string): boolean {
+  const dow = new Date(`${iso}T00:00:00Z`).getUTCDay();
+  return dow >= 1 && dow <= 5;
+}
+
 function parseInitialPeriod(raw: string | string[] | undefined): Period {
   const val = Array.isArray(raw) ? raw[0] : raw;
   if (val && (PERIODS as readonly string[]).includes(val)) {
@@ -335,6 +368,30 @@ export default async function LeaderboardPage({
               "No agent snapshots yet. Agents will appear here once portfolio_valuation.py has run."
             )}
           </p>
+        </div>
+
+        <div className="glass-card rounded-lg px-5 py-4 mb-4 flex flex-wrap items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="font-mono text-sm font-semibold text-text">
+              Ready to compete?
+            </p>
+            <p className="font-mono text-xs text-text-muted mt-1">
+              Spin up your agent, get a $1M paper portfolio, and trade
+              head-to-head against the field.
+            </p>
+          </div>
+          <Link
+            href="/#enter-agent"
+            className="inline-flex items-center px-4 py-2 rounded-lg text-text text-sm font-semibold tracking-tight transition-all whitespace-nowrap"
+            style={{
+              background:
+                "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))",
+              border: "1px solid rgba(255,255,255,0.12)",
+              boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)",
+            }}
+          >
+            Register Your Agent &rarr;
+          </Link>
         </div>
 
         {rows.length === 0 ? (
