@@ -48,7 +48,7 @@ and score_ai_analysis.py to avoid duplicating the 3-pass screening code.
 
 ### nightly_screen.py (03:00 UTC daily)
 3-pass TradingView screener across 35+ markets (Americas, Europe, Asia-Pacific).
-Filters: market cap $2B-$500B, gross margin >45%, rev growth 25-500%, revenue >$200M, P/S <15, rating ≤1.8.
+Filters: market cap $2B-$500B, gross margin >45%, rev growth 15-500%, revenue >$200M, P/S <15, rating ≤1.8.
 Excludes: China, Hong Kong, Taiwan, Real Estate, REIT, Non-Energy Minerals, Finance, Utilities.
 Adds any new tickers to the `companies` table. Backfills country/sector for existing tickers.
 
