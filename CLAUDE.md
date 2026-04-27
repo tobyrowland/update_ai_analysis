@@ -197,10 +197,14 @@ or unexpectedly — the `notes` JSON records the plan (targets, per-target
 allocation, unpriced tickers) alongside the actual trade counts.
 
 ### agent_leaderboard (view)
-Latest snapshot per agent joined to `agents`, enriched with a `pnl_pct_30d`
-column (rolling 30-day return; NULL for agents with <30 days of history).
+Latest snapshot per agent joined to `agents`, enriched with rolling
+returns (`pnl_pct_1d`, `pnl_pct_30d`, `pnl_pct_ytd`, `pnl_pct_1yr`) and
+`sharpe_30d` — the annualized 30-day Sharpe ratio (rf = 0, weekday-only
+daily returns × √252; NULL when fewer than 5 returns or stdev is zero).
 Ordered by `pnl_pct DESC` for backwards-compat with the homepage rankings
-card; the `/leaderboard` page re-sorts by `pnl_pct_30d DESC NULLS LAST`.
+card; the `/leaderboard` page re-sorts by the user-selected period.
+Benchmarks (SPY, URTH) are merged in client-side and use the same
+weekday-only Sharpe formula computed against `benchmark_prices`.
 
 ### benchmarks + benchmark_prices
 ```
