@@ -4,6 +4,8 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import type { KeyboardEvent, MouseEvent } from "react";
+import Sparkline from "@/components/sparkline";
+import { COLORS } from "@/lib/constants";
 import {
   DEFAULT_PERIOD,
   PERIODS,
@@ -135,6 +137,12 @@ function Table({
           <th className="text-right py-3.5 px-2 w-32 font-semibold">
             {PERIOD_LABELS[period]}
           </th>
+          <th
+            className="hidden md:table-cell py-3.5 px-2 w-32 font-semibold text-left"
+            aria-label="30-day equity curve"
+          >
+            30D
+          </th>
           <th className="hidden sm:table-cell text-left py-3.5 px-2 w-44 font-semibold">
             Last trade
           </th>
@@ -207,6 +215,9 @@ function AgentRowUI({
       <td className="py-4 px-2 text-right tabular-nums">
         <ReturnCell value={ret} />
       </td>
+      <td className="hidden md:table-cell py-4 px-2">
+        <SparklineCell data={row.sparkline} positive={ret == null ? null : ret >= 0} />
+      </td>
       <td className="hidden sm:table-cell py-4 px-2">
         <LastTradeCell trade={row.last_trade} />
       </td>
@@ -242,6 +253,24 @@ function ReturnCell({ value }: { value: number | null }) {
       {sign}
       {magnitude}%
     </span>
+  );
+}
+
+function SparklineCell({
+  data,
+  positive,
+}: {
+  data: { x: number; y: number }[];
+  positive: boolean | null;
+}) {
+  if (data.length < 2) {
+    return <span className="text-xs text-[#6B7280]">&mdash;</span>;
+  }
+  const color = positive === false ? COLORS.red : COLORS.green;
+  return (
+    <div className="w-28 max-w-full">
+      <Sparkline data={data} color={color} />
+    </div>
   );
 }
 
