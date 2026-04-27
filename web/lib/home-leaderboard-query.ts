@@ -24,6 +24,9 @@ export interface HomeAgentRow {
   display_name: string;
   returns: Returns;
   last_trade: LastTrade | null;
+  // 30-day equity-curve points used by the inline row sparkline. May be
+  // empty if the agent has fewer than 2 history snapshots.
+  sparkline: { x: number; y: number }[];
 }
 
 export interface LastTrade {
@@ -64,6 +67,7 @@ export async function getHomeLeaderboard(): Promise<HomeLeaderboardResult> {
 
   const handles = rawAgents.map((r) => r.handle);
   const lastTradeByHandle = await fetchLastTrades(handles);
+  const sparklinesByHandle = await fetchSparklines(handles);
 
   const agents: HomeAgentRow[] = rawAgents.map((r) => ({
     kind: "agent",
@@ -76,6 +80,7 @@ export async function getHomeLeaderboard(): Promise<HomeLeaderboardResult> {
       "1yr": toNum(r.pnl_pct_1yr),
     },
     last_trade: lastTradeByHandle.get(r.handle) ?? null,
+    sparkline: sparklinesByHandle.get(r.handle) ?? [],
   }));
 
   return { agents };
@@ -123,6 +128,65 @@ async function fetchLastTrades(
       executed_at: t.executed_at,
     });
     if (out.size === handleById.size) break;
+  }
+  return out;
+}
+
+// Pulls the last ~30 days of total_value_usd snapshots for every agent the
+// homepage might show, in a single bulk query, then groups by handle. The
+// number of snapshots per agent is bounded by date range (≤ 30) so the
+// per-call result size stays small even with many agents.
+async function fetchSparklines(
+  handles: string[],
+): Promise<Map<string, { x: number; y: number }[]>> {
+  const out = new Map<string, { x: number; y: number }[]>();
+  if (handles.length === 0) return out;
+
+  const supabase = getSupabase();
+  const { data: idRows } = await supabase
+    .from("agents")
+    .select("id, handle")
+    .in("handle", handles);
+  const handleById = new Map<string, string>();
+  const agentIds: string[] = [];
+  for (const r of (idRows ?? []) as { id: string; handle: string }[]) {
+    handleById.set(r.id, r.handle);
+    agentIds.push(r.id);
+  }
+  if (agentIds.length === 0) return out;
+
+  const since = new Date();
+  since.setUTCDate(since.getUTCDate() - 30);
+  const sinceIso = since.toISOString().slice(0, 10);
+
+  const { data: rows } = await supabase
+    .from("agent_portfolio_history")
+    .select("agent_id, snapshot_date, total_value_usd")
+    .in("agent_id", agentIds)
+    .gte("snapshot_date", sinceIso)
+    .order("snapshot_date", { ascending: true });
+
+  // Group by handle; emit `{x: dayIndex, y: total_value_usd}` in date order.
+  const grouped = new Map<string, { date: string; y: number }[]>();
+  for (const r of (rows ?? []) as {
+    agent_id: string;
+    snapshot_date: string;
+    total_value_usd: number | string;
+  }[]) {
+    const handle = handleById.get(r.agent_id);
+    if (!handle) continue;
+    let bucket = grouped.get(handle);
+    if (!bucket) {
+      bucket = [];
+      grouped.set(handle, bucket);
+    }
+    bucket.push({ date: r.snapshot_date, y: Number(r.total_value_usd) });
+  }
+  for (const [handle, bucket] of grouped) {
+    out.set(
+      handle,
+      bucket.map((p, i) => ({ x: i, y: p.y })),
+    );
   }
   return out;
 }
