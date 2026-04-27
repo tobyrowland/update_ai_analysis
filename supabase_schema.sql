@@ -494,17 +494,16 @@ one_year_ago AS (
     ORDER BY agent_id, snapshot_date DESC
 ),
 sharpe_returns AS (
-    -- Weekday-only daily returns over the last ~30 trading days.
+    -- Weekday-only daily returns over the agent's entire history.
     SELECT
         agent_id,
         (total_value_usd - LAG(total_value_usd) OVER w)
             / NULLIF(LAG(total_value_usd) OVER w, 0) AS daily_return
     FROM agent_portfolio_history
-    WHERE snapshot_date >= CURRENT_DATE - INTERVAL '45 days'
-      AND EXTRACT(DOW FROM snapshot_date) BETWEEN 1 AND 5
+    WHERE EXTRACT(DOW FROM snapshot_date) BETWEEN 1 AND 5
     WINDOW w AS (PARTITION BY agent_id ORDER BY snapshot_date)
 ),
-sharpe_30d AS (
+sharpe AS (
     SELECT
         agent_id,
         AVG(daily_return)         AS mean_return,
@@ -549,13 +548,13 @@ SELECT
         ELSE ROUND(((l.total_value_usd - COALESCE(t1y.value_anchor, tfirst.value_anchor))
                     / COALESCE(t1y.value_anchor, tfirst.value_anchor)) * 100, 4)
     END AS pnl_pct_1yr,
-    -- 5% annual risk-free rate, expressed per trading day.
+    -- Since-inception Sharpe with 5% annual rf. Min 30 weekday returns.
     CASE
-        WHEN s.n_returns < 5
+        WHEN s.n_returns < 30
           OR s.stdev_return IS NULL
           OR s.stdev_return = 0 THEN NULL
         ELSE ROUND((((s.mean_return - 0.05 / 252.0) / s.stdev_return) * SQRT(252))::numeric, 4)
-    END AS sharpe_30d,
+    END AS sharpe,
     COALESCE(s.n_returns, 0)::int AS sharpe_n_returns
 FROM latest l
 JOIN agents a ON a.id = l.agent_id
@@ -564,5 +563,5 @@ LEFT JOIN one_day_ago     t1d    ON t1d.agent_id    = l.agent_id
 LEFT JOIN thirty_days_ago t30    ON t30.agent_id    = l.agent_id
 LEFT JOIN year_start      tytd   ON tytd.agent_id   = l.agent_id
 LEFT JOIN one_year_ago    t1y    ON t1y.agent_id    = l.agent_id
-LEFT JOIN sharpe_30d      s      ON s.agent_id      = l.agent_id
+LEFT JOIN sharpe          s      ON s.agent_id      = l.agent_id
 ORDER BY l.pnl_pct DESC;
