@@ -31,7 +31,7 @@ export default function PsChart({ data }: { data: PsDataPoint[] }) {
           </defs>
           <XAxis
             dataKey="date"
-            tick={{ fontSize: 10, fill: "#555555", fontFamily: "monospace" }}
+            tick={{ fontSize: 10, fill: "#6B7280", fontFamily: "monospace" }}
             tickLine={false}
             axisLine={{ stroke: "#222222" }}
             tickFormatter={(d: string) => {
@@ -40,7 +40,7 @@ export default function PsChart({ data }: { data: PsDataPoint[] }) {
             }}
           />
           <YAxis
-            tick={{ fontSize: 10, fill: "#555555", fontFamily: "monospace" }}
+            tick={{ fontSize: 10, fill: "#6B7280", fontFamily: "monospace" }}
             tickLine={false}
             axisLine={{ stroke: "#222222" }}
             domain={["auto", "auto"]}

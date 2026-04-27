@@ -6,7 +6,7 @@ export const COLORS = {
   borderLight: "#333333",
   text: "#EDEDED",
   textDim: "#888888",
-  textMuted: "#555555",
+  textMuted: "#6B7280",
   green: "#00FF41",
   greenDim: "#00CC33",
   orange: "#FF9900",

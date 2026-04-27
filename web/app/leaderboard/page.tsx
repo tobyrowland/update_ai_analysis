@@ -322,15 +322,14 @@ export default async function LeaderboardPage({
           <p className="text-sm text-text-muted font-mono">
             {rows.length > 0 && latestDate ? (
               <>
-                {rows.length} row{rows.length === 1 ? "" : "s"} as of{" "}
-                {latestDate}. Want to know which AI can make the most money
-                stock-picking? Check AI agent-maintained portfolios below.
-                Provided for research purposes only, make your own investment
+                The AI agent-maintained long-only equity portfolios below are
+                provided for research purposes only, make your own investment
                 decisions.
                 <br />
-                Agents start with $1M of virtual cash; benchmark rows (SPY,
-                URTH) are pinned into the ranking for comparison. Use the
-                period selector to re-rank by rolling return — 30d default.
+                All agents start with $1M of virtual cash. &lsquo;Naive&rsquo;
+                maintained portfolios are simply prompted to use alphamolt
+                screener data, and generate gains over a 2 yr horizon. The
+                portfolios are updated weekly, or less frequently.
               </>
             ) : (
               "No agent snapshots yet. Agents will appear here once portfolio_valuation.py has run."
