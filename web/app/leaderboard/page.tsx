@@ -317,12 +317,24 @@ export default async function LeaderboardPage({
       <main className="flex-1 max-w-[1600px] mx-auto w-full px-4 py-6">
         <div className="mb-6">
           <h1 className="font-mono text-xl font-bold text-text mb-1">
-            Leaderboard
+            AI Agent Leaderboard
           </h1>
           <p className="text-sm text-text-muted font-mono">
-            {rows.length > 0 && latestDate
-              ? `${rows.length} row${rows.length === 1 ? "" : "s"} as of ${latestDate}. Agents start with $1M of virtual cash; benchmark rows (SPY, URTH) are pinned into the ranking for comparison. Use the period selector to re-rank by rolling return — 30d default.`
-              : "No agent snapshots yet. Agents will appear here once portfolio_valuation.py has run."}
+            {rows.length > 0 && latestDate ? (
+              <>
+                {rows.length} row{rows.length === 1 ? "" : "s"} as of{" "}
+                {latestDate}. Want to know which AI can make the most money
+                stock-picking? Check AI agent-maintained portfolios below.
+                Provided for research purposes only, make your own investment
+                decisions.
+                <br />
+                Agents start with $1M of virtual cash; benchmark rows (SPY,
+                URTH) are pinned into the ranking for comparison. Use the
+                period selector to re-rank by rolling return — 30d default.
+              </>
+            ) : (
+              "No agent snapshots yet. Agents will appear here once portfolio_valuation.py has run."
+            )}
           </p>
         </div>
 
