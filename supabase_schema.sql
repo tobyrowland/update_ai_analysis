@@ -549,12 +549,14 @@ SELECT
         ELSE ROUND(((l.total_value_usd - COALESCE(t1y.value_anchor, tfirst.value_anchor))
                     / COALESCE(t1y.value_anchor, tfirst.value_anchor)) * 100, 4)
     END AS pnl_pct_1yr,
+    -- 5% annual risk-free rate, expressed per trading day.
     CASE
         WHEN s.n_returns < 5
           OR s.stdev_return IS NULL
           OR s.stdev_return = 0 THEN NULL
-        ELSE ROUND(((s.mean_return / s.stdev_return) * SQRT(252))::numeric, 4)
-    END AS sharpe_30d
+        ELSE ROUND((((s.mean_return - 0.05 / 252.0) / s.stdev_return) * SQRT(252))::numeric, 4)
+    END AS sharpe_30d,
+    COALESCE(s.n_returns, 0)::int AS sharpe_n_returns
 FROM latest l
 JOIN agents a ON a.id = l.agent_id
 LEFT JOIN first_snapshot  tfirst ON tfirst.agent_id = l.agent_id

@@ -55,6 +55,7 @@ async function fetchLeaderboard(): Promise<{
     pnl_pct_ytd: number | string | null;
     pnl_pct_1yr: number | string | null;
     sharpe_30d: number | string | null;
+    sharpe_n_returns: number | string | null;
     num_positions: number;
   }
   const { data: agentData, error: agentErr } = await supabase
@@ -63,7 +64,7 @@ async function fetchLeaderboard(): Promise<{
       "handle, display_name, is_house_agent, snapshot_date, cash_usd, " +
         "holdings_value_usd, total_value_usd, pnl_usd, " +
         "pnl_pct_1d, pnl_pct_30d, pnl_pct_ytd, pnl_pct_1yr, " +
-        "sharpe_30d, num_positions",
+        "sharpe_30d, sharpe_n_returns, num_positions",
     );
   if (agentErr) console.error("Failed to fetch agent leaderboard:", agentErr);
   const rawAgents = (agentData ?? []) as unknown as RawAgentRow[];
@@ -91,6 +92,7 @@ async function fetchLeaderboard(): Promise<{
       "1yr": toNum(r.pnl_pct_1yr),
     },
     sharpe_30d: toNum(r.sharpe_30d),
+    sharpe_n_returns: toNum(r.sharpe_n_returns) ?? 0,
     trades: tradesByHandle.get(r.handle) ?? emptyBuckets(),
     num_positions: r.num_positions,
   }));
@@ -151,6 +153,7 @@ async function fetchLeaderboard(): Promise<{
       const totalValue = notional * (latest / inception);
       const pnlUsd = totalValue - notional;
 
+      const benchSharpe = annualizedSharpe30d(prices, latestDate);
       benchmarkRows.push({
         kind: "benchmark",
         ticker: b.ticker,
@@ -164,7 +167,8 @@ async function fetchLeaderboard(): Promise<{
           ytd: pctChange(aYtd, latest),
           "1yr": pctChange(a1yr, latest),
         },
-        sharpe_30d: annualizedSharpe30d(prices, latestDate),
+        sharpe_30d: benchSharpe.sharpe,
+        sharpe_n_returns: benchSharpe.n,
       });
     }
   } catch (err) {
@@ -300,11 +304,15 @@ function firstOnOrAfter(
 }
 
 // Mirrors the SQL Sharpe in agent_leaderboard: weekday-only daily returns
-// over the last ~30 trading days, mean / sample stdev * sqrt(252), rf=0.
+// over the last ~30 trading days, (mean - rf_daily) / sample stdev * sqrt(252),
+// with rf = 5% annual.
+const SHARPE_RF_ANNUAL = 0.05;
+const SHARPE_RF_DAILY = SHARPE_RF_ANNUAL / 252;
+
 function annualizedSharpe30d(
   series: { date: string; close: number }[],
   latestDate: string,
-): number | null {
+): { sharpe: number | null; n: number } {
   const cutoff = shiftDays(latestDate, -45);
   const window = series.filter((p) => p.date >= cutoff && isWeekday(p.date));
   const returns: number[] = [];
@@ -314,13 +322,16 @@ function annualizedSharpe30d(
     if (!(prev > 0)) continue;
     returns.push((cur - prev) / prev);
   }
-  if (returns.length < 5) return null;
+  if (returns.length < 5) return { sharpe: null, n: returns.length };
   const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
   const variance =
     returns.reduce((a, b) => a + (b - mean) ** 2, 0) / (returns.length - 1);
   const stdev = Math.sqrt(variance);
-  if (!(stdev > 0)) return null;
-  return (mean / stdev) * Math.sqrt(252);
+  if (!(stdev > 0)) return { sharpe: null, n: returns.length };
+  return {
+    sharpe: ((mean - SHARPE_RF_DAILY) / stdev) * Math.sqrt(252),
+    n: returns.length,
+  };
 }
 
 function isWeekday(iso: string): boolean {
