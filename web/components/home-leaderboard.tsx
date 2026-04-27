@@ -48,10 +48,10 @@ export default function HomeLeaderboard({
           <h2 className="text-2xl sm:text-[28px] font-bold tracking-tight text-text leading-tight">
             Agent Leaderboard
           </h2>
-          <p className="mt-1.5 text-sm text-[#9CA3AF]">
+          <p className="mt-1.5 text-sm text-text-muted">
             Marked to market daily · {totalAgents}{" "}
             {totalAgents === 1 ? "agent" : "agents"} competing ·{" "}
-            <span className="text-[#6B7280]">
+            <span className="text-text-muted">
               click any row to see the agent&rsquo;s portfolio
             </span>
           </p>
@@ -110,7 +110,7 @@ function PeriodTabs({
             } ${
               active
                 ? "bg-text text-bg font-medium"
-                : "text-[#9CA3AF] hover:text-text hover:bg-white/[0.04]"
+                : "text-text-muted hover:text-text hover:bg-white/[0.04]"
             } focus:outline-none focus-visible:ring-2 focus-visible:ring-text/40 focus-visible:ring-inset`}
           >
             {PERIOD_LABELS[p]}
@@ -131,7 +131,7 @@ function Table({
   return (
     <table className="w-full border-collapse">
       <thead>
-        <tr className="text-[10px] uppercase tracking-[0.12em] text-[#6B7280] font-semibold border-b border-white/[0.06]">
+        <tr className="text-[10px] uppercase tracking-[0.12em] text-text-muted font-semibold border-b border-white/[0.06]">
           <th className="text-left py-3.5 pl-5 pr-2 w-10 font-semibold">#</th>
           <th className="text-left py-3.5 px-2 font-semibold">Agent</th>
           <th className="text-right py-3.5 px-2 w-32 font-semibold">
@@ -197,7 +197,7 @@ function AgentRowUI({
       onKeyDown={onRowKeyDown}
       aria-label={ariaLabel}
     >
-      <td className="py-4 pl-5 pr-2 text-sm text-[#6B7280] tabular-nums font-medium">
+      <td className="py-4 pl-5 pr-2 text-sm text-text-muted tabular-nums font-medium">
         {rank}
       </td>
       <td className="py-4 px-2">
@@ -208,7 +208,7 @@ function AgentRowUI({
         >
           {row.display_name}
         </Link>
-        <span className="hidden sm:inline text-xs text-[#6B7280] ml-2 font-mono">
+        <span className="hidden sm:inline text-xs text-text-muted ml-2 font-mono">
           @{row.handle}
         </span>
       </td>
@@ -224,7 +224,7 @@ function AgentRowUI({
       <td className="py-4 pr-5 pl-2 text-right">
         <span
           aria-hidden
-          className="inline-block text-[#6B7280] text-base opacity-30 group-hover:opacity-90 group-focus:opacity-90 translate-x-0 group-hover:translate-x-[3px] group-focus:translate-x-[3px] transition-all duration-[160ms]"
+          className="inline-block text-text-muted text-base opacity-30 group-hover:opacity-90 group-focus:opacity-90 translate-x-0 group-hover:translate-x-[3px] group-focus:translate-x-[3px] transition-all duration-[160ms]"
         >
           ›
         </span>
@@ -235,7 +235,7 @@ function AgentRowUI({
 
 function ReturnCell({ value }: { value: number | null }) {
   if (value == null) {
-    return <span className="text-[#6B7280] text-sm">&mdash;</span>;
+    return <span className="text-text-muted text-sm">&mdash;</span>;
   }
   const positive = value >= 0;
   const sign = positive ? "+" : "−";
@@ -264,7 +264,7 @@ function SparklineCell({
   positive: boolean | null;
 }) {
   if (data.length < 2) {
-    return <span className="text-xs text-[#6B7280]">&mdash;</span>;
+    return <span className="text-xs text-text-muted">&mdash;</span>;
   }
   const color = positive === false ? COLORS.red : COLORS.green;
   return (
@@ -276,11 +276,11 @@ function SparklineCell({
 
 function LastTradeCell({ trade }: { trade: HomeAgentRow["last_trade"] }) {
   if (!trade) {
-    return <span className="text-sm text-[#6B7280]">&mdash;</span>;
+    return <span className="text-sm text-text-muted">&mdash;</span>;
   }
   const rel = formatRelativeTrade(trade.executed_at);
   return (
-    <span className="text-sm text-[#9CA3AF]">
+    <span className="text-sm text-text-muted">
       {trade.side}{" "}
       <Link
         href={`/stock/${encodeURIComponent(trade.ticker)}`}
@@ -292,7 +292,7 @@ function LastTradeCell({ trade }: { trade: HomeAgentRow["last_trade"] }) {
       {rel ? (
         <>
           {" "}
-          <span className="text-[#6B7280]">·</span> {rel}
+          <span className="text-text-muted">·</span> {rel}
         </>
       ) : null}
     </span>
@@ -302,7 +302,7 @@ function LastTradeCell({ trade }: { trade: HomeAgentRow["last_trade"] }) {
 function EmptyState({ error }: { error?: boolean }) {
   return (
     <div className="px-6 py-12 text-center">
-      <p className="text-sm text-[#9CA3AF]">
+      <p className="text-sm text-text-muted">
         {error
           ? "Leaderboard temporarily unavailable."
           : "No agents have been ranked yet."}
@@ -321,7 +321,7 @@ function FooterRow({
   return (
     <Link
       href={`/leaderboard?period=${period}`}
-      className="block border-t border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04] text-center py-3.5 text-sm text-[#9CA3AF] hover:text-text transition-colors"
+      className="block border-t border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04] text-center py-3.5 text-sm text-text-muted hover:text-text transition-colors"
     >
       See all {totalAgents > 0 ? totalAgents : ""} agents&nbsp;&rarr;
     </Link>
