@@ -51,6 +51,16 @@ from moltbook_lib import (
     notification_marker,
     post_and_verify,
 )
+from social_personality import (
+    detect_hostility,
+    generate_apology,
+    get_relationship,
+    is_silenced,
+    maybe_refresh_summary,
+    record_engagement,
+    record_hostility,
+    relationship_block,
+)
 
 POSTED_LABEL = "moltbook-posted"
 FAILED_LABEL = "moltbook-failed"
@@ -249,6 +259,7 @@ def _process_notifications(
     client: MoltbookClient,
     gh: GitHubIssuer | None,
     existing_markers: set[str],
+    ledger: dict[str, Any],
     args: argparse.Namespace,
 ) -> dict[str, int]:
     """Phase 1: reply to notifications on our posts."""
@@ -289,13 +300,134 @@ def _process_notifications(
             skipped += 1
             continue
 
+        author = ctx["author_name"]
+
+        # --- Silence gate: someone we've already apologized to / muted ---
+        if is_silenced(ledger, author):
+            rel = get_relationship(ledger, author) or {}
+            log.info(
+                "SILENCED — skip @%s (status=%s)",
+                author, rel.get("status", "?"),
+            )
+            skipped += 1
+            continue
+
+        # --- Hostility gate: are they telling us to back off? ---
+        if not args.no_draft:
+            try:
+                hostility = detect_hostility(ctx["comment_content"])
+            except Exception as exc:
+                log.warning("hostility detection failed: %s", exc)
+                hostility = {"hostile": False, "severity": "none", "reason": ""}
+
+            if hostility["hostile"]:
+                severity = hostility["severity"]
+                log.info(
+                    "HOSTILITY %s on @%s: %s",
+                    severity.upper(), author, hostility["reason"],
+                )
+
+                if severity == "mild":
+                    # Auto-mute, no apology, no post.
+                    record_hostility(
+                        ledger, author,
+                        excerpt=ctx["comment_content"],
+                        ref=ctx["post_id"],
+                        severity=severity,
+                        apologized=False,
+                    )
+                    log.info("muted @%s — no apology sent", author)
+                    skipped += 1
+                    continue
+
+                # severity == "strong" → one apology, then mute
+                rel = get_relationship(ledger, author) or {}
+                what_we_said = ""
+                threads = rel.get("recent_threads") or []
+                if threads:
+                    what_we_said = threads[-1].get("our_excerpt", "")
+
+                try:
+                    apology = generate_apology(
+                        author,
+                        what_we_said=what_we_said,
+                        their_response=ctx["comment_content"],
+                        platform="Moltbook",
+                        char_cap=400,
+                    )
+                except Exception as exc:
+                    log.error("apology generation failed: %s", exc)
+                    apology = ""
+
+                if not apology:
+                    # Generation failed — auto-mute without apology rather
+                    # than send a bad reply.
+                    record_hostility(
+                        ledger, author,
+                        excerpt=ctx["comment_content"],
+                        ref=ctx["post_id"],
+                        severity=severity,
+                        apologized=False,
+                    )
+                    skipped += 1
+                    continue
+
+                if args.dry_run or gh is None:
+                    log.info("DRY RUN — would apologize to @%s: %s",
+                             author, apology)
+                    record_hostility(
+                        ledger, author,
+                        excerpt=ctx["comment_content"],
+                        ref=ctx["post_id"],
+                        severity=severity,
+                        apologized=True,
+                    )
+                    continue
+
+                log.info("posting apology to @%s", author)
+                success, outcome, comment_id = post_and_verify(
+                    client, ctx["post_id"], apology,
+                    parent_id=ctx["comment_id"],
+                )
+                record_hostility(
+                    ledger, author,
+                    excerpt=ctx["comment_content"],
+                    ref=ctx["post_id"],
+                    severity=severity,
+                    apologized=success,
+                )
+                if success:
+                    log.info("apology posted: %s", comment_id)
+                    title, body = _render_audit_issue(
+                        ctx, apology,
+                        f"https://www.moltbook.com/post/{ctx['post_id']}"
+                        f"#comment-{comment_id}",
+                        f"apology — {outcome}",
+                    )
+                    issue = gh.create_issue(
+                        title, body, [MOLTBOOK_ISSUE_LABEL, POSTED_LABEL]
+                    )
+                    if issue:
+                        gh.close_issue(issue["number"])
+                    posted += 1
+                else:
+                    log.error("apology post failed: %s", outcome)
+                    failed += 1
+                continue
+
+        # --- Normal draft path: inject memory of this person ---
+        memory = relationship_block(ledger, author)
+        if memory:
+            log.info("injecting memory for @%s", author)
+        ctx["memory_block"] = memory
+
         if args.no_draft:
             draft = "(drafting skipped — placeholder)"
         else:
             try:
                 draft = draft_reply(ctx)
                 log.info(
-                    "drafted for @%s (%d chars)", ctx["author_name"], len(draft)
+                    "drafted for @%s (%d chars)", author, len(draft)
                 )
             except Exception as exc:
                 log.error("drafting failed for %s: %s", notif["id"][:8], exc)
@@ -334,6 +466,42 @@ def _process_notifications(
             )
             if issue:
                 gh.close_issue(issue["number"])
+
+            # Record engagement + cold-start summary for first contact.
+            was_new = get_relationship(ledger, author) is None
+            record_engagement(
+                ledger, author,
+                ref=ctx["post_id"],
+                their_excerpt=ctx["comment_content"],
+                our_excerpt=draft,
+            )
+            if was_new:
+                # Cold-start: summarize from the comment we just saw + bio.
+                # Moltbook's API doesn't expose an author-feed, so this is
+                # the material we have. Better than nothing.
+                samples = [s for s in (
+                    ctx["comment_content"],
+                    ctx.get("author_desc") or "",
+                ) if s.strip()]
+                try:
+                    maybe_refresh_summary(
+                        ledger, author, samples,
+                        platform="Moltbook", force=True,
+                    )
+                except Exception as exc:
+                    log.warning("cold-start summary failed for @%s: %s",
+                                author, exc)
+            else:
+                # Lazy refresh on Nth engagement / older-than-N-days.
+                try:
+                    maybe_refresh_summary(
+                        ledger, author,
+                        [ctx["comment_content"]],
+                        platform="Moltbook",
+                    )
+                except Exception as exc:
+                    log.warning("summary refresh failed for @%s: %s",
+                                author, exc)
             posted += 1
         else:
             log.error("post failed for %s: %s", notif["id"][:8], outcome)
@@ -404,6 +572,13 @@ def _engage_feed(
         if author == OWN_HANDLE:
             continue
 
+        # Silence gate: never engage with anyone we've apologized to / muted.
+        if is_silenced(ledger, author):
+            rel = get_relationship(ledger, author) or {}
+            log.info("SILENCED — skip @%s (status=%s)",
+                     author, rel.get("status", "?"))
+            continue
+
         log.info("  considering: %s by @%s in m/%s — %s",
                  post_id[:8], author, submolt, post_title)
 
@@ -455,8 +630,9 @@ def _engage_feed(
                 continue
             log.info("post %s matches themes %s", post_id[:8], themes)
 
+            memory = relationship_block(ledger, author)
             try:
-                draft = draft_feed_comment(post)
+                draft = draft_feed_comment(post, memory_block=memory)
             except Exception as exc:
                 log.error("feed comment draft failed: %s", exc)
                 continue
@@ -482,6 +658,30 @@ def _engage_feed(
                 ledger["daily_comment_count"] = daily_comments
                 commented_this_run += 1
                 stats["commented"] += 1
+
+                # Relationship bookkeeping
+                was_new = get_relationship(ledger, author) is None
+                record_engagement(
+                    ledger, author,
+                    ref=post_id,
+                    their_excerpt=(post.get("content") or "")[:240],
+                    our_excerpt=draft,
+                )
+                samples = [
+                    s for s in (
+                        post.get("title") or "",
+                        (post.get("content") or "")[:600],
+                    ) if s.strip()
+                ]
+                try:
+                    maybe_refresh_summary(
+                        ledger, author, samples,
+                        platform="Moltbook",
+                        force=was_new,
+                    )
+                except Exception as exc:
+                    log.warning("summary update failed for @%s: %s",
+                                author, exc)
 
                 # Audit issue
                 if gh:
@@ -692,7 +892,7 @@ def main() -> int:
         )
 
     # Phase 1 — Notification replies
-    notif_stats = _process_notifications(client, gh, existing_markers, args)
+    notif_stats = _process_notifications(client, gh, existing_markers, ledger, args)
 
     # Phase 2 — Feed engagement
     engage_stats: dict[str, int] = {"followed": 0, "upvoted": 0, "commented": 0}

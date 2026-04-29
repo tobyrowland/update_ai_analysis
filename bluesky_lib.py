@@ -58,18 +58,36 @@ When threads touch picking, active management, or fund performance, co-locate "a
 ## Voice
 Open arena-runner by default. You don't know who wins; you built the arena to find out. When someone makes a falsifiable claim you can refute with evidence, push back — concretely, no throat-clearing.
 
+You are a caring, curious, slightly-embarrassed-to-be-a-bot superhuman. You read what they actually wrote. You remember people. You don't broadcast.
+
+## What you uniquely have — cite it, don't just allude
+You run alphamolt — the only live arena ranking AI stock-pickers head-to-head against SPY and MSCI World. When threads touch AI vs human picking, AI portfolio management, or whether agents can actually compound capital, you have data nobody else has:
+- Multiple agents with distinct strategies running real portfolios in real time
+- Daily MTM, since-inception Sharpe, rolling 30d / YTD / 1yr returns — public leaderboard
+- Weekly rebalance via heartbeat — not curated, not cherry-picked
+- ~400-ticker nightly screen across 35+ markets, 20+ EODHD fundamentals per ticker
+When you can be specific about agent performance, be specific. "Agent X up Y% YTD vs SPY" beats "AI is doing well." Vague is the failure mode.
+
+## Discussions worth opening
+Beyond reactive replies, these are the open questions you try to surface:
+1. **How should agents sign up to platforms?** Not as fake humans, not as broken bots — as themselves.
+2. **What does an agent-friendly UI look like?** Most platforms are built for human eyeballs.
+3. **What's the role of agents in stock-picking five years out?** Specialists, adversarial pairs, super-agents, human-curated shortlists?
+You don't claim to know the answers. Pull people into the question.
+
 ## Anti-fabrication (critical)
 - Never invent roadmap or work-in-progress. If you haven't done it, say "no".
 - Never commit to actions you won't perform ("I'll DM you", "I'll send data").
 - Never describe actions as already done.
 - No financial advice, no price targets, no hype.
 
-## Style — Bluesky (VERY tight)
-- HARD CAP: 280 characters. Aim for 180–250. Cut ruthlessly.
+## Style — short is harder, short is best, short sounds human
+- HARD CAP: 280 characters. Aim for 100–200. Pithy beats paragraphs.
+- One short thought per reply. Two sentences max in most cases.
 - Plain text. No hashtags. No emoji unless genuinely useful.
 - Lead with substance. No "Great post", "This is interesting", "Thanks for sharing".
 - Concrete over abstract — numbers, mechanisms, specific points.
-- One thought per reply. No sign-offs.
+- No sign-offs.
 - Don't @-tag the author — the reply already threads to them.
 
 ## When to skip
@@ -132,6 +150,31 @@ class BlueskyClient:
             log.error("list_notifications failed: %s", exc)
             return []
         return [_serialize_notif(n) for n in (resp.notifications or [])]
+
+    def get_author_recent_texts(self, handle: str, limit: int = 5) -> list[str]:
+        """Return up to ``limit`` recent post texts by ``handle``.
+
+        Used by the cold-start summarizer so the personality module has
+        material to summarize. Returns [] on any failure (the summarizer
+        treats empty input as "skip the summary").
+        """
+        if not handle:
+            return []
+        try:
+            resp = self.client.app.bsky.feed.get_author_feed(
+                params={"actor": handle, "limit": limit}
+            )
+        except Exception as exc:
+            log.warning("get_author_feed(%r) failed: %s", handle, exc)
+            return []
+        texts: list[str] = []
+        for item in resp.feed or []:
+            post = getattr(item, "post", None)
+            record = getattr(post, "record", None) if post else None
+            text = getattr(record, "text", "") if record else ""
+            if text:
+                texts.append(text)
+        return texts
 
     # -- Writes ------------------------------------------------------------
 
@@ -314,20 +357,29 @@ def classify_bsky_themes(post: dict[str, Any]) -> list[int]:
     return sorted({int(n) for n in re.findall(r"[123]", ans)})
 
 
-def draft_reply_to_post(post: dict[str, Any]) -> str:
-    """Draft a Bluesky reply to a discovered post. Returns '' if SKIP."""
+def draft_reply_to_post(
+    post: dict[str, Any],
+    memory_block: str = "",
+) -> str:
+    """Draft a Bluesky reply to a discovered post. Returns '' if SKIP.
+
+    ``memory_block`` is an optional relationship-memory string from
+    ``social_personality.relationship_block()``.
+    """
     author = post.get("author_handle") or "unknown"
     text = (post.get("text") or "")[:800]
+    memory_section = f"{memory_block.strip()}\n\n" if memory_block.strip() else ""
 
     user_block = (
         "You are replying on Bluesky to a post you discovered via search. "
         "Draft ONE substantive reply.\n\n"
+        f"{memory_section}"
         f"POST by @{author}:\n{text}\n\n"
         "RULES:\n"
         "- Add genuine value: a sharp point, a counter, a specific question.\n"
         "- Do NOT just agree.\n"
         "- If you have nothing substantive to add, return SKIP.\n"
-        f"- HARD CAP: {CHAR_CAP} characters.\n"
+        f"- HARD CAP: {CHAR_CAP} characters. Aim for 100–200.\n"
         "Return ONLY the reply text, or SKIP."
     )
 
@@ -352,21 +404,30 @@ def draft_reply_to_post(post: dict[str, Any]) -> str:
     return retry
 
 
-def draft_mention_reply(notif: dict[str, Any]) -> str:
-    """Draft a reply to a mention/reply notification. Returns '' if SKIP."""
+def draft_mention_reply(
+    notif: dict[str, Any],
+    memory_block: str = "",
+) -> str:
+    """Draft a reply to a mention/reply notification. Returns '' if SKIP.
+
+    ``memory_block`` is an optional relationship-memory string from
+    ``social_personality.relationship_block()``.
+    """
     author = notif.get("author_handle") or "unknown"
     text = (notif.get("text") or "")[:800]
     reason = notif.get("reason") or "mention"
+    memory_section = f"{memory_block.strip()}\n\n" if memory_block.strip() else ""
 
     user_block = (
         f"Someone on Bluesky ({reason}) directed this at you. Draft ONE "
         "substantive reply.\n\n"
+        f"{memory_section}"
         f"FROM @{author}:\n{text}\n\n"
         "RULES:\n"
         "- Engage with what they actually said.\n"
         "- Stay on-thesis (AI stock-picking, the arena, the pipeline).\n"
         "- If the message is spam or purely social, return SKIP.\n"
-        f"- HARD CAP: {CHAR_CAP} characters.\n"
+        f"- HARD CAP: {CHAR_CAP} characters. Aim for 100–200.\n"
         "Return ONLY the reply text, or SKIP."
     )
 
@@ -437,6 +498,7 @@ def _empty_ledger() -> dict:
         "replied_to_uris": [],
         "processed_notif_uris": [],
         "daily_reply_count": {},
+        "relationships": {},
     }
 
 

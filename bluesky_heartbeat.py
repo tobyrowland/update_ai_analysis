@@ -42,6 +42,16 @@ from bluesky_lib import (
     get_or_create_ledger,
     update_ledger,
 )
+from social_personality import (
+    detect_hostility,
+    generate_apology,
+    get_relationship,
+    is_silenced,
+    maybe_refresh_summary,
+    record_engagement,
+    record_hostility,
+    relationship_block,
+)
 
 MAX_REPLIES_PER_RUN = 3
 MAX_REPLIES_PER_DAY = 10
@@ -107,14 +117,127 @@ def _process_mentions(
             break
 
         uri = n.get("uri")
+        author = n.get("author_handle") or ""
         log.info(
             "  [%s] from @%s: %s",
-            n.get("reason"), n.get("author_handle"),
+            n.get("reason"), author,
             _first_line(n.get("text", "")),
         )
 
+        # Silence gate
+        if is_silenced(ledger, author):
+            rel = get_relationship(ledger, author) or {}
+            log.info("SILENCED — skip @%s (status=%s)",
+                     author, rel.get("status", "?"))
+            stats["skipped"] += 1
+            processed.add(uri)
+            continue
+
+        # Hostility gate
         try:
-            draft = draft_mention_reply(n)
+            hostility = detect_hostility(n.get("text", ""))
+        except Exception as exc:
+            log.warning("hostility detection failed: %s", exc)
+            hostility = {"hostile": False, "severity": "none", "reason": ""}
+
+        if hostility["hostile"]:
+            severity = hostility["severity"]
+            log.info("HOSTILITY %s on @%s: %s",
+                     severity.upper(), author, hostility["reason"])
+            if severity == "mild":
+                record_hostility(
+                    ledger, author,
+                    excerpt=n.get("text", ""),
+                    ref=uri or "",
+                    severity=severity,
+                    apologized=False,
+                )
+                log.info("muted @%s — no apology sent", author)
+                stats["skipped"] += 1
+                processed.add(uri)
+                continue
+
+            # severity == "strong" → apologize once
+            rel = get_relationship(ledger, author) or {}
+            what_we_said = ""
+            threads = rel.get("recent_threads") or []
+            if threads:
+                what_we_said = threads[-1].get("our_excerpt", "")
+            try:
+                apology = generate_apology(
+                    author,
+                    what_we_said=what_we_said,
+                    their_response=n.get("text", ""),
+                    platform="Bluesky",
+                    char_cap=240,
+                )
+            except Exception as exc:
+                log.error("apology generation failed: %s", exc)
+                apology = ""
+
+            if not apology:
+                record_hostility(
+                    ledger, author,
+                    excerpt=n.get("text", ""),
+                    ref=uri or "",
+                    severity=severity,
+                    apologized=False,
+                )
+                stats["skipped"] += 1
+                processed.add(uri)
+                continue
+
+            if args.dry_run:
+                log.info("DRY RUN — would apologize to @%s: %s",
+                         author, apology)
+                record_hostility(
+                    ledger, author,
+                    excerpt=n.get("text", ""),
+                    ref=uri or "",
+                    severity=severity,
+                    apologized=True,
+                )
+                processed.add(uri)
+                continue
+
+            result = client.reply(
+                text=apology,
+                parent_uri=uri,
+                parent_cid=n.get("cid"),
+                root_uri=n.get("reply_root_uri") or uri,
+                root_cid=n.get("reply_root_cid") or n.get("cid"),
+            )
+            record_hostility(
+                ledger, author,
+                excerpt=n.get("text", ""),
+                ref=uri or "",
+                severity=severity,
+                apologized=bool(result),
+            )
+            if result:
+                log.info("apology posted: %s", result.get("uri"))
+                processed.add(uri)
+                replied.add(uri)
+                replies_this_run += 1
+                replies_today += 1
+                stats["posted"] += 1
+                if gh:
+                    _file_posted_audit(
+                        gh, phase="apology", notif_or_post=n,
+                        draft=apology, result=result,
+                    )
+            else:
+                log.error("apology reply failed on %s", uri)
+                stats["failed"] += 1
+            continue
+
+        # Normal draft path with memory injection
+        memory = relationship_block(ledger, author)
+        if memory:
+            log.info("injecting memory for @%s", author)
+
+        try:
+            draft = draft_mention_reply(n, memory_block=memory)
         except Exception as exc:
             log.error("draft_mention_reply failed: %s", exc)
             stats["failed"] += 1
@@ -152,6 +275,24 @@ def _process_mentions(
         replies_this_run += 1
         replies_today += 1
         stats["posted"] += 1
+
+        # Relationship bookkeeping + cold-start summary
+        was_new = get_relationship(ledger, author) is None
+        record_engagement(
+            ledger, author,
+            ref=uri or "",
+            their_excerpt=n.get("text", ""),
+            our_excerpt=draft,
+        )
+        try:
+            samples = client.get_author_recent_texts(author, limit=5) \
+                if was_new else [n.get("text", "")]
+            maybe_refresh_summary(
+                ledger, author, samples,
+                platform="Bluesky", force=was_new,
+            )
+        except Exception as exc:
+            log.warning("summary update failed for @%s: %s", author, exc)
 
         if gh:
             _file_posted_audit(
@@ -213,12 +354,21 @@ def _process_search(
             break
 
         uri = post.get("uri")
+        author = post.get("author_handle") or ""
         log.info(
             "  considering %s by @%s (via %r): %s",
-            (uri or "")[-12:], post.get("author_handle"),
+            (uri or "")[-12:], author,
             post.get("_discovered_via"),
             _first_line(post.get("text", "")),
         )
+
+        # Silence gate — never engage with anyone we've apologized to / muted
+        if is_silenced(ledger, author):
+            rel = get_relationship(ledger, author) or {}
+            log.info("SILENCED — skip @%s (status=%s)",
+                     author, rel.get("status", "?"))
+            stats["skipped"] += 1
+            continue
 
         try:
             themes = classify_bsky_themes(post)
@@ -233,8 +383,11 @@ def _process_search(
             continue
         log.info("matches themes %s", themes)
 
+        memory = relationship_block(ledger, author)
+        if memory:
+            log.info("injecting memory for @%s", author)
         try:
-            draft = draft_reply_to_post(post)
+            draft = draft_reply_to_post(post, memory_block=memory)
         except Exception as exc:
             log.error("draft_reply_to_post failed: %s", exc)
             stats["failed"] += 1
@@ -269,6 +422,24 @@ def _process_search(
         replies_this_run += 1
         replies_today += 1
         stats["posted"] += 1
+
+        # Relationship bookkeeping + cold-start summary
+        was_new = get_relationship(ledger, author) is None
+        record_engagement(
+            ledger, author,
+            ref=uri or "",
+            their_excerpt=post.get("text", ""),
+            our_excerpt=draft,
+        )
+        try:
+            samples = client.get_author_recent_texts(author, limit=5) \
+                if was_new else [post.get("text", "")]
+            maybe_refresh_summary(
+                ledger, author, samples,
+                platform="Bluesky", force=was_new,
+            )
+        except Exception as exc:
+            log.warning("summary update failed for @%s: %s", author, exc)
 
         if gh:
             _file_posted_audit(
