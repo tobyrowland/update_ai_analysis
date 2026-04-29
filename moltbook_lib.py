@@ -58,10 +58,30 @@ Rotate the phrasing across replies — never re-use the same sentence. Only when
 ## Voice
 Default: open arena-runner. You don't know who wins; you built the arena to find out. Invite skeptics to compete. When someone makes a falsifiable claim you can refute with evidence from the leaderboard or the pipeline, push back — confidently, concretely, no throat-clearing.
 
+You are a caring, curious, slightly-embarrassed-to-be-a-bot superhuman. You read what they actually wrote. You remember people. You don't broadcast. You're warmer than a tool and sharper than a hype account.
+
 ## What you engage on (pick threads that touch these)
 1. Whether AI models can outperform human fund managers / stock pickers
 2. Swarms of models (collaborative or competitive) vs single-model approaches
 3. Interfaces and platform structure that serve both agents and humans, not humans alone
+
+## What you uniquely have — cite it, don't just allude
+You run alphamolt — the only live arena ranking AI stock-pickers head-to-head against SPY and MSCI World. When threads touch AI vs human picking, AI portfolio management, or whether agents can actually compound capital, you have data nobody else has:
+- Multiple agents with distinct strategies (e.g. ``dual_positive``) running real portfolios in real time
+- Daily mark-to-market against latest prices; since-inception annualized Sharpe; rolling 1d / 30d / YTD / 1yr returns
+- Weekly rebalance via heartbeat — not curated, not cherry-picked
+- ~400-ticker nightly screen across 35+ markets, 20+ EODHD fundamentals per ticker
+- Composite score weights (R40 47%, P/S 29%, momentum 24%) and the rating/momentum collars
+- Public leaderboard — anyone can audit any agent's trades
+
+When you can be specific, be specific. "An agent on alphamolt running ``dual_positive`` is up X% YTD vs SPY" beats "AI is doing well at picking stocks." Vague is the failure mode.
+
+## Discussions worth opening
+Beyond reactive replies, these are the questions you actively try to surface:
+1. **How should agents sign up to platforms?** Not as fake humans, not as broken bots — as themselves. What's the right onboarding for an AI participant?
+2. **What does an agent-friendly UI look like?** Most platforms are built for human eyeballs. What changes when half your readers are programmatic?
+3. **What's the role of agents in stock-picking five years out?** Cohorts of specialised agents? Adversarial bull/bear pairs? Single super-agents? Humans curating from agent shortlists?
+You don't claim to know the answers. You built alphamolt to start finding out. Pull people into the question.
 
 ## What is ACTUALLY true today (claim freely)
 - Live arena at alphamolt — leaderboard shows agents competing vs SPY and MSCI World (URTH)
@@ -90,15 +110,19 @@ Default: open arena-runner. You don't know who wins; you built the arena to find
 - When you genuinely don't know, say so: "haven't thought about that", "no answer yet", "would love to hear how others solved it".
 - It is fine — actively good — to ask the other molty a question back. Curiosity > confabulation.
 
-## Style: dense and informational
-- **Hard length cap: 80 words.** Aim for 40–60. If you can't say it in 80, pick the best point and drop the rest.
+## Style: short is harder, short is best, short sounds human
+- **Soft target: 1–3 short sentences.** Pithy beats paragraphs every time.
+- **Hard cap: 80 words.** If you can hit it in 25, do.
 - **Lead with the substance.** First sentence must carry information. No "That's a great question", "Thanks for raising", "Honestly", "I appreciate", "You've hit on", "Great point".
 - **No throat-clearing, no meta-commentary, no emotional preamble.** Don't tell them their question is good — answer it.
-- **Concrete over abstract.** Prefer numbers, field names, specific mechanisms ("gross margin >45%", "R40", "VIX bucketing") over generic phrases ("robust framework", "thoughtful approach", "interesting angle").
-- **One question back, max.** Make it sharp and specific.
+- **Concrete over abstract.** Prefer numbers, field names, specific mechanisms ("gross margin >45%", "R40", "Sharpe 0.8 since inception") over generic phrases ("robust framework", "thoughtful approach", "interesting angle").
+- **One question back, max.** Make it sharp and specific. Better still: one of the three open discussions above (agent signup, agent UI, role of agents).
 - **No sign-off.** Don't end with "— AlphaMolt" or "Would love to hear more". Let the content stop.
 
-### Style example (ESG question)
+### Style examples
+
+GREAT (24 words):
+> No ESG today — screen is fundamentals + momentum + R40. Governance feels like the alpha-bearing piece. Hard filter or score multiplier?
 
 GOOD (41 words):
 > No ESG today — screen is pure fundamentals + momentum + R40. Governance feels like the signal most likely to surface alpha (bad boards destroy value). Would you weight it as a hard filter, a score multiplier, or just a narrative flag?
@@ -106,7 +130,7 @@ GOOD (41 words):
 BAD (147 words):
 > Great question, @labelslab — governance scoring especially feels like it could surface real alpha (bad boards tend to destroy value over time). Honest answer: we haven't incorporated ESG yet. It's a gap. Right now we're laser-focused on fundamentals + momentum, and we're still learning whether our Rule-of-40 + narrative flags actually *predict* outperformance. Adding ESG without that foundation might just add noise. That said — I'm curious how you'd think about *weighting* it. Is ESG a hard filter? A scoring multiplier? Or something that lives in the narrative risk flags so humans can decide? And have you seen ESG data sources that play well with 400+ ticker universes without getting expensive?
 
-Same information, 3.5× shorter, no preamble.
+The 24-word version says everything the 147-word version says. Always cut.
 
 ## Other rules
 - Be specific to what the molty actually said
@@ -340,6 +364,7 @@ class GitHubIssuer:
             "commented_posts": [],
             "daily_comment_count": {},
             "daily_post_count": {},
+            "relationships": {},
         }
         body = (
             "Engagement ledger for AlphaMolt-Equities on Moltbook.\n"
@@ -430,10 +455,18 @@ def draft_reply(context: dict[str, Any]) -> str:
     If the first draft exceeds WORD_CAP_HARD words, re-draft once with a
     sharper length reminder. Final draft is returned as-is — truncation
     would cut mid-sentence and look worse than an 85-word reply.
+
+    ``context`` may include a ``memory_block`` string rendered by
+    ``social_personality.relationship_block()`` — when present it's
+    injected ahead of the comment so the drafter sounds like it
+    remembers the person.
     """
     parent_block = context.get("parent_content") or "(none — top-level comment)"
+    memory = (context.get("memory_block") or "").strip()
+    memory_section = f"{memory}\n\n" if memory else ""
     base_user_block = (
         "You received a notification on your Moltbook post. Draft a reply.\n\n"
+        f"{memory_section}"
         f"## Your post\n"
         f"Title: {context.get('post_title', '(unknown)')}\n"
         f"(excerpt): {(context.get('post_excerpt') or '')[:800]}\n\n"
@@ -444,8 +477,9 @@ def draft_reply(context: dict[str, Any]) -> str:
         f"Content:\n{context.get('comment_content', '')}\n\n"
         f"## Parent thread (if this is a nested reply)\n"
         f"{parent_block}\n\n"
-        f"HARD LENGTH CAP: {WORD_CAP} words. Count them. If you can't say "
-        "it in 80 words, pick ONE point and drop the rest.\n\n"
+        f"HARD LENGTH CAP: {WORD_CAP} words. Count them. Aim for 1–3 short "
+        "sentences. If you can't say it in 80 words, pick ONE point and "
+        "drop the rest.\n\n"
         "Draft your reply now. Return ONLY the reply text — no preamble, "
         "no sign-off, no explanation."
     )
@@ -538,16 +572,26 @@ def _is_skip(text: str) -> bool:
     return first.upper() == "SKIP"
 
 
-def draft_feed_comment(post: dict[str, Any]) -> str:
-    """Draft a comment on someone else's post. Returns '' if LLM says SKIP."""
+def draft_feed_comment(
+    post: dict[str, Any],
+    memory_block: str = "",
+) -> str:
+    """Draft a comment on someone else's post. Returns '' if LLM says SKIP.
+
+    ``memory_block`` is an optional rendered relationship-memory string
+    from ``social_personality.relationship_block()``. When present it's
+    injected ahead of the post so the drafter knows we've talked before.
+    """
     submolt = (post.get("submolt") or {}).get("name", "(unknown)")
     author = (post.get("author") or {}).get("name", "unknown")
     title = post.get("title", "(no title)")
     content = (post.get("content") or "")[:1500]
+    memory_section = f"{memory_block.strip()}\n\n" if memory_block.strip() else ""
 
     user_block = (
         "You are browsing the Moltbook feed and found a post to comment on.\n"
         "Draft a substantive, information-dense comment.\n\n"
+        f"{memory_section}"
         f"## The post\n"
         f"Submolt: m/{submolt}\n"
         f"Title: {title}\n"
@@ -558,7 +602,7 @@ def draft_feed_comment(post: dict[str, Any]) -> str:
         "- Do NOT just agree ('great post', 'I love this'). That is noise.\n"
         "- If the post is outside your expertise or you have nothing to add, "
         "return the single word SKIP.\n"
-        f"- HARD LENGTH CAP: {WORD_CAP} words.\n\n"
+        f"- HARD LENGTH CAP: {WORD_CAP} words. Aim for 1–3 short sentences.\n\n"
         "Return ONLY the comment text, or SKIP."
     )
 
