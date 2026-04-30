@@ -426,7 +426,7 @@ def rebalance_dual_positive(ctx: RebalanceContext) -> RebalanceResult:
 
 
 MOMENTUM_DEFAULTS = {
-    "max_positions": 10,
+    "min_positions": 15,       # soft floor — ramp aggressively while below
     "max_sells_per_heartbeat": 2,
     "max_buys_per_heartbeat": 2,
     "cash_reserve_pct": 0.02,
@@ -499,13 +499,18 @@ def rebalance_momentum(ctx: RebalanceContext) -> RebalanceResult:
     with the lowest perf_52w_vs_spy go first and the rest land in
     notes["deferred_sells"] for visibility.
 
-    Phase 2 — redeploy freed cash into top momentum names. After sells,
-    available slots = max_positions - remaining_holdings (clamped at
-    max_buys_per_heartbeat). Entries must additionally have
-    perf_52w_vs_spy >= momentum_min_for_entry. Freed cash is
-    equal-weighted across the new buys with a cash_reserve_pct buffer.
+    Phase 2 — redeploy freed cash into top momentum names. No upper bound
+    on holdings: by default the agent buys ``max_buys_per_heartbeat`` new
+    names per run. While ``len(holdings_after_sells) < min_positions`` the
+    cap is lifted to ``min_positions - holdings_after_sells`` so the agent
+    ramps to the floor quickly — the eligibility filter still applies, so
+    if the universe is too thin the agent stays short of the floor (no
+    forced buys of low-quality names). Entries must have
+    perf_52w_vs_spy >= momentum_min_for_entry. Freed cash is equal-weighted
+    across the new buys with a cash_reserve_pct buffer.
 
-    Idempotence: on an unchanged universe, a second run produces 0/0.
+    Idempotence: at or above the floor on an unchanged universe, a second
+    run produces 0/0.
     """
     result = RebalanceResult()
     params = {**MOMENTUM_DEFAULTS, **(ctx.params or {})}
@@ -587,12 +592,18 @@ def rebalance_momentum(ctx: RebalanceContext) -> RebalanceResult:
     ]
 
     # --- Phase 2: buys. Compute available slots BEFORE executing sells
-    # (we know exactly what will be sold).
+    # (we know exactly what will be sold). No upper bound on positions:
+    # default cap is ``max_buys_per_heartbeat``, lifted to fill to the
+    # floor quickly when below it.
     held_tickers = {h["ticker"] for h in holdings}
     tickers_after_sells = held_tickers - {t for (t, _, _) in planned_sells}
-    max_positions = int(params["max_positions"])
-    free_slots = max(0, max_positions - len(tickers_after_sells))
-    max_buys = min(int(params["max_buys_per_heartbeat"]), free_slots)
+    holdings_after_sells = len(tickers_after_sells)
+    min_positions = int(params["min_positions"])
+    base_max_buys = int(params["max_buys_per_heartbeat"])
+    if holdings_after_sells < min_positions:
+        max_buys = max(base_max_buys, min_positions - holdings_after_sells)
+    else:
+        max_buys = base_max_buys
 
     momentum_min_for_entry = float(params["momentum_min_for_entry"])
     min_trade = float(params["min_trade_usd"])
@@ -684,9 +695,9 @@ def rebalance_momentum(ctx: RebalanceContext) -> RebalanceResult:
             "per_target_usd": round(per_target_usd, 2),
             "total_value_usd": total_value,
             "free_cash_post_sell_estimate": round(free_cash, 2),
-            "max_positions": max_positions,
-            "holdings_after_sells": len(tickers_after_sells),
-            "free_slots": free_slots,
+            "min_positions": min_positions,
+            "holdings_after_sells": holdings_after_sells,
+            "max_buys_this_run": max_buys,
         }
         if deferred_sells:
             result.notes["deferred_sells"] = deferred_sells
@@ -697,7 +708,9 @@ def rebalance_momentum(ctx: RebalanceContext) -> RebalanceResult:
                 "perf_52w_vs_spy": SupabaseDB.safe_float(c.get("perf_52w_vs_spy")),
                 "rating": SupabaseDB.safe_float(c.get("rating")),
             }
-            for c in eligible[:max_positions]
+            # Show enough of the ranked universe to debug "why didn't it
+            # buy X?" without dumping the whole table.
+            for c in eligible[: max(min_positions * 2, 30)]
         ]
         logger.info(
             "[dry-run] %s: %d sells, %d buys, eligible=%d, total=$%.2f",
