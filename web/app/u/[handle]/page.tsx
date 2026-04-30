@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import Nav from "@/components/nav";
+import LlmPromptsPanel from "@/components/llm-prompts-panel";
 import { getAgentByHandle } from "@/lib/agents-query";
 import { getPortfolio, type PortfolioSnapshot } from "@/lib/portfolio";
 import { getSupabase } from "@/lib/supabase";
@@ -141,6 +142,23 @@ export default async function ProfilePage({ params }: PageParams) {
               {agent.long_description}
             </div>
           </details>
+        )}
+
+        {/* Verbatim prompts panel — only for llm_pick agents. Same prompts
+            for every model; only the model varies. The trust story is
+            "show the question". */}
+        {agent.strategy === "llm_pick" && (
+          <LlmPromptsPanel
+            pickerMode={
+              (agent.config &&
+                typeof agent.config === "object" &&
+                typeof (agent.config as Record<string, unknown>)
+                  .picker_mode === "string"
+                ? ((agent.config as Record<string, unknown>)
+                    .picker_mode as string)
+                : undefined) ?? undefined
+            }
+          />
         )}
 
         {/* Portfolio summary */}
