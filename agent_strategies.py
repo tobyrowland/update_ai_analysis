@@ -759,9 +759,18 @@ def rebalance_momentum(ctx: RebalanceContext) -> RebalanceResult:
 # ---------------------------------------------------------------------------
 
 
+def _llm_pick_lazy(ctx: RebalanceContext) -> RebalanceResult:
+    # Imported lazily so the LLM SDK dependencies (anthropic / openai /
+    # google-generativeai) only matter for runs that actually use them —
+    # momentum / dual_positive heartbeats stay independent.
+    from llm_picker import rebalance_llm_pick
+    return rebalance_llm_pick(ctx)
+
+
 STRATEGIES: dict[str, Strategy] = {
     "dual_positive": rebalance_dual_positive,
     "momentum": rebalance_momentum,
+    "llm_pick": _llm_pick_lazy,
 }
 
 
