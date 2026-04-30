@@ -30,7 +30,10 @@ on:
 jobs:
   heartbeat:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Bumped from 15m. The llm_pick strategy can run 4+ LLM agents
+    # × 2 stages × ~30s API calls; deterministic strategies finish in
+    # seconds. 30m gives comfortable headroom for slow providers.
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -49,6 +52,14 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # LLM provider keys for the llm_pick strategy. Each agent's
+          # agents.config.provider selects which one is used; the others
+          # stay unread for that agent. Missing keys raise LLMProviderError
+          # only for agents that actually need them.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           ARGS=""
           if [ -n "${{ inputs.handle }}" ]; then
