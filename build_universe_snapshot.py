@@ -84,8 +84,14 @@ def _pick(d: dict, keys: tuple[str, ...]) -> dict:
     return {k: _safe(d.get(k)) for k in keys}
 
 
-def _parse_history(raw: Any) -> list[dict]:
-    """Normalise a stored JSON history blob (string or list) into a list."""
+def _parse_history(raw: Any) -> list:
+    """Normalise a stored JSON history blob (string or list) into a list.
+
+    Returns the raw list — entries may be dicts (companies.* history) or
+    pair-lists (price_sales.history_json, written by price_sales_updater
+    as ``[date_str, ps_value]``). Caller is responsible for shape-aware
+    handling.
+    """
     if raw is None:
         return []
     if isinstance(raw, list):
@@ -99,13 +105,36 @@ def _parse_history(raw: Any) -> list[dict]:
     return []
 
 
-def _ps_history_monthly(weekly: list[dict]) -> list[dict]:
-    """Downsample a weekly P/S series to one point per calendar month."""
-    if not weekly:
+def _normalize_ps_history(raw: list) -> list[dict]:
+    """Convert ``price_sales.history_json`` to a list of ``{date, ps}`` dicts.
+
+    The stored shape is a list of ``[date_str, ps_value]`` pairs (see
+    ``price_sales_updater.py``). Older rows or migrations may have stored
+    list-of-dicts; this helper accepts both.
+    """
+    out: list[dict] = []
+    for row in raw or []:
+        if isinstance(row, dict):
+            date_str = row.get("date") or row.get("week") or ""
+            ps_val = row.get("ps") if "ps" in row else row.get("price_sales")
+        elif isinstance(row, (list, tuple)) and len(row) >= 2:
+            date_str = row[0]
+            ps_val = row[1]
+        else:
+            continue
+        if not isinstance(date_str, str) or len(date_str) < 7:
+            continue
+        out.append({"date": date_str, "ps": ps_val})
+    return out
+
+
+def _ps_history_monthly(history: list[dict]) -> list[dict]:
+    """Downsample a normalised P/S series to one point per calendar month."""
+    if not history:
         return []
     by_month: dict[str, dict] = {}
-    for row in weekly:
-        date_str = row.get("date") or row.get("week") or ""
+    for row in history:
+        date_str = row.get("date") or ""
         if len(date_str) < 7:
             continue
         ym = date_str[:7]  # "YYYY-MM"
@@ -156,7 +185,7 @@ def _build_ticker_entry(
         valuation["ps_ath"] = _safe(ps.get("ath"))
         valuation["ps_pct_of_ath"] = _safe(ps.get("pct_of_ath"))
         if detail in ("extended", "full"):
-            history = _parse_history(ps.get("history_json"))
+            history = _normalize_ps_history(_parse_history(ps.get("history_json")))
             if detail == "extended":
                 valuation["ps_history"] = _ps_history_monthly(history)
             else:
