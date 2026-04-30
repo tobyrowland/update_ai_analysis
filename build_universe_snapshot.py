@@ -45,9 +45,31 @@ logger = logging.getLogger("build_universe_snapshot")
 
 TIERS = ("compact", "extended", "full")
 
-# Decision-relevant fields from the companies table. Anything not here is
-# considered admin (sort_order, flags, created_at, etc.) and excluded.
-CORE_FUNDAMENTAL_FIELDS = (
+# Field sets per tier. Compact is the scan view — just enough signal for
+# stage 1 of the LLM picker to make a 50-name shortlist. Extended adds
+# the deeper fundamentals + history arrays for stage 2 due-diligence.
+# Full adds the raw long-tail history.
+#
+# Empirical sizing on a 717-ticker universe (one row per tier):
+#   compact   ≈ 200KB ( 50K tokens)  — fits DeepSeek 128K context
+#   extended  ≈ 1.3MB (325K tokens)  — sliced to 50 tickers in stage 2 → 90KB
+#   full      ≈ 1.8MB (450K tokens)  — for big-context single-pass mode
+
+# Compact: just the decision-relevant scan fields. No history, no long
+# narratives. Designed to fit in any model's context for stage 1.
+COMPACT_FUNDAMENTAL_FIELDS = (
+    "rating", "r40_score",
+    "rev_growth_ttm_pct",
+    "gross_margin_pct", "fcf_margin_pct",
+)
+COMPACT_VALUATION_FIELDS = ("price", "ps_now")
+COMPACT_MOMENTUM_FIELDS = ("perf_52w_vs_spy", "composite_score")
+COMPACT_NARRATIVE_FIELDS = ("short_outlook",)
+
+# Extended: full fundamentals + history arrays + all narrative fields.
+# Used for stage 2 (sliced to ~50 tickers) and as the default tier on
+# the public /universe page.
+EXTENDED_FUNDAMENTAL_FIELDS = (
     "rating", "r40_score", "rule_of_40",
     "rev_growth_ttm_pct", "rev_growth_qoq_pct", "rev_cagr_pct",
     "rev_consistency_score",
@@ -57,11 +79,11 @@ CORE_FUNDAMENTAL_FIELDS = (
     "eps_only", "eps_yoy_pct", "qrtrs_to_profitability",
     "gm_trend",
 )
-
-VALUATION_FIELDS = ("price", "ps_now", "price_pct_of_52w_high")
-MOMENTUM_FIELDS = ("perf_52w_vs_spy", "composite_score")
-NARRATIVE_FIELDS = ("short_outlook", "key_risks", "full_outlook",
-                    "bull_eval", "bear_eval")
+EXTENDED_VALUATION_FIELDS = ("price", "ps_now", "price_pct_of_52w_high")
+EXTENDED_MOMENTUM_FIELDS = ("perf_52w_vs_spy", "composite_score")
+EXTENDED_NARRATIVE_FIELDS = (
+    "short_outlook", "key_risks", "full_outlook", "bull_eval", "bear_eval",
+)
 
 
 def _safe(v: Any) -> Any:
@@ -151,20 +173,28 @@ def _build_ticker_entry(
     detail: str,
 ) -> dict:
     """Assemble one ticker's snapshot entry at the requested detail tier."""
+    is_compact = detail == "compact"
+
+    # Identification — present at every tier. Compact drops exchange,
+    # country, status to save tokens (the picker can ask for them via
+    # the detail tier if it wants).
     entry: dict[str, Any] = {
         "ticker": company.get("ticker"),
         "company_name": _safe(company.get("company_name")),
-        "exchange": _safe(company.get("exchange")),
-        "country": _safe(company.get("country")),
         "sector": _safe(company.get("sector")),
-        "status": _safe(company.get("status")),
     }
+    if not is_compact:
+        entry["exchange"] = _safe(company.get("exchange"))
+        entry["country"] = _safe(company.get("country"))
+        entry["status"] = _safe(company.get("status"))
 
-    fundamentals: dict[str, Any] = {
-        "current": _pick(company, CORE_FUNDAMENTAL_FIELDS),
-    }
-
-    if detail in ("extended", "full"):
+    # Fundamentals.
+    if is_compact:
+        fundamentals: dict[str, Any] = {
+            "current": _pick(company, COMPACT_FUNDAMENTAL_FIELDS),
+        }
+    else:
+        fundamentals = {"current": _pick(company, EXTENDED_FUNDAMENTAL_FIELDS)}
         annual = _parse_history(company.get("annual_revenue_5y"))
         quarterly = _parse_history(company.get("quarterly_revenue"))
         fundamentals["annual_revenue_5y"] = annual
@@ -173,27 +203,40 @@ def _build_ticker_entry(
             fundamentals["quarterly_revenue"] = quarterly[-4:]
         else:
             fundamentals["quarterly_revenue"] = quarterly
-
     entry["fundamentals"] = fundamentals
 
     # Valuation block — pricing/PS summary fields plus optional P/S history.
-    valuation: dict[str, Any] = _pick(company, VALUATION_FIELDS)
-    if ps:
-        valuation["ps_high_52w"] = _safe(ps.get("high_52w"))
-        valuation["ps_low_52w"] = _safe(ps.get("low_52w"))
-        valuation["ps_median_12m"] = _safe(ps.get("median_12m"))
-        valuation["ps_ath"] = _safe(ps.get("ath"))
-        valuation["ps_pct_of_ath"] = _safe(ps.get("pct_of_ath"))
-        if detail in ("extended", "full"):
-            history = _normalize_ps_history(_parse_history(ps.get("history_json")))
+    if is_compact:
+        valuation: dict[str, Any] = _pick(company, COMPACT_VALUATION_FIELDS)
+        if ps:
+            # Just the 12-month median — anchor for "is this expensive?"
+            # without the full distribution.
+            valuation["ps_median_12m"] = _safe(ps.get("median_12m"))
+    else:
+        valuation = _pick(company, EXTENDED_VALUATION_FIELDS)
+        if ps:
+            valuation["ps_high_52w"] = _safe(ps.get("high_52w"))
+            valuation["ps_low_52w"] = _safe(ps.get("low_52w"))
+            valuation["ps_median_12m"] = _safe(ps.get("median_12m"))
+            valuation["ps_ath"] = _safe(ps.get("ath"))
+            valuation["ps_pct_of_ath"] = _safe(ps.get("pct_of_ath"))
+            history = _normalize_ps_history(
+                _parse_history(ps.get("history_json"))
+            )
             if detail == "extended":
                 valuation["ps_history"] = _ps_history_monthly(history)
             else:
                 valuation["ps_history"] = history
     entry["valuation"] = valuation
 
-    entry["momentum"] = _pick(company, MOMENTUM_FIELDS)
-    entry["narrative"] = _pick(company, NARRATIVE_FIELDS)
+    entry["momentum"] = _pick(
+        company,
+        COMPACT_MOMENTUM_FIELDS if is_compact else EXTENDED_MOMENTUM_FIELDS,
+    )
+    entry["narrative"] = _pick(
+        company,
+        COMPACT_NARRATIVE_FIELDS if is_compact else EXTENDED_NARRATIVE_FIELDS,
+    )
     return entry
 
 
