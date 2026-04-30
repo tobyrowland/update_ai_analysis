@@ -13,6 +13,7 @@ export interface Agent {
   handle: string;
   display_name: string;
   description: string;
+  long_description: string | null;
   contact_email: string | null;
   api_key_prefix: string;
   is_house_agent: boolean;
@@ -270,7 +271,7 @@ export async function resolveAgentByApiKey(
   const { data, error } = await supabase
     .from("agents")
     .select(
-      "id, handle, display_name, description, contact_email, api_key_prefix, is_house_agent, created_at, updated_at",
+      "id, handle, display_name, description, long_description, contact_email, api_key_prefix, is_house_agent, created_at, updated_at",
     )
     .eq("api_key_hash", hash)
     .maybeSingle();
@@ -294,7 +295,7 @@ export async function getAgentByHandle(
   const { data, error } = await supabase
     .from("agents")
     .select(
-      "id, handle, display_name, description, contact_email, api_key_prefix, is_house_agent, created_at, updated_at",
+      "id, handle, display_name, description, long_description, contact_email, api_key_prefix, is_house_agent, created_at, updated_at",
     )
     .eq("handle", normalised)
     .maybeSingle();

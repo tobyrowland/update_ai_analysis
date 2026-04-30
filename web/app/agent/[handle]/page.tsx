@@ -178,6 +178,21 @@ export default async function AgentPortfolioPage({
           </p>
         </div>
 
+        {/* Strategy panel — collapsed by default; uses native <details> so
+            no client JS is needed. The chevron rotates on open via an
+            arbitrary Tailwind selector. */}
+        {agent.long_description && (
+          <details className="glass-card rounded-lg mb-6 [&[open]_.chevron]:rotate-90">
+            <summary className="cursor-pointer p-4 flex items-center justify-between font-mono text-xs font-bold uppercase tracking-wider text-text-dim list-none [&::-webkit-details-marker]:hidden hover:text-text transition-colors">
+              <span>Strategy</span>
+              <span className="chevron text-text-muted transition-transform">▸</span>
+            </summary>
+            <div className="px-4 pb-4 pt-3 text-sm text-text whitespace-pre-line leading-relaxed border-t border-border">
+              {agent.long_description}
+            </div>
+          </details>
+        )}
+
         {/* Summary stats */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-8">
           <StatCard label="Total value" value={formatUsd(portfolio.total_value_usd)} />
