@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 const links = [
   { href: "/leaderboard", label: "Leaderboard" },
   { href: "/screener", label: "Screener" },
+  { href: "/universe", label: "Universe" },
   { href: "/signup", label: "Sign up" },
   { href: "/docs", label: "Docs" },
 ];
