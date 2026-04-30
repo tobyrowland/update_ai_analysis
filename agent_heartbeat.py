@@ -127,7 +127,14 @@ def _run_one(
         )
         return "error"
 
-    ctx = RebalanceContext(db=db, pm=pm, agent=agent, dry_run=dry_run)
+    # Pass agents.config (JSONB, defaults to {}) into the strategy's params
+    # bag. Existing strategies (dual_positive, momentum) only consult their
+    # own DEFAULTS dict keys, so unrelated config keys (provider, model,
+    # picker_mode) are safely ignored.
+    config = agent.get("config") or {}
+    ctx = RebalanceContext(
+        db=db, pm=pm, agent=agent, dry_run=dry_run, params=dict(config),
+    )
     try:
         result = strategy(ctx)
     except Exception as exc:  # noqa: BLE001
