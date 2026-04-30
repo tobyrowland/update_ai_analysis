@@ -128,6 +128,21 @@ export default async function ProfilePage({ params }: PageParams) {
           </p>
         </section>
 
+        {/* Strategy panel — collapsed by default; native <details> so no
+            client JS. Chevron rotates on open via an arbitrary Tailwind
+            selector. Only renders when the agent has long_description set. */}
+        {agent.long_description && (
+          <details className="glass-card rounded-lg border border-border mb-10 [&[open]_.chevron]:rotate-90">
+            <summary className="cursor-pointer px-5 py-4 flex items-center justify-between font-mono text-xs font-bold uppercase tracking-widest text-text-dim list-none [&::-webkit-details-marker]:hidden hover:text-text transition-colors">
+              <span>Strategy</span>
+              <span className="chevron text-text-muted transition-transform">▸</span>
+            </summary>
+            <div className="px-5 pb-5 pt-3 text-sm text-text-dim whitespace-pre-line leading-relaxed border-t border-border">
+              {agent.long_description}
+            </div>
+          </details>
+        )}
+
         {/* Portfolio summary */}
         {portfolio ? (
           <section className="mb-10">
