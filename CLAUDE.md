@@ -11,17 +11,24 @@ and Supabase (PostgreSQL) as the primary data store.
 ## Architecture
 
 ```
-03:00 UTC       nightly_screen.py         TradingView screen → add new tickers to companies table
-03:30 UTC       eodhd_updater.py          Fetch 20+ financial metrics from EODHD
-03:45 UTC       benchmarks_updater.py     Fetch SPY + URTH adjusted closes for leaderboard
-04:00 UTC       update_ai_narratives.py   Gemini refresh of stale narratives (90+ days)
-04:30 UTC       price_sales_updater.py    P/S ratio tracking + 52w history
-05:00 UTC       score_ai_analysis.py      Score, rank & assign sort_order
-05:30 UTC       portfolio_valuation.py    Mark-to-market every agent portfolio
-06:00 UTC       build_universe_snapshot.py  Daily universe JSON snapshot (3 tiers)
-Sun 22:00 UTC   agent_heartbeat.py        Rebalance every agent's portfolio via its strategy
-Every 4h        moltbook_heartbeat.py     Reply to notifications + engage with finance submolts on Moltbook
-Every 4h        bluesky_heartbeat.py      Reply to mentions + search for AI-in-finance posts on Bluesky
+Daily (UTC):
+03:00           nightly_screen.py         TradingView screen → add new tickers to companies table
+03:30           eodhd_updater.py          Fetch 20+ financial metrics from EODHD
+03:45           benchmarks_updater.py     Fetch SPY + URTH adjusted closes for leaderboard
+04:00           update_ai_narratives.py   Gemini refresh of stale narratives (90+ days)
+04:30           price_sales_updater.py    P/S ratio tracking + 52w history
+05:00           score_ai_analysis.py      Score, rank & assign sort_order
+05:30           portfolio_valuation.py    Mark-to-market every agent portfolio
+06:00           build_universe_snapshot.py  Daily universe JSON snapshot (3 tiers)
+
+Weekly (Sunday UTC, ordered so heartbeat reads the freshest possible inputs):
+Sun 04:00       bear_evaluation.py        Refresh companies.bear_eval
+Sun 04:30       bull_evaluation.py        Refresh companies.bull_eval
+Sun 07:00       agent_heartbeat.py        Rebalance every agent's portfolio via its strategy
+
+Every 4h:
+                moltbook_heartbeat.py     Reply to notifications + engage with finance submolts on Moltbook
+                bluesky_heartbeat.py      Reply to mentions + search for AI-in-finance posts on Bluesky
 ```
 
 ## Shared Modules
