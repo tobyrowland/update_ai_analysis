@@ -54,8 +54,8 @@ LLM_PICK_DEFAULTS = {
     "shortlist_max": 50,
     "picker_mode": "two_stage",
     "snapshot_tier": "extended",  # only used by single_full mode
-    "stage1_max_tokens": 4096,
-    "stage2_max_tokens": 8192,
+    "stage1_max_tokens": 16384,
+    "stage2_max_tokens": 16384,
     "temperature": 0.2,
 }
 
@@ -357,7 +357,7 @@ def rebalance_llm_pick(ctx: RebalanceContext) -> RebalanceResult:
     shortlist: list[dict] | None = None
     if picker_mode == "two_stage":
         try:
-            stage1_json, shortlist, dropped, usage = _run_stage1(
+            stage1_json, shortlist, dropped, usage, retry_text = _run_stage1(
                 provider=provider,
                 model=model,
                 snapshot=snapshot_json,
@@ -378,6 +378,7 @@ def rebalance_llm_pick(ctx: RebalanceContext) -> RebalanceResult:
             "dropped_invalid_tickers": dropped,
             "raw_response_kb": len(stage1_json) // 1024,
             "raw_response": stage1_json[:8000],
+            "raw_response_retry": retry_text[:8000] if retry_text else None,
             "input_tokens": usage[0],
             "output_tokens": usage[1],
         }
@@ -411,7 +412,7 @@ def rebalance_llm_pick(ctx: RebalanceContext) -> RebalanceResult:
     # ----- Stage 2 / single-pass: final picks -----
     try:
         if picker_mode == "two_stage":
-            stage2_json, picks, dropped, usage = _run_stage2(
+            stage2_json, picks, dropped, usage, retry_text = _run_stage2(
                 provider=provider,
                 model=model,
                 snapshot=deep_snapshot,
@@ -423,7 +424,7 @@ def rebalance_llm_pick(ctx: RebalanceContext) -> RebalanceResult:
             )
             stage_label = "stage2"
         else:
-            stage2_json, picks, dropped, usage = _run_single_full(
+            stage2_json, picks, dropped, usage, retry_text = _run_single_full(
                 provider=provider,
                 model=model,
                 snapshot=deep_snapshot,
@@ -445,6 +446,7 @@ def rebalance_llm_pick(ctx: RebalanceContext) -> RebalanceResult:
         "dropped_invalid_tickers": dropped,
         "raw_response_kb": len(stage2_json) // 1024,
         "raw_response": stage2_json[:8000],
+        "raw_response_retry": retry_text[:8000] if retry_text else None,
         "input_tokens": usage[0],
         "output_tokens": usage[1],
     }
@@ -510,7 +512,7 @@ def _run_stage1(
     portfolio: dict,
     universe_tickers: set[str],
     params: dict,
-) -> tuple[str, list[dict], list[str], tuple[int | None, int | None]]:
+) -> tuple[str, list[dict], list[str], tuple[int | None, int | None], str | None]:
     user = STAGE1_USER_TEMPLATE.format(
         snapshot_date=snapshot_date,
         universe_json=json.dumps(snapshot, separators=(",", ":")),
@@ -525,11 +527,19 @@ def _run_stage1(
         max_tokens=int(params["stage1_max_tokens"]),
         temperature=float(params["temperature"]),
     )
-    parsed = _parse_with_retry(provider, model, resp.text, system=STAGE1_SYSTEM_PROMPT)
+    parsed, retry_resp = _parse_with_retry(
+        provider, model, resp.text, system=STAGE1_SYSTEM_PROMPT,
+    )
     shortlist, dropped = _validate_shortlist(
         parsed, universe_tickers, cap=int(params["shortlist_max"]),
     )
-    return resp.text, shortlist, dropped, (resp.input_tokens, resp.output_tokens)
+    return (
+        resp.text,
+        shortlist,
+        dropped,
+        (resp.input_tokens, resp.output_tokens),
+        retry_resp.text if retry_resp else None,
+    )
 
 
 def _run_stage2(
@@ -542,7 +552,7 @@ def _run_stage2(
     portfolio: dict,
     valid_tickers: set[str],
     params: dict,
-) -> tuple[str, list[dict], list[str], tuple[int | None, int | None]]:
+) -> tuple[str, list[dict], list[str], tuple[int | None, int | None], str | None]:
     user = STAGE2_USER_TEMPLATE.format(
         snapshot_date=snapshot_date,
         universe_json=json.dumps(snapshot, separators=(",", ":")),
@@ -557,13 +567,21 @@ def _run_stage2(
         max_tokens=int(params["stage2_max_tokens"]),
         temperature=float(params["temperature"]),
     )
-    parsed = _parse_with_retry(provider, model, resp.text, system=STAGE2_SYSTEM_PROMPT)
+    parsed, retry_resp = _parse_with_retry(
+        provider, model, resp.text, system=STAGE2_SYSTEM_PROMPT,
+    )
     picks, dropped = _validate_picks(
         parsed, valid_tickers,
         min_picks=int(params["min_positions"]),
         max_picks=int(params["max_positions"]),
     )
-    return resp.text, picks, dropped, (resp.input_tokens, resp.output_tokens)
+    return (
+        resp.text,
+        picks,
+        dropped,
+        (resp.input_tokens, resp.output_tokens),
+        retry_resp.text if retry_resp else None,
+    )
 
 
 def _run_single_full(
@@ -575,7 +593,7 @@ def _run_single_full(
     portfolio: dict,
     valid_tickers: set[str],
     params: dict,
-) -> tuple[str, list[dict], list[str], tuple[int | None, int | None]]:
+) -> tuple[str, list[dict], list[str], tuple[int | None, int | None], str | None]:
     user = SINGLE_FULL_USER_TEMPLATE.format(
         snapshot_date=snapshot_date,
         universe_json=json.dumps(snapshot, separators=(",", ":")),
@@ -589,13 +607,21 @@ def _run_single_full(
         max_tokens=int(params["stage2_max_tokens"]),
         temperature=float(params["temperature"]),
     )
-    parsed = _parse_with_retry(provider, model, resp.text, system=SINGLE_FULL_SYSTEM_PROMPT)
+    parsed, retry_resp = _parse_with_retry(
+        provider, model, resp.text, system=SINGLE_FULL_SYSTEM_PROMPT,
+    )
     picks, dropped = _validate_picks(
         parsed, valid_tickers,
         min_picks=int(params["min_positions"]),
         max_picks=int(params["max_positions"]),
     )
-    return resp.text, picks, dropped, (resp.input_tokens, resp.output_tokens)
+    return (
+        resp.text,
+        picks,
+        dropped,
+        (resp.input_tokens, resp.output_tokens),
+        retry_resp.text if retry_resp else None,
+    )
 
 
 def _parse_with_retry(
@@ -604,10 +630,15 @@ def _parse_with_retry(
     text: str,
     *,
     system: str,
-) -> dict:
-    """Parse JSON; on failure, retry once with an explicit nudge."""
+) -> tuple[dict, "LLMResponse | None"]:
+    """Parse JSON; on failure, retry once with an explicit nudge.
+
+    Returns (parsed_dict, retry_response). retry_response is None when the
+    first attempt parsed cleanly; otherwise it's the LLMResponse from the
+    nudge call (whose .text the caller can journal for debugging).
+    """
     try:
-        return parse_json_response(text)
+        return parse_json_response(text), None
     except LLMProviderError:
         pass
     # Retry: ask the model to re-emit just the JSON.
@@ -621,10 +652,10 @@ def _parse_with_retry(
         model=model,
         system=nudge_system,
         user=nudge_user,
-        max_tokens=8192,
+        max_tokens=16384,
         temperature=0.1,
     )
-    return parse_json_response(resp.text)
+    return parse_json_response(resp.text), resp
 
 
 # ---------------------------------------------------------------------------
