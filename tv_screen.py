@@ -31,19 +31,13 @@ EXCLUDED_SECTORS = {
     "Non-Energy Minerals", "Finance", "Utilities",
 }
 
-# Market passes
-PASS1_MARKETS = ["america", "canada", "brazil", "mexico"]
-PASS2_MARKETS = [
-    "uk", "germany", "france", "spain", "italy", "netherlands",
-    "switzerland", "sweden", "norway", "denmark", "finland", "belgium",
-    "austria", "portugal", "ireland", "israel", "south_africa",
-    "saudi_arabia", "uae", "poland", "greece", "turkey",
-]
-PASS3_MARKETS = [
-    "australia", "india", "japan", "south_korea", "singapore",
-    "new_zealand", "indonesia", "thailand", "malaysia", "philippines",
-    "vietnam",
-]
+# Markets to screen. TradingView's "america" market covers NYSE/NASDAQ/
+# AMEX — the same set as agent_strategies.US_EXCHANGES — and includes
+# ADRs (foreign companies whose shares trade on US exchanges in USD).
+# Non-US markets are excluded because PortfolioManager treats every
+# companies.price as USD; until we add FX, agents can only safely trade
+# US-listed names.
+MARKETS = ["america"]
 
 
 def clean_ticker(raw_name: str) -> str:
@@ -160,36 +154,22 @@ def _screen_markets(markets: list[str], spy_perf_y: float, logger) -> list[dict]
 
 
 def run_tradingview_screen(logger) -> list[dict]:
-    """
-    Query TradingView screener with filters and return list of equity dicts.
-    Runs 3 passes with deduplication across passes.
-    """
+    """Screen TradingView's US market and return list of equity dicts."""
     logger.info("=" * 60)
-    logger.info("TradingView Screening")
+    logger.info("TradingView Screening (US only)")
     logger.info("=" * 60)
 
     spy_perf_y = _get_spy_perf_y(logger)
 
-    all_results = {}
+    equities = _screen_markets(MARKETS, spy_perf_y, logger)
+    deduped: dict[str, dict] = {}
+    for eq in equities:
+        ticker = eq["ticker"]
+        if ticker not in deduped:
+            deduped[ticker] = eq
 
-    for pass_num, markets in enumerate(
-        [PASS1_MARKETS, PASS2_MARKETS, PASS3_MARKETS], start=1
-    ):
-        logger.info("Pass %d: scanning %d markets...", pass_num, len(markets))
-        equities = _screen_markets(markets, spy_perf_y, logger)
-        new_count = 0
-        for eq in equities:
-            ticker = eq["ticker"]
-            if ticker not in all_results:
-                all_results[ticker] = eq
-                new_count += 1
-        logger.info(
-            "Pass %d: found %d equities, %d new (total so far: %d)",
-            pass_num, len(equities), new_count, len(all_results),
-        )
-
-    logger.info("TradingView screening complete: %d unique equities", len(all_results))
-    return list(all_results.values())
+    logger.info("TradingView screening complete: %d unique equities", len(deduped))
+    return list(deduped.values())
 
 
 def fetch_market_data(tickers_with_exchange: list[tuple[str, str]], logger) -> dict[str, dict]:

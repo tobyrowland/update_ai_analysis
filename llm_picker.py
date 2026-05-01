@@ -28,7 +28,7 @@ import logging
 import math
 from typing import Any
 
-from agent_strategies import RebalanceContext, RebalanceResult
+from agent_strategies import US_EXCHANGES, RebalanceContext, RebalanceResult
 from db import SupabaseDB
 from llm_providers import (
     ENV_VAR_FOR_PROVIDER,
@@ -87,6 +87,42 @@ def _slice_tickers(snapshot_json: dict, tickers: set[str]) -> dict:
         **snapshot_json,
         "tickers": filtered,
         "ticker_count": len(filtered),
+    }
+
+
+def _us_listed_tickers(db: SupabaseDB) -> set[str]:
+    """Tickers in `companies` whose exchange is a US venue.
+
+    Used to filter snapshots before they're sent to LLM agents — the
+    portfolio layer treats every price as USD, so non-US listings
+    (priced in their native currency) would silently mis-cost trades.
+    Until we add proper FX, agents see US-listed tickers (incl. ADRs,
+    which trade on NYSE/NASDAQ) only.
+    """
+    return {
+        str(c["ticker"]).upper()
+        for c in db.get_all_companies()
+        if c.get("ticker")
+        and str(c.get("exchange") or "").strip().upper() in US_EXCHANGES
+    }
+
+
+def _filter_snapshot_us_only(
+    snapshot_json: dict, us_tickers: set[str],
+) -> dict:
+    """Drop non-US-listed tickers from the snapshot."""
+    filtered = [
+        t for t in (snapshot_json.get("tickers") or [])
+        if str(t.get("ticker") or "").upper() in us_tickers
+    ]
+    return {
+        **snapshot_json,
+        "tickers": filtered,
+        "ticker_count": len(filtered),
+        "universe_filter": {
+            **(snapshot_json.get("universe_filter") or {}),
+            "us_listed_only": True,
+        },
     }
 
 
@@ -318,7 +354,11 @@ def rebalance_llm_pick(ctx: RebalanceContext) -> RebalanceResult:
         )
         return result
 
-    snapshot_json = snap_row["json"]
+    # Filter snapshot to US-listed tickers (incl. ADRs). Non-US listings
+    # are priced in their native currency but the portfolio layer treats
+    # every price as USD — until we add FX, hide foreign listings entirely.
+    us_tickers = _us_listed_tickers(ctx.db)
+    snapshot_json = _filter_snapshot_us_only(snap_row["json"], us_tickers)
     snapshot_date = snap_row["snapshot_date"]
     universe_tickers = {
         str(t.get("ticker") or "").upper()
@@ -402,7 +442,8 @@ def rebalance_llm_pick(ctx: RebalanceContext) -> RebalanceResult:
             result.notes = notes
             return result
         deep_snapshot = _slice_tickers(
-            full_row["json"], {p["ticker"] for p in shortlist}
+            _filter_snapshot_us_only(full_row["json"], us_tickers),
+            {p["ticker"] for p in shortlist},
         )
         valid_after_stage1 = {p["ticker"] for p in shortlist}
     else:
