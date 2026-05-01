@@ -177,17 +177,26 @@ def _call_openai_compatible(
     client = OpenAI(**kwargs)
 
     last_err: Exception | None = None
+    # GPT-5+ models renamed `max_tokens` to `max_completion_tokens`. We try
+    # the legacy name first (DeepSeek + older OpenAI accept it) and fall
+    # back on the specific 400.
+    use_completion_tokens = False
     for attempt in range(2):
         try:
+            token_kwarg = (
+                {"max_completion_tokens": max_tokens}
+                if use_completion_tokens
+                else {"max_tokens": max_tokens}
+            )
             resp = client.chat.completions.create(
                 model=model,
-                max_tokens=max_tokens,
                 temperature=temperature,
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
                 response_format={"type": "json_object"},
+                **token_kwarg,
             )
             text = resp.choices[0].message.content or ""
             usage = getattr(resp, "usage", None)
@@ -204,6 +213,12 @@ def _call_openai_compatible(
                 "%s call attempt %d failed: %s",
                 provider_label, attempt + 1, exc,
             )
+            if (
+                "max_completion_tokens" in str(exc).lower()
+                and not use_completion_tokens
+            ):
+                use_completion_tokens = True
+                continue  # retry immediately with the new param name
             time.sleep(2 ** attempt)
     raise LLMProviderError(
         f"{provider_label} call failed after retries: {last_err}"
