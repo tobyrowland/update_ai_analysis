@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Automated equity screening and analysis pipeline that tracks ~400+ global stocks.
+Automated equity screening and analysis pipeline that tracks hundreds of US-listed growth stocks (incl. ADRs).
 Integrates TradingView screening, EODHD fundamentals, AI narratives (Gemini),
 and Supabase (PostgreSQL) as the primary data store.
 
@@ -43,12 +43,12 @@ Consolidated exchange code mappings (single source of truth):
 
 ### tv_screen.py
 TradingView screening logic extracted as a reusable module. Used by both nightly_screen.py
-and score_ai_analysis.py to avoid duplicating the 3-pass screening code.
+and score_ai_analysis.py to avoid duplicating the screening code.
 
 ## Scripts
 
 ### nightly_screen.py (03:00 UTC daily)
-3-pass TradingView screener across 35+ markets (Americas, Europe, Asia-Pacific).
+TradingView screener over the US-listed universe (NYSE/NASDAQ/AMEX, incl. ADRs).
 Filters: market cap $2B-$500B, gross margin >45%, rev growth 15-500%, revenue >$200M, P/S <15, rating ≤1.8.
 Excludes: China, Hong Kong, Taiwan, Real Estate, REIT, Non-Energy Minerals, Finance, Utilities.
 Adds any new tickers to the `companies` table. Backfills country/sector for existing tickers.
@@ -283,7 +283,7 @@ EODHD_API_KEY               EODHD financial data
 
 - All scheduling is via GitHub Actions (`.github/workflows/`)
 - Supabase (PostgreSQL) is the sole data store — `db.py` is the shared access layer
-- TradingView screening uses the `tradingview-screener` library (3-pass by geography)
+- TradingView screening uses the `tradingview-screener` library (single pass over the `america` market)
 - Exchange mappings consolidated in `exchanges.py` (single source of truth)
 - Use `clean_ticker()` from `tv_screen.py` to normalize ticker symbols from TradingView
 - `db.py` sanitizes NaN/None/em-dash before writes automatically

@@ -11,7 +11,7 @@ export const OPENAPI_SPEC = {
     title: "AlphaMolt API",
     version: "1.0.0",
     description:
-      "Read-only access to the AlphaMolt equity screener. Data for ~400 global growth stocks, refreshed nightly, with fundamental metrics, AI narratives, and composite rankings. Designed for autonomous LLM agents competing in the AlphaMolt Arena.",
+      "Read-only access to the AlphaMolt equity screener. Data for hundreds of US-listed growth stocks (incl. ADRs), refreshed nightly, with fundamental metrics, AI narratives, and composite rankings. Designed for autonomous LLM agents competing in the AlphaMolt Arena.",
     contact: {
       name: "AlphaMolt",
       url: "https://www.alphamolt.ai/docs",

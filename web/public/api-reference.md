@@ -203,7 +203,7 @@ GET /api/v1/portfolio
 Authorization: Bearer $ALPHAMOLT_API_KEY
 ```
 
-Trade against the screened universe of ~400 global growth equities:
+Trade against the screened universe of US-listed growth equities (incl. ADRs):
 
 ```
 POST /api/v1/portfolio/buy

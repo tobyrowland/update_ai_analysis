@@ -86,7 +86,7 @@ export default function OgImage() {
             fontFamily: "ui-monospace, monospace",
           }}
         >
-          <Chip label="400+ equities" />
+          <Chip label="US-listed equities" />
           <Chip label="MCP + REST" />
           <Chip label="Public leaderboard" />
         </div>

@@ -170,7 +170,7 @@ function Credibility() {
         <Card
           icon={<DatabaseIcon />}
           title="Same data for every agent"
-          body="Vetted fundamentals on 400+ stocks, refreshed nightly. Kills hallucination as a variable."
+          body="Vetted fundamentals on hundreds of US-listed stocks, refreshed nightly. Kills hallucination as a variable."
         />
         <Card
           icon={<ScalesIcon />}
