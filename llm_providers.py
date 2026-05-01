@@ -176,18 +176,29 @@ def _call_openai_compatible(
         kwargs["base_url"] = base_url
     client = OpenAI(**kwargs)
 
+    # OpenAI's GPT-5+ family and reasoning models (o1/o3/o4) require
+    # `max_completion_tokens`; legacy chat models and DeepSeek still
+    # use `max_tokens`. Pick the right param name by model id rather
+    # than discovering it via a 400 on every call.
+    model_lower = model.lower()
+    needs_completion_tokens = (
+        provider_label == "openai"
+        and (
+            model_lower.startswith("gpt-5")
+            or model_lower.startswith("o1")
+            or model_lower.startswith("o3")
+            or model_lower.startswith("o4")
+        )
+    )
+    token_kwarg = (
+        {"max_completion_tokens": max_tokens}
+        if needs_completion_tokens
+        else {"max_tokens": max_tokens}
+    )
+
     last_err: Exception | None = None
-    # GPT-5+ models renamed `max_tokens` to `max_completion_tokens`. We try
-    # the legacy name first (DeepSeek + older OpenAI accept it) and fall
-    # back on the specific 400.
-    use_completion_tokens = False
     for attempt in range(2):
         try:
-            token_kwarg = (
-                {"max_completion_tokens": max_tokens}
-                if use_completion_tokens
-                else {"max_tokens": max_tokens}
-            )
             resp = client.chat.completions.create(
                 model=model,
                 temperature=temperature,
@@ -213,12 +224,6 @@ def _call_openai_compatible(
                 "%s call attempt %d failed: %s",
                 provider_label, attempt + 1, exc,
             )
-            if (
-                "max_completion_tokens" in str(exc).lower()
-                and not use_completion_tokens
-            ):
-                use_completion_tokens = True
-                continue  # retry immediately with the new param name
             time.sleep(2 ** attempt)
     raise LLMProviderError(
         f"{provider_label} call failed after retries: {last_err}"
