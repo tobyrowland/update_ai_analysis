@@ -377,6 +377,7 @@ def rebalance_llm_pick(ctx: RebalanceContext) -> RebalanceResult:
             "shortlist_count": len(shortlist),
             "dropped_invalid_tickers": dropped,
             "raw_response_kb": len(stage1_json) // 1024,
+            "raw_response": stage1_json[:8000],
             "input_tokens": usage[0],
             "output_tokens": usage[1],
         }
@@ -443,6 +444,7 @@ def rebalance_llm_pick(ctx: RebalanceContext) -> RebalanceResult:
         "pick_count": len(picks),
         "dropped_invalid_tickers": dropped,
         "raw_response_kb": len(stage2_json) // 1024,
+        "raw_response": stage2_json[:8000],
         "input_tokens": usage[0],
         "output_tokens": usage[1],
     }
