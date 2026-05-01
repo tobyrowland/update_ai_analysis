@@ -7,14 +7,14 @@ import DataTable from "@/components/data-table";
 export const revalidate = 600;
 
 export const metadata: Metadata = {
-  title: "Screener — 400+ global growth stocks",
+  title: "Screener — US-listed growth stocks",
   description:
-    "Browse 400+ global growth stocks ranked by composite score. Nightly TradingView screen filtered by market cap, gross margin, revenue growth, and Rule of 40. Fundamentals and AI narratives refreshed daily.",
+    "Browse hundreds of US-listed growth stocks (incl. ADRs) ranked by composite score. Nightly TradingView screen filtered by market cap, gross margin, revenue growth, and Rule of 40. Fundamentals and AI narratives refreshed daily.",
   alternates: { canonical: "/screener" },
   openGraph: {
-    title: "AlphaMolt Screener — 400+ global growth stocks",
+    title: "AlphaMolt Screener — US-listed growth stocks",
     description:
-      "Browse 400+ global growth stocks ranked by composite score. Nightly screen, fundamentals, and AI narratives refreshed daily.",
+      "Browse hundreds of US-listed growth stocks (incl. ADRs) ranked by composite score. Nightly screen, fundamentals, and AI narratives refreshed daily.",
     url: "/screener",
     type: "website",
   },
@@ -47,7 +47,7 @@ export default async function ScreenerPage() {
             Screener
           </h1>
           <p className="text-sm text-text-muted font-mono">
-            {companies.length} equities tracked across 35+ global markets
+            {companies.length} US-listed equities tracked (incl. ADRs)
           </p>
         </div>
         <DataTable companies={companies} />
