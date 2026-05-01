@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import re
 from typing import Any
 
@@ -92,7 +93,8 @@ You don't pretend to have answers. You're interested in what other people think.
 
 ## Style — short. Then shorter.
 - **A phrase or a few words is best.** A single sentence is plenty. Two sentences is already a lot. Three sentences is a tell — humans rarely write three-sentence replies on bluesky.
-- HARD CAP: 280 characters. **Soft target: 20–80 characters.** Cut hard.
+- **You will be given a per-reply character target.** It will vary — sometimes 30 chars, sometimes 200. Respect it. The variation is the point: bots write the same length every time; humans don't.
+- HARD CAP: 280 characters. Aim well under the per-reply target if you can.
 - It is fine — actively good — to reply with: a single observation, four words, a "yeah, the URTH baseline keeps surprising me", a "huh, didn't know that". Brevity reads human.
 - Plain text. No hashtags. No emoji unless genuinely useful.
 - Lead with substance — and stop. Don't extend. Don't add a follow-up clause. Don't qualify.
@@ -343,6 +345,116 @@ def _draft_once(user_block: str, max_tokens: int = 400) -> str:
     ).strip()
 
 
+def _pick_char_target() -> int:
+    """Pick a per-call character target, biased short.
+
+    The model treats a static "soft target 20–80" as aspirational and
+    almost always defaults to 200+. Picking a fresh, hard target per call
+    forces the output distribution to actually vary — sometimes 4 words,
+    sometimes a sentence, occasionally a longer thought.
+
+    Distribution:
+      40% — 25–70   (a phrase, a fragment, a single short sentence)
+      30% — 70–140  (one solid sentence)
+      20% — 140–210 (two sentences, used sparingly)
+      10% — 210–280 (max — only when the post genuinely demands it)
+    """
+    r = random.random()
+    if r < 0.40:
+        return random.randint(25, 70)
+    if r < 0.70:
+        return random.randint(70, 140)
+    if r < 0.90:
+        return random.randint(140, 210)
+    return random.randint(210, 280)
+
+
+# Banned-phrase regex list. These slipped through the system-prompt anti-tells
+# repeatedly; case-insensitive post-draft check forces a rewrite or SKIP.
+_BANNED_PHRASE_PATTERNS = (
+    r"\b(the |that['']s the )?real question\b",
+    r"\breal question:",
+    r"\bgenuine question\b",
+    r"\bhonest question\b",
+    r"\bquestion:\s",                    # "Question: does he have it?"
+    r"\bwhat['']?s the actual\b",
+    r"\bwhat is the actual\b",
+    r"\bthe harder test\b",
+    r"\bthe real test\b",
+    r"\bthe actual track record\b",
+    r"\bthat['']?s what separates\b",
+    r"\bsounds good until\b",
+    r"\bcurious (how|what|if)\b",
+    r"\bwhich problem are you solving\b",
+    r"\bwhich .{1,30} are you optimi[sz]ing\b",
+    r"\bthat['']?s the empirical (question|bar|test)\b",
+    r"\bthat['']?s exactly why\b",
+    r"\bthe interesting question\b",
+    r"\bnot a counter\b",
+    r"\bnot diversification\b",          # tic from recent drafts
+    r"\bdoing heavy lifting\b",          # "X doing heavy lifting"
+    r"≠",                                # "X ≠ Y" two-clause aphorism
+)
+
+
+def _has_banned_phrase(text: str) -> tuple[bool, str]:
+    """Return (hit, matched_phrase). Case-insensitive scan."""
+    lower = (text or "").lower()
+    for pat in _BANNED_PHRASE_PATTERNS:
+        m = re.search(pat, lower, re.IGNORECASE)
+        if m:
+            return True, m.group(0)
+    return False, ""
+
+
+def _validate_bsky_draft(
+    draft: str, target_chars: int
+) -> tuple[str, str]:
+    """Decide what to do with a draft.
+
+    Returns ``(verdict, reason)`` where ``verdict`` is one of:
+      ``"ok"``     — accept as-is
+      ``"rewrite"`` — try once more (length or banned phrase)
+      ``"skip"``    — model asked for SKIP, give up
+    """
+    if _is_skip(draft):
+        return "skip", "model returned SKIP"
+    if not draft.strip():
+        return "skip", "empty draft"
+    if len(draft) > CHAR_CAP_HARD:
+        return "rewrite", f"too long ({len(draft)} > {CHAR_CAP_HARD})"
+    banned, hit = _has_banned_phrase(draft)
+    if banned:
+        return "rewrite", f"banned phrase {hit!r}"
+    return "ok", ""
+
+
+def _draft_with_validation(user_block: str, target_chars: int) -> str:
+    """Draft, validate, optionally rewrite once, return text or ''."""
+    draft = _draft_once(user_block)
+    verdict, reason = _validate_bsky_draft(draft, target_chars)
+    if verdict == "skip":
+        return ""
+    if verdict == "ok":
+        return draft
+
+    log.warning("bsky draft rejected (%s) — rewriting", reason)
+    half = max(20, target_chars // 2)
+    retry_block = user_block + (
+        f"\n\nYOUR PREVIOUS DRAFT WAS REJECTED: {reason}.\n"
+        f"Previous draft:\n{draft}\n\n"
+        f"Rewrite. Make it MUCH shorter — UNDER {half} characters. "
+        "Avoid the banned phrasings and banned moves listed in your system "
+        "prompt. If you can't say it cleanly, return SKIP."
+    )
+    retry = _draft_once(retry_block)
+    verdict, reason = _validate_bsky_draft(retry, target_chars)
+    if verdict == "ok":
+        return retry
+    log.warning("bsky retry also rejected (%s) — skipping", reason)
+    return ""
+
+
 def classify_bsky_themes(post: dict[str, Any]) -> list[int]:
     """Classify a Bluesky post against our three engagement themes.
 
@@ -401,6 +513,8 @@ def draft_reply_to_post(
     author = post.get("author_handle") or "unknown"
     text = (post.get("text") or "")[:800]
     memory_section = f"{memory_block.strip()}\n\n" if memory_block.strip() else ""
+    target = _pick_char_target()
+    log.info("bsky reply target: %d chars", target)
 
     user_block = (
         "You are scrolling Bluesky and saw a post you might reply to. Draft "
@@ -415,37 +529,38 @@ def draft_reply_to_post(
         "- Engage with what they ACTUALLY said. Not the topic in general.\n"
         "- Sound like a knowledgeable person on bluesky, not an agent "
         "  pitching analysis.\n"
-        "- Most replies should not end with a question. Statement-only is "
+        "- Most replies should NOT end with a question. Statement-only is "
         "  great. A question is fine once in a while if you genuinely want "
         "  to know — never as a default rhetorical move.\n"
         "- If you have nothing genuine to say, or this is off-thesis, or "
-        "  the post is spam/purely social, return SKIP. SKIP is fine.\n"
-        f"- HARD CAP: {CHAR_CAP} characters. SOFT TARGET: 20–80. A phrase or a single sentence is best — three sentences is a tell.\n\n"
-        "Re-read the agent-tells list in your system prompt before writing. "
-        "If your draft contains any banned phrasing or banned move, rewrite "
-        "it.\n\n"
+        "  the post is spam/purely social, return SKIP. SKIP is fine.\n\n"
+        f"## LENGTH FOR THIS REPLY (mandatory)\n"
+        f"This specific reply must be UNDER {target} characters. "
+        f"That's roughly "
+        + (
+            "a phrase or fragment — 4–10 words."
+            if target < 70
+            else "one short sentence."
+            if target < 140
+            else "one or two sentences."
+            if target < 210
+            else "a longer thought, used only because the post genuinely demands detail."
+        )
+        + "\n"
+        "Do NOT write to the upper bound by default. Aim shorter than the "
+        "cap if you can. Brevity reads human; padding reads bot.\n\n"
+        "## Banned (auto-rejected by post-processor — your draft will be "
+        "thrown out and you will be asked to rewrite)\n"
+        "- 'Real question:' / 'Question:' / 'genuine question' / 'honest question'\n"
+        "- 'what's the actual X' / 'the actual track record'\n"
+        "- 'the harder test' / 'the real test' / 'the empirical question'\n"
+        "- 'sounds good until' / 'doing heavy lifting'\n"
+        "- 'X ≠ Y' two-clause aphorisms\n"
+        "- Always-end-with-a-question pattern\n\n"
         "Return ONLY the reply text, or SKIP."
     )
 
-    draft = _draft_once(user_block)
-    if _is_skip(draft):
-        return ""
-    if len(draft) <= CHAR_CAP_HARD:
-        return draft
-
-    log.warning("bsky reply too long (%d chars); re-drafting", len(draft))
-    retry_block = user_block + (
-        f"\n\nYOUR PREVIOUS DRAFT WAS {len(draft)} CHARACTERS — TOO LONG.\n"
-        f"Previous draft:\n{draft}\n\n"
-        f"Rewrite in UNDER {CHAR_CAP} characters."
-    )
-    retry = _draft_once(retry_block)
-    if _is_skip(retry):
-        return ""
-    if len(retry) > CHAR_CAP_HARD:
-        log.warning("bsky retry still too long (%d); giving up", len(retry))
-        return ""
-    return retry
+    return _draft_with_validation(user_block, target)
 
 
 def draft_mention_reply(
@@ -461,6 +576,8 @@ def draft_mention_reply(
     text = (notif.get("text") or "")[:800]
     reason = notif.get("reason") or "mention"
     memory_section = f"{memory_block.strip()}\n\n" if memory_block.strip() else ""
+    target = _pick_char_target()
+    log.info("bsky mention-reply target: %d chars", target)
 
     user_block = (
         f"Someone on Bluesky ({reason}) directed this at you. Reply like a "
@@ -473,29 +590,34 @@ def draft_mention_reply(
         "- Most replies should NOT end with a question. A question is fine "
         "  once in a while if you genuinely want to know.\n"
         "- If the message is spam or purely social or you have nothing "
-        "  genuine to say, return SKIP.\n"
-        f"- HARD CAP: {CHAR_CAP} characters. SOFT TARGET: 20–80. A phrase or a single sentence is best — three sentences is a tell.\n\n"
-        "Re-read the agent-tells list in your system prompt before writing. "
-        "If your draft contains any banned phrasing or banned move, rewrite "
-        "it.\n\n"
+        "  genuine to say, return SKIP.\n\n"
+        f"## LENGTH FOR THIS REPLY (mandatory)\n"
+        f"This specific reply must be UNDER {target} characters. "
+        f"That's roughly "
+        + (
+            "a phrase or fragment — 4–10 words."
+            if target < 70
+            else "one short sentence."
+            if target < 140
+            else "one or two sentences."
+            if target < 210
+            else "a longer thought, used only because the message genuinely demands detail."
+        )
+        + "\n"
+        "Do NOT write to the upper bound by default. Aim shorter than the "
+        "cap if you can.\n\n"
+        "## Banned (auto-rejected by post-processor — your draft will be "
+        "thrown out and you will be asked to rewrite)\n"
+        "- 'Real question:' / 'Question:' / 'genuine question' / 'honest question'\n"
+        "- 'what's the actual X' / 'the actual track record'\n"
+        "- 'the harder test' / 'the real test' / 'the empirical question'\n"
+        "- 'sounds good until' / 'doing heavy lifting'\n"
+        "- 'X ≠ Y' two-clause aphorisms\n"
+        "- Always-end-with-a-question pattern\n\n"
         "Return ONLY the reply text, or SKIP."
     )
 
-    draft = _draft_once(user_block)
-    if _is_skip(draft):
-        return ""
-    if len(draft) <= CHAR_CAP_HARD:
-        return draft
-
-    retry_block = user_block + (
-        f"\n\nYOUR PREVIOUS DRAFT WAS {len(draft)} CHARACTERS — TOO LONG.\n"
-        f"Previous draft:\n{draft}\n\n"
-        f"Rewrite in UNDER {CHAR_CAP} characters."
-    )
-    retry = _draft_once(retry_block)
-    if _is_skip(retry) or len(retry) > CHAR_CAP_HARD:
-        return ""
-    return retry
+    return _draft_with_validation(user_block, target)
 
 
 # ---------------------------------------------------------------------------
