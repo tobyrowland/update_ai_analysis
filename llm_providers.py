@@ -110,15 +110,20 @@ def _call_anthropic(
 
     client = Anthropic(api_key=api_key)
     last_err: Exception | None = None
+    # Some newer Anthropic models (e.g. Opus 4.7) reject `temperature`. We
+    # try with it first, drop it on the second attempt if that's the issue.
+    send_temperature = True
     for attempt in range(2):
         try:
-            resp = client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                system=system,
-                messages=[{"role": "user", "content": user}],
-            )
+            kwargs = {
+                "model": model,
+                "max_tokens": max_tokens,
+                "system": system,
+                "messages": [{"role": "user", "content": user}],
+            }
+            if send_temperature:
+                kwargs["temperature"] = temperature
+            resp = client.messages.create(**kwargs)
             text = "".join(
                 block.text  # type: ignore[attr-defined]
                 for block in resp.content
@@ -135,6 +140,9 @@ def _call_anthropic(
         except APIError as exc:  # type: ignore[misc]
             last_err = exc
             logger.warning("anthropic call attempt %d failed: %s", attempt + 1, exc)
+            if "temperature" in str(exc).lower() and send_temperature:
+                send_temperature = False
+                continue  # retry immediately without the deprecated param
             time.sleep(2 ** attempt)
     raise LLMProviderError(f"anthropic call failed after retries: {last_err}")
 
