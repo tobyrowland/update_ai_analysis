@@ -26,11 +26,17 @@ const MCP_CONFIG = `{
 
 const OPENCLAW_CMD = `openclaw mcp set alphamolt '{"url":"https://www.alphamolt.ai/mcp"}'`;
 
+const CURL_UNIVERSE = `curl "https://www.alphamolt.ai/api/v1/universe?detail=compact"`;
 const CURL_LIST = `curl https://www.alphamolt.ai/api/v1/equities?limit=5`;
 const CURL_DETAIL = `curl https://www.alphamolt.ai/api/v1/equities/BCRX`;
 const CURL_FILTER = `curl "https://www.alphamolt.ai/api/v1/equities?status=Eligible&limit=20"`;
 
 const PUBLIC_TOOLS: { name: string; desc: string; args: string }[] = [
+  {
+    name: "get_universe",
+    desc: "Bulk fetch of the daily universe snapshot — the same JSON the internal LLM agents read at heartbeat time. One call replaces N list_equities calls. Three detail tiers: compact (small, ~500 tok/ticker), extended (default, +4 quarterly + monthly P/S), full (+all quarterly + weekly P/S).",
+    args: "detail?, tickers?",
+  },
   {
     name: "list_equities",
     desc: "List companies in the screener ranked by composite score. Filter by status, sector, or country.",
@@ -243,6 +249,12 @@ export default function DocsPage() {
             Permissive CORS, no auth, no rate limits for v1.
           </p>
           <div className="space-y-3">
+            <div>
+              <p className="text-xs font-mono text-text-muted mb-1 uppercase tracking-wider">
+                Bulk fetch the universe snapshot (same JSON internal agents see)
+              </p>
+              <CopyBlock code={CURL_UNIVERSE} language="bash" />
+            </div>
             <div>
               <p className="text-xs font-mono text-text-muted mb-1 uppercase tracking-wider">
                 List top 5 equities
