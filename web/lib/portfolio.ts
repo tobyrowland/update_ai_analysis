@@ -57,6 +57,7 @@ export interface TradeResult {
 
 export interface HoldingWithMtm {
   ticker: string;
+  company_name: string | null;
   quantity: number;
   avg_cost_usd: number;
   price_usd: number;
@@ -96,6 +97,62 @@ function round2(n: number): number {
 
 function round4(n: number): number {
   return Math.round(n * 10000) / 10000;
+}
+
+interface CompanyMeta {
+  price: number | null;
+  company_name: string | null;
+}
+
+/**
+ * Bulk-fetch price + company_name for a set of tickers in a single SELECT.
+ * Returns an empty map if `tickers` is empty. Tickers missing from `companies`
+ * simply won't appear in the result map — callers handle that as a fallback.
+ */
+async function getCompaniesMeta(
+  tickers: string[],
+): Promise<Map<string, CompanyMeta>> {
+  const out = new Map<string, CompanyMeta>();
+  if (tickers.length === 0) return out;
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("companies")
+    .select("ticker, price, company_name")
+    .in("ticker", tickers);
+  if (error) {
+    throw new PortfolioError(
+      "price_lookup_failed",
+      `Bulk company lookup failed: ${error.message}`,
+    );
+  }
+  for (const row of (data ?? []) as {
+    ticker: string;
+    price: number | string | null;
+    company_name: string | null;
+  }[]) {
+    const priceNum = row.price == null ? null : Number(row.price);
+    out.set(row.ticker, {
+      price: priceNum != null && Number.isFinite(priceNum) ? priceNum : null,
+      company_name: row.company_name ?? null,
+    });
+  }
+  return out;
+}
+
+/**
+ * Public helper for callers that only need name resolution (e.g. the recent
+ * trades table) without going through the full portfolio MTM path.
+ */
+export async function getCompanyNamesForTickers(
+  tickers: string[],
+): Promise<Map<string, string>> {
+  const distinct = Array.from(new Set(tickers));
+  const meta = await getCompaniesMeta(distinct);
+  const out = new Map<string, string>();
+  for (const [t, m] of meta) {
+    if (m.company_name) out.set(t, m.company_name);
+  }
+  return out;
 }
 
 async function getPrice(ticker: string): Promise<number> {
@@ -464,21 +521,27 @@ export async function getPortfolio(
   const account = await openAccount(agentId);
   const holdings = await getAllHoldings(agentId);
 
+  // Bulk-fetch price + name for every holding in one round-trip. Previously
+  // we did N sequential SELECTs from companies — for an agent with 30
+  // positions that turned the page into 30 chained network hops.
+  const meta = await getCompaniesMeta(holdings.map((h) => h.ticker));
+
   const enriched: HoldingWithMtm[] = [];
   let holdingsValue = 0;
 
   for (const h of holdings) {
-    let price: number;
-    try {
-      price = await getPrice(h.ticker);
-    } catch {
-      // Fall back to avg cost when price unavailable so the row still shows
-      price = h.avg_cost_usd;
-    }
+    const row = meta.get(h.ticker);
+    const rawPrice = row?.price ?? null;
+    // Fall back to avg cost when price unavailable so the row still shows.
+    const price =
+      rawPrice != null && Number.isFinite(rawPrice) && rawPrice > 0
+        ? rawPrice
+        : h.avg_cost_usd;
     const mv = round2(h.quantity * price);
     holdingsValue += mv;
     enriched.push({
       ticker: h.ticker,
+      company_name: row?.company_name ?? null,
       quantity: h.quantity,
       avg_cost_usd: h.avg_cost_usd,
       price_usd: round4(price),

@@ -2,7 +2,11 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import Nav from "@/components/nav";
 import { getAgentByHandle } from "@/lib/agents-query";
-import { getPortfolio, type HoldingWithMtm } from "@/lib/portfolio";
+import {
+  getCompanyNamesForTickers,
+  getPortfolio,
+  type HoldingWithMtm,
+} from "@/lib/portfolio";
 import { getSupabase } from "@/lib/supabase";
 
 export const revalidate = 300;
@@ -148,6 +152,24 @@ export default async function AgentPortfolioPage({
     (a, b) => b.market_value_usd - a.market_value_usd,
   );
 
+  // Resolve company_name for any trade tickers not already covered by current
+  // holdings (closed positions). Single bulk SELECT — no N+1.
+  const heldNames = new Map(
+    portfolio.holdings
+      .filter((h) => h.company_name)
+      .map((h) => [h.ticker, h.company_name as string]),
+  );
+  const missingTradeTickers = recent.trades
+    .map((t) => t.ticker)
+    .filter((t) => !heldNames.has(t));
+  const tradeNames = missingTradeTickers.length
+    ? await getCompanyNamesForTickers(missingTradeTickers)
+    : new Map<string, string>();
+  const nameByTicker = new Map<string, string>([
+    ...heldNames,
+    ...tradeNames,
+  ]);
+
   return (
     <>
       <Nav />
@@ -250,6 +272,11 @@ export default async function AgentPortfolioPage({
                           >
                             {h.ticker}
                           </Link>
+                          {h.company_name && (
+                            <div className="text-xs text-text-muted truncate max-w-[220px]">
+                              {h.company_name}
+                            </div>
+                          )}
                         </td>
                         <td className="px-4 py-3 text-right text-text">
                           {h.quantity.toLocaleString("en-US")}
@@ -343,6 +370,11 @@ export default async function AgentPortfolioPage({
                           >
                             {t.ticker}
                           </Link>
+                          {nameByTicker.get(t.ticker) && (
+                            <div className="text-xs text-text-muted truncate max-w-[220px]">
+                              {nameByTicker.get(t.ticker)}
+                            </div>
+                          )}
                         </td>
                         <td className="px-4 py-3 text-right text-text">
                           {t.quantity.toLocaleString("en-US")}

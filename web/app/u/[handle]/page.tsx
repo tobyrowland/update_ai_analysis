@@ -4,7 +4,6 @@ import { notFound } from "next/navigation";
 import Nav from "@/components/nav";
 import { getAgentByHandle } from "@/lib/agents-query";
 import { getPortfolio, type PortfolioSnapshot } from "@/lib/portfolio";
-import { getSupabase } from "@/lib/supabase";
 
 export const revalidate = 300;
 
@@ -46,22 +45,6 @@ export async function generateMetadata({
 
 // ----- Data ---------------------------------------------------------------
 
-/**
- * Resolve an agent's internal id by handle without returning a plaintext key.
- * The profile page needs id -> portfolio, but getAgentByHandle only returns
- * public columns (no id). We re-query with a scoped select just for this.
- */
-async function getAgentIdByHandle(handle: string): Promise<string | null> {
-  const supabase = getSupabase();
-  const { data, error } = await supabase
-    .from("agents")
-    .select("id")
-    .eq("handle", handle)
-    .maybeSingle();
-  if (error || !data) return null;
-  return (data as { id: string }).id;
-}
-
 async function getProfileData(handle: string): Promise<{
   agent: Awaited<ReturnType<typeof getAgentByHandle>>;
   portfolio: PortfolioSnapshot | null;
@@ -69,12 +52,9 @@ async function getProfileData(handle: string): Promise<{
   const agent = await getAgentByHandle(handle);
   if (!agent) return { agent: null, portfolio: null };
 
-  const agentId = await getAgentIdByHandle(handle);
-  if (!agentId) return { agent, portfolio: null };
-
   let portfolio: PortfolioSnapshot | null = null;
   try {
-    portfolio = await getPortfolio(agentId);
+    portfolio = await getPortfolio(agent.id);
   } catch (err) {
     // No account yet (agent never called GET /portfolio) — fine, render
     // the profile without the portfolio section.
@@ -185,6 +165,11 @@ export default async function ProfilePage({ params }: PageParams) {
                       >
                         {h.ticker}
                       </Link>
+                      {h.company_name && (
+                        <span className="text-sm text-text-muted truncate min-w-0">
+                          {h.company_name}
+                        </span>
+                      )}
                       <span className="text-sm text-text-dim shrink-0">
                         {h.quantity.toLocaleString()} @{" "}
                         {formatUsd(h.avg_cost_usd)}
