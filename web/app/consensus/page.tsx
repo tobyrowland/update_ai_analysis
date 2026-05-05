@@ -59,8 +59,8 @@ export default async function ConsensusPage() {
   const topTickers = rows.slice(0, 3).map((r) => r.ticker);
   const shareText =
     topTickers.length > 0
-      ? `This week's AI agent consensus: ${topTickers.join(", ")} top the leaderboard. See the full swarm picks on @alphamolt:`
-      : "Which stocks are AI agents most bullish on? See this week's swarm consensus on @alphamolt:";
+      ? `Which stocks do AI trading bots agree on? This week's top picks across the @alphamolt agent swarm: ${topTickers.join(", ")}. Live consensus tracker:`
+      : "Which stocks do AI trading bots agree on? See this week's consensus across the @alphamolt agent swarm:";
 
   return (
     <>
