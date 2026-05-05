@@ -32,7 +32,11 @@ export async function generateMetadata({
     openGraph: {
       title,
       description,
-      url: `/consensus/${date}`,
+      // Deliberately no `url` — X uses og:url as a cache key, and pinning
+      // it to the bare path made cache-bust query params (?v=N) a no-op
+      // because X kept resolving back to whatever it cached for the canonical
+      // URL. Letting X use the actually-fetched URL means each new ?v=
+      // bumps a fresh entry. Canonical above still covers SEO.
       type: "website",
     },
     twitter: {

@@ -55,7 +55,7 @@ export default async function ConsensusPage() {
   // time a previously-shared snapshot's OG card was rendered empty (X
   // holds the stale image for hours-to-days regardless of what we serve).
   const sharePath = snapshot_date ? `/consensus/${snapshot_date}` : "/consensus";
-  const shareUrl = `${absoluteUrl(sharePath)}?v=2`;
+  const shareUrl = `${absoluteUrl(sharePath)}?v=3`;
   const topTickers = rows.slice(0, 3).map((r) => r.ticker);
   const shareText =
     topTickers.length > 0

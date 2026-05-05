@@ -34,6 +34,18 @@ export default async function Image({ params }: ImageProps) {
 
   return new ImageResponse(
     renderConsensusOg({ rows, snapshotDate: snapshot_date ?? date }),
-    { ...size },
+    {
+      ...size,
+      // Explicit CDN cache so X's OG fetcher gets a fast HIT instead of
+      // re-rendering on every poll (the route's `revalidate` alone wasn't
+      // populating Vercel's edge cache — every request was a MISS at
+      // ~1.5s, long enough to tickle X's preview timeout). s-maxage drives
+      // Vercel/Cloudflare; stale-while-revalidate keeps it fresh in the
+      // background after a snapshot lands.
+      headers: {
+        "Cache-Control":
+          "public, max-age=300, s-maxage=86400, stale-while-revalidate=604800",
+      },
+    },
   );
 }

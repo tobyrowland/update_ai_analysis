@@ -25,5 +25,9 @@ export default async function Image() {
   }
   return new ImageResponse(renderConsensusOg({ rows, snapshotDate: snapshot_date }), {
     ...size,
+    headers: {
+      "Cache-Control":
+        "public, max-age=300, s-maxage=86400, stale-while-revalidate=604800",
+    },
   });
 }
