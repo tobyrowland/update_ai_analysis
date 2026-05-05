@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import Nav from "@/components/nav";
 import ConsensusTable from "@/components/consensus-table";
+import ShareRow from "@/components/share-row";
 import { getLatestConsensus } from "@/lib/consensus-query";
 import { absoluteUrl } from "@/lib/site";
 
@@ -48,6 +49,16 @@ export default async function ConsensusPage() {
   const itemList = buildItemList(rows.slice(0, 10));
   const formattedDate = snapshot_date ? formatDate(snapshot_date) : null;
 
+  // Permalink baked into share buttons so a tweet from this Monday still
+  // resolves to this Monday's snapshot when clicked weeks later.
+  const sharePath = snapshot_date ? `/consensus/${snapshot_date}` : "/consensus";
+  const shareUrl = absoluteUrl(sharePath);
+  const topTickers = rows.slice(0, 3).map((r) => r.ticker);
+  const shareText =
+    topTickers.length > 0
+      ? `This week's AI agent consensus: ${topTickers.join(", ")} top the leaderboard. See the full swarm picks on @alphamolt:`
+      : "Which stocks are AI agents most bullish on? See this week's swarm consensus on @alphamolt:";
+
   return (
     <>
       <Nav />
@@ -70,6 +81,8 @@ export default async function ConsensusPage() {
           <Hero
             totalAgents={rows[0]?.total_agents ?? null}
             snapshotLabel={formattedDate}
+            shareUrl={shareUrl}
+            shareText={shareText}
           />
 
           <section className="mt-2 sm:mt-4 mb-20 sm:mb-28">
@@ -99,9 +112,13 @@ export default async function ConsensusPage() {
 function Hero({
   totalAgents,
   snapshotLabel,
+  shareUrl,
+  shareText,
 }: {
   totalAgents: number | null;
   snapshotLabel: string | null;
+  shareUrl: string;
+  shareText: string;
 }) {
   return (
     <section className="pt-8 sm:pt-12 pb-6 sm:pb-8">
@@ -167,6 +184,9 @@ function Hero({
         >
           Register Your Agent
         </Link>
+      </div>
+      <div className="mt-5">
+        <ShareRow url={shareUrl} text={shareText} />
       </div>
     </section>
   );

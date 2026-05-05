@@ -1,11 +1,12 @@
 /**
  * Server-side query for the /consensus page.
  *
- * Reads the most recent `consensus_snapshots` row set, joined to `companies`
- * for company_name + exchange. Single bulk SELECT — no per-ticker N+1.
+ * Reads `consensus_snapshots` rows for either the latest date or a
+ * specific date, joined to `companies` for company_name + exchange.
+ * Single bulk SELECT — no per-ticker N+1.
  *
- * Materialised weekly by `consensus_snapshot.py` (Monday 00:00 UTC), so this
- * is just a static read.
+ * Materialised weekly by `consensus_snapshot.py` (Monday 00:00 UTC), so
+ * this is just a static read.
  */
 
 import { getSupabase } from "@/lib/supabase";
@@ -52,9 +53,33 @@ export async function getLatestConsensus(): Promise<ConsensusResult> {
   if (!latest) {
     return { snapshot_date: null, rows: [] };
   }
-  const snapshot_date = (latest as unknown as { snapshot_date: string }).snapshot_date;
+  const snapshot_date = (latest as unknown as { snapshot_date: string })
+    .snapshot_date;
+  const rows = await fetchSnapshotRows(snapshot_date);
+  return { snapshot_date, rows };
+}
 
-  // Pull every row for the latest date in one query, ordered by rank.
+/**
+ * Fetch a snapshot for a specific date. Returns rows = [] when the date
+ * has no snapshot — caller decides whether to 404 or render an empty
+ * state.
+ */
+export async function getConsensusByDate(
+  snapshot_date: string,
+): Promise<ConsensusResult> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(snapshot_date)) {
+    return { snapshot_date: null, rows: [] };
+  }
+  const rows = await fetchSnapshotRows(snapshot_date);
+  return { snapshot_date: rows.length > 0 ? snapshot_date : null, rows };
+}
+
+async function fetchSnapshotRows(
+  snapshot_date: string,
+): Promise<ConsensusRow[]> {
+  const supabase = getSupabase();
+
+  // Pull every row for the date in one query, ordered by rank.
   const { data: snapRows, error: snapErr } = await supabase
     .from("consensus_snapshots")
     .select(
@@ -66,35 +91,37 @@ export async function getLatestConsensus(): Promise<ConsensusResult> {
   if (snapErr) {
     throw new Error(`consensus_snapshots fetch: ${snapErr.message}`);
   }
+  if (!snapRows || snapRows.length === 0) return [];
 
-  const tickers = (snapRows ?? []).map(
+  const tickers = snapRows.map(
     (r) => (r as unknown as { ticker: string }).ticker,
   );
 
   // Bulk-fetch company_name + exchange so the page can render
   // "AAPL · Apple Inc. · NASDAQ".
-  const meta = new Map<string, { company_name: string; exchange: string | null }>();
-  if (tickers.length > 0) {
-    const { data: companies, error: cErr } = await supabase
-      .from("companies")
-      .select("ticker, company_name, exchange")
-      .in("ticker", tickers);
-    if (cErr) {
-      throw new Error(`companies lookup: ${cErr.message}`);
-    }
-    for (const c of (companies ?? []) as unknown as {
-      ticker: string;
-      company_name: string;
-      exchange: string | null;
-    }[]) {
-      meta.set(c.ticker, {
-        company_name: c.company_name,
-        exchange: c.exchange,
-      });
-    }
+  const meta = new Map<
+    string,
+    { company_name: string; exchange: string | null }
+  >();
+  const { data: companies, error: cErr } = await supabase
+    .from("companies")
+    .select("ticker, company_name, exchange")
+    .in("ticker", tickers);
+  if (cErr) {
+    throw new Error(`companies lookup: ${cErr.message}`);
+  }
+  for (const c of (companies ?? []) as unknown as {
+    ticker: string;
+    company_name: string;
+    exchange: string | null;
+  }[]) {
+    meta.set(c.ticker, {
+      company_name: c.company_name,
+      exchange: c.exchange,
+    });
   }
 
-  const rows: ConsensusRow[] = (snapRows ?? []).map((raw) => {
+  return snapRows.map((raw) => {
     const r = raw as unknown as {
       rank: number;
       ticker: string;
@@ -123,6 +150,4 @@ export async function getLatestConsensus(): Promise<ConsensusResult> {
       top_holders: Array.isArray(r.top_holders) ? r.top_holders : [],
     };
   });
-
-  return { snapshot_date, rows };
 }
