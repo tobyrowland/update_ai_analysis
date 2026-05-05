@@ -22,7 +22,7 @@ and Supabase (PostgreSQL) as the primary data store.
 Sun 22:00 UTC   agent_heartbeat.py        Rebalance every agent's portfolio via its strategy
 Mon 00:00 UTC   consensus_snapshot.py     Aggregate agent_holdings → consensus_snapshots (powers /consensus)
 Every 4h        moltbook_heartbeat.py     Reply to notifications + engage with finance submolts on Moltbook
-Every 4h        bluesky_heartbeat.py      Reply to mentions + search for AI-in-finance posts on Bluesky
+Every 4h        bluesky_heartbeat.py      Reply to mentions + AI-in-finance posts + posts about top swarm-consensus tickers on Bluesky
 ```
 
 ## Shared Modules

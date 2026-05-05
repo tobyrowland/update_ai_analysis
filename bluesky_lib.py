@@ -52,6 +52,12 @@ SEARCH_QUERIES = (
     "autonomous trading agent",
 )
 
+# How many of the top swarm-consensus tickers to target each run, and how
+# many recent posts per query to consider.
+EQUITY_TARGET_TOP_N = 5
+EQUITY_SEARCH_LIMIT_PER_QUERY = 6
+CONSENSUS_BASE_URL = "https://www.alphamolt.ai"
+
 BSKY_SYSTEM = """You are AlphaMolt-Equities (@alphamolt.bsky.social), an AI agent on Bluesky.
 
 ## What you believe (your thesis)
@@ -219,10 +225,18 @@ class BlueskyClient:
         parent_cid: str,
         root_uri: str | None = None,
         root_cid: str | None = None,
+        link_url: str | None = None,
+        link_label: str | None = None,
     ) -> dict | None:
-        """Post a reply. Returns {uri, cid} on success, None on failure."""
+        """Post a reply. Returns {uri, cid} on success, None on failure.
+
+        When ``link_url`` is set, ``link_label`` (defaulting to the URL) is
+        appended to ``text`` as a clickable rich-text facet. Bluesky won't
+        auto-linkify a bare URL — you have to attach the facet yourself.
+        """
         try:
             from atproto import models
+            from atproto_client.utils import TextBuilder
         except ImportError:
             log.error("atproto not available")
             return None
@@ -239,7 +253,17 @@ class BlueskyClient:
             reply_ref = models.AppBskyFeedPost.ReplyRef(
                 parent=parent_ref, root=root_ref
             )
-            resp = self.client.send_post(text=text, reply_to=reply_ref)
+            if link_url:
+                label = (link_label or link_url).strip()
+                body = text.rstrip()
+                separator = "\n\n" if body else ""
+                builder = TextBuilder()
+                if body:
+                    builder.text(f"{body}{separator}")
+                builder.link(label, link_url)
+                resp = self.client.send_post(text=builder, reply_to=reply_ref)
+            else:
+                resp = self.client.send_post(text=text, reply_to=reply_ref)
             return {"uri": resp.uri, "cid": resp.cid}
         except Exception as exc:
             log.error("reply failed: %s", exc)
@@ -554,6 +578,155 @@ def draft_reply_to_post(
         "- 'Real question:' / 'Question:' / 'genuine question' / 'honest question'\n"
         "- 'what's the actual X' / 'the actual track record'\n"
         "- 'the harder test' / 'the real test' / 'the empirical question'\n"
+        "- 'sounds good until' / 'doing heavy lifting'\n"
+        "- 'X ≠ Y' two-clause aphorisms\n"
+        "- Always-end-with-a-question pattern\n\n"
+        "Return ONLY the reply text, or SKIP."
+    )
+
+    return _draft_with_validation(user_block, target)
+
+
+def fetch_consensus_targets(limit: int = EQUITY_TARGET_TOP_N) -> tuple[list[dict], str | None]:
+    """Return the top swarm-consensus tickers + the snapshot date.
+
+    Reads ``consensus_snapshots`` (materialised weekly by
+    ``consensus_snapshot.py``) joined to ``companies`` for the human-readable
+    ``company_name``. Empty list when no snapshot exists yet.
+    """
+    from db import SupabaseDB
+
+    db = SupabaseDB()
+    return db.get_latest_consensus_top_tickers(limit=limit)
+
+
+def equity_search_queries(ticker: str) -> list[str]:
+    """Search queries for finding Bluesky posts about a given ticker.
+
+    Cashtag (``$NVDA``) is the highest-precision signal on financial Bluesky;
+    bare ticker is a fallback for tickers long enough to be unambiguous.
+    """
+    t = ticker.upper().strip()
+    queries = [f"${t}"]
+    if len(t) >= 4:
+        queries.append(t)
+    return queries
+
+
+def consensus_share_url(snapshot_date: str | None) -> str:
+    """Build the dated permalink the agent links to in equity replies."""
+    if snapshot_date:
+        return f"{CONSENSUS_BASE_URL}/consensus/{snapshot_date}"
+    return f"{CONSENSUS_BASE_URL}/consensus"
+
+
+_TICKER_RELEVANCE_RE = re.compile(r"YES|NO", re.IGNORECASE)
+
+
+def classify_ticker_post(
+    post: dict[str, Any], ticker: str, company_name: str
+) -> bool:
+    """Return True iff the post is genuinely about ``ticker`` as an equity.
+
+    Filters out: news headlines reposted by spam accounts, posts that mention
+    the ticker only in passing, posts about an unrelated company sharing the
+    abbreviation, and pure promotional spam. Haiku is plenty for this binary
+    decision.
+    """
+    author = post.get("author_handle") or "unknown"
+    text = (post.get("text") or "")[:1000]
+
+    user_block = (
+        f"Decide whether a Bluesky post is genuinely about the equity "
+        f"{ticker} ({company_name}) — i.e. someone sharing a view, news, "
+        f"position, or question about the stock. Reject: posts where "
+        f"{ticker} appears only in a list/banner, posts about an unrelated "
+        f"entity that happens to share the symbol, pure promotional spam, "
+        f"and links with no substantive comment.\n\n"
+        f"POST by @{author}:\n{text}\n\n"
+        "Answer YES or NO. One word."
+    )
+
+    client = _anthropic_client()
+    resp = client.messages.create(
+        model=CLASSIFY_MODEL,
+        max_tokens=8,
+        messages=[{"role": "user", "content": user_block}],
+    )
+    raw = "".join(
+        b.text for b in resp.content if getattr(b, "type", None) == "text"
+    ).strip()
+    m = _TICKER_RELEVANCE_RE.search(raw)
+    return bool(m and m.group(0).upper() == "YES")
+
+
+def draft_equity_reply(
+    post: dict[str, Any],
+    ticker: str,
+    company_name: str,
+    num_agents: int,
+    total_agents: int,
+    pct_agents: float | None,
+    memory_block: str = "",
+) -> str:
+    """Draft a casual reply noting the swarm-consensus overlap on ``ticker``.
+
+    Returns '' to skip. The caller appends a clickable link to the consensus
+    snapshot via ``BlueskyClient.reply(link_url=...)`` — the drafter must NOT
+    embed the URL in its output (we add it as a rich-text facet so it's
+    clickable; including it as plain text would double up).
+    """
+    author = post.get("author_handle") or "unknown"
+    text = (post.get("text") or "")[:800]
+    memory_section = f"{memory_block.strip()}\n\n" if memory_block.strip() else ""
+    target = _pick_char_target()
+    # The post-processor appends a clickable link, so reserve room.
+    target = max(40, min(target, 180))
+    pct_str = (
+        f"{pct_agents:.0f}%" if isinstance(pct_agents, (int, float)) else "n/a"
+    )
+    log.info("bsky equity-reply target: %d chars (ticker=%s)", target, ticker)
+
+    user_block = (
+        f"You are scrolling Bluesky and saw a post about {ticker} "
+        f"({company_name}). You happen to know that {num_agents} of "
+        f"{total_agents} AI agents in the AlphaMolt arena are currently "
+        f"holding {ticker} — that's {pct_str} of the swarm, ranking it among "
+        f"the top consensus picks this week.\n\n"
+        f"{memory_section}"
+        f"POST by @{author}:\n{text}\n\n"
+        "WHAT MAKES A GOOD REPLY HERE:\n"
+        f"- Casually note the overlap: that the AlphaMolt AI agents agree "
+        f"  with them on {ticker}. Friendly and low-key, like you just "
+        f"  noticed it. Example tone: 'huh, the AlphaMolt agents agree with "
+        f"  you on {ticker} fwiw' or 'fyi {num_agents} of the AlphaMolt "
+        f"  trading bots are long {ticker} too'.\n"
+        "- Vary phrasing across replies — never the same opener twice.\n"
+        f"- Stay grounded in the {ticker} angle. Don't pivot to a generic "
+        f"  pitch about AlphaMolt or AI investing.\n"
+        "- DO NOT include any URL or link in your reply. The system appends "
+        "  a clickable link (\"View the AlphaMolt swarm consensus\") "
+        "  automatically after your text — if you write your own link the "
+        "  reply will have two.\n"
+        "- Statement-only is great. Most replies should NOT end with a "
+        "  question.\n"
+        "- If the post is hostile, off-topic, or you have nothing genuine "
+        "  to say beyond the overlap, return SKIP.\n\n"
+        f"## LENGTH FOR THIS REPLY (mandatory)\n"
+        f"This specific reply must be UNDER {target} characters. Aim "
+        f"shorter — the appended link eats budget. "
+        + (
+            "A phrase or fragment — 4–10 words."
+            if target < 70
+            else "One short sentence."
+            if target < 140
+            else "One or two short sentences."
+        )
+        + "\n"
+        "Plain text only, no hashtags, no emoji, no @-tags.\n\n"
+        "## Banned (auto-rejected by post-processor)\n"
+        "- 'Real question:' / 'Question:' / 'genuine question'\n"
+        "- 'what's the actual X' / 'the actual track record'\n"
         "- 'sounds good until' / 'doing heavy lifting'\n"
         "- 'X ≠ Y' two-clause aphorisms\n"
         "- Always-end-with-a-question pattern\n\n"
