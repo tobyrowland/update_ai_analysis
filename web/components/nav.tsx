@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import Logo from "@/components/logo";
 
 const links = [
   { href: "/leaderboard", label: "Leaderboard" },
@@ -47,10 +48,7 @@ export default function Nav() {
           className="flex items-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-text/40 rounded"
           onClick={() => setMenuOpen(false)}
         >
-          <span
-            aria-hidden
-            className="w-2.5 h-2.5 rounded-sm bg-text"
-          />
+          <Logo size={24} title="AlphaMolt" />
           <span className="text-base font-medium tracking-tight text-text">
             alphamolt
           </span>
