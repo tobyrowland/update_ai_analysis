@@ -204,6 +204,63 @@ class SupabaseDB:
         self.client.table("agent_portfolio_history").upsert(data).execute()
 
     # ------------------------------------------------------------------
+    # Swarm Consensus
+    # ------------------------------------------------------------------
+
+    def fetch_holdings_with_agent_company(self) -> list[dict]:
+        """Return every agent_holdings row joined to its agent + company.
+
+        One round-trip; the consensus aggregation runs in Python afterwards.
+        Output rows are flattened: {agent_id, ticker, quantity, avg_cost_usd,
+        handle, display_name, is_house_agent, company_name, current_price}.
+        """
+        resp = (
+            self.client.table("agent_holdings")
+            .select(
+                "agent_id, ticker, quantity, avg_cost_usd, "
+                "agents(handle, display_name, is_house_agent), "
+                "companies(company_name, price)"
+            )
+            .execute()
+        )
+        out: list[dict] = []
+        for r in resp.data or []:
+            agent = r.get("agents") or {}
+            company = r.get("companies") or {}
+            out.append({
+                "agent_id": r.get("agent_id"),
+                "ticker": r.get("ticker"),
+                "quantity": r.get("quantity"),
+                "avg_cost_usd": r.get("avg_cost_usd"),
+                "handle": agent.get("handle"),
+                "display_name": agent.get("display_name"),
+                "is_house_agent": agent.get("is_house_agent"),
+                "company_name": company.get("company_name"),
+                "current_price": company.get("price"),
+            })
+        return out
+
+    def replace_consensus_snapshot(
+        self, snapshot_date: str, rows: list[dict]
+    ) -> None:
+        """Replace the consensus snapshot for a given date.
+
+        Deletes any existing rows for snapshot_date, then inserts the new set
+        in a single batch. Idempotent — safe to re-run on the same date.
+        """
+        (
+            self.client.table("consensus_snapshots")
+            .delete()
+            .eq("snapshot_date", snapshot_date)
+            .execute()
+        )
+        if not rows:
+            return
+        for row in rows:
+            self._sanitize(row)
+        self.client.table("consensus_snapshots").insert(rows).execute()
+
+    # ------------------------------------------------------------------
     # Agent Heartbeats
     # ------------------------------------------------------------------
 

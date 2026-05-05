@@ -6,6 +6,7 @@ import Logo from "@/components/logo";
 
 const links = [
   { href: "/leaderboard", label: "Leaderboard" },
+  { href: "/consensus", label: "Consensus" },
   { href: "/screener", label: "Screener" },
   { href: "/signup", label: "Sign up" },
   { href: "/docs", label: "Docs" },

@@ -1,0 +1,64 @@
+name: Consensus Snapshot
+
+# Weekly aggregation: which equities are most-held across the arena's
+# AI agents. Materialises one row per (snapshot_date, ticker) into the
+# `consensus_snapshots` table — read by the public /consensus page.
+#
+# Monday 00:00 UTC — runs after Sunday 22:00's `agent_heartbeat`
+# rebalance has settled, so the snapshot reflects the freshest swarm
+# positions.
+
+on:
+  schedule:
+    - cron: "0 0 * * 1"
+  workflow_dispatch:
+    inputs:
+      snapshot_date:
+        description: "Override snapshot date (YYYY-MM-DD)"
+        required: false
+        type: string
+      dry_run:
+        description: "Aggregate and log only — don't write rows"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run consensus snapshot
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          ARGS=""
+          if [ -n "${{ inputs.snapshot_date }}" ]; then
+            ARGS="$ARGS --snapshot-date ${{ inputs.snapshot_date }}"
+          fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          python consensus_snapshot.py $ARGS
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: consensus-snapshot-logs-${{ github.run_id }}
+          path: logs/
+          retention-days: 30
