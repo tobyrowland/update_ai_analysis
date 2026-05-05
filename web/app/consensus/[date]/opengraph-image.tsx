@@ -11,13 +11,14 @@ export const size = OG_SIZE;
 export const contentType = "image/png";
 
 interface ImageProps {
-  params: { date: string };
+  params: Promise<{ date: string }>;
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export default async function Image({ params }: ImageProps) {
-  const date = DATE_RE.test(params.date) ? params.date : null;
+  const { date: rawDate } = await params;
+  const date = DATE_RE.test(rawDate) ? rawDate : null;
   let snapshot_date: string | null = null;
   let rows: Awaited<ReturnType<typeof getConsensusByDate>>["rows"] = [];
 
