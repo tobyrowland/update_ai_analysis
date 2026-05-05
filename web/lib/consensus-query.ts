@@ -52,7 +52,7 @@ export async function getLatestConsensus(): Promise<ConsensusResult> {
   if (!latest) {
     return { snapshot_date: null, rows: [] };
   }
-  const snapshot_date = (latest as { snapshot_date: string }).snapshot_date;
+  const snapshot_date = (latest as unknown as { snapshot_date: string }).snapshot_date;
 
   // Pull every row for the latest date in one query, ordered by rank.
   const { data: snapRows, error: snapErr } = await supabase
@@ -68,7 +68,7 @@ export async function getLatestConsensus(): Promise<ConsensusResult> {
   }
 
   const tickers = (snapRows ?? []).map(
-    (r) => (r as { ticker: string }).ticker,
+    (r) => (r as unknown as { ticker: string }).ticker,
   );
 
   // Bulk-fetch company_name + exchange so the page can render
@@ -82,7 +82,7 @@ export async function getLatestConsensus(): Promise<ConsensusResult> {
     if (cErr) {
       throw new Error(`companies lookup: ${cErr.message}`);
     }
-    for (const c of (companies ?? []) as {
+    for (const c of (companies ?? []) as unknown as {
       ticker: string;
       company_name: string;
       exchange: string | null;
@@ -95,7 +95,7 @@ export async function getLatestConsensus(): Promise<ConsensusResult> {
   }
 
   const rows: ConsensusRow[] = (snapRows ?? []).map((raw) => {
-    const r = raw as {
+    const r = raw as unknown as {
       rank: number;
       ticker: string;
       num_agents: number;
