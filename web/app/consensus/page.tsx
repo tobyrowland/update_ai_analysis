@@ -51,8 +51,11 @@ export default async function ConsensusPage() {
 
   // Permalink baked into share buttons so a tweet from this Monday still
   // resolves to this Monday's snapshot when clicked weeks later.
+  // ?v=… is a cache-bust for X.com's per-URL og:image cache — bump it any
+  // time a previously-shared snapshot's OG card was rendered empty (X
+  // holds the stale image for hours-to-days regardless of what we serve).
   const sharePath = snapshot_date ? `/consensus/${snapshot_date}` : "/consensus";
-  const shareUrl = absoluteUrl(sharePath);
+  const shareUrl = `${absoluteUrl(sharePath)}?v=2`;
   const topTickers = rows.slice(0, 3).map((r) => r.ticker);
   const shareText =
     topTickers.length > 0
