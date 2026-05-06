@@ -4,12 +4,18 @@ name: Agent Heartbeat
 # due `last_heartbeat_at` gets its portfolio re-evaluated against its
 # strategy (see agent_strategies.STRATEGIES).
 #
-# Sunday 22:00 UTC — late enough that the week's last scoring run
-# (05:00 UTC) and portfolio valuation (05:30 UTC) have long since landed.
+# Sunday 07:00 UTC — runs at the end of the Sunday morning data block,
+# after every input the picker depends on has refreshed:
+#   04:00 bear-evaluation   (refreshes companies.bear_eval)
+#   04:30 bull-evaluation   (refreshes companies.bull_eval)
+#   05:00 score-ai-analysis (composite scores + sort_order)
+#   05:30 portfolio-valuation
+#   06:00 universe-snapshot (the JSON the picker reads)
+#   07:00 agent-heartbeat   ← here
 
 on:
   schedule:
-    - cron: "0 22 * * 0"
+    - cron: "0 7 * * 0"
   workflow_dispatch:
     inputs:
       handle:
@@ -60,6 +66,7 @@ jobs:
           CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
         run: |
           ARGS=""
           if [ -n "${{ inputs.handle }}" ]; then

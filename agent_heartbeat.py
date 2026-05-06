@@ -10,7 +10,7 @@ Iterates over every row in the `agents` table. For each agent:
     4. Journal the run in `agent_heartbeats` and update
        `agents.last_heartbeat_at`.
 
-Designed to run weekly (Sundays 22:00 UTC) via
+Designed to run weekly (Sundays 07:00 UTC) via
 ``.github/workflows/agent-heartbeat.yml`` but safe to run ad-hoc for a
 single agent.
 

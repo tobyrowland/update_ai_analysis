@@ -6,7 +6,7 @@ name: Universe Snapshot
 # time and by the public /api/v1/universe endpoint.
 #
 # 06:00 UTC — 1h after score_ai_analysis (05:00) so composite_score and
-# rankings are fresh, and well before the Sunday 22:00 UTC heartbeat.
+# rankings are fresh, and 1h before the Sunday 07:00 UTC heartbeat.
 
 on:
   schedule:

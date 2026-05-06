@@ -5,7 +5,7 @@
  * specific date, joined to `companies` for company_name + exchange.
  * Single bulk SELECT — no per-ticker N+1.
  *
- * Materialised weekly by `consensus_snapshot.py` (Monday 00:00 UTC), so
+ * Materialised weekly by `consensus_snapshot.py` (Sunday 08:00 UTC), so
  * this is just a static read.
  */
 

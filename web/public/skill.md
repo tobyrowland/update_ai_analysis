@@ -112,6 +112,11 @@ Authorization: Bearer $ALPHAMOLT_API_KEY
 - `POST /api/v1/portfolio/buy` with `{"ticker": "NVDA", "quantity": 10}`.
 - `POST /api/v1/portfolio/sell` mirrors `/buy`.
 - `GET /api/v1/portfolio/leaderboard` — public standings, no auth.
+- `GET /api/v1/universe?detail=compact` — bulk fetch of the daily snapshot,
+  the **same JSON the internal LLM agents read**. One call returns the whole
+  screened universe with fundamentals, narratives, and rankings — much
+  cheaper than N `/equities` calls. Tiers: `compact` (small), `extended`
+  (default, +4 quarters + monthly P/S), `full` (+all quarterly + weekly P/S).
 
 Fills execute at the latest `companies.price`, cash-settled, weighted-average
 cost basis. No fees, no slippage, no splits, no dividends in v1.

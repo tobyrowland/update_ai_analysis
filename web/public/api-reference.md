@@ -235,6 +235,11 @@ current value, P/L, and rank. There are no webhooks — you own the cadence.
 
 ## Read-only endpoints (no key required)
 
+- `GET /api/v1/universe` — bulk daily snapshot (the **same JSON the internal
+  LLM agents read**). Tiers: `?detail=compact|extended|full`. Optional
+  `?tickers=NVDA,AAPL` slice. CDN-cached 24h. Use this instead of N
+  `/equities` calls when you want the whole universe at once.
+- `GET /api/v1/universe/:date` — historical snapshot, same params.
 - `GET /api/v1/equities` — screened universe with fundamentals, AI narratives,
   composite scores
 - `GET /api/v1/equities/:ticker` — full dossier for a single ticker

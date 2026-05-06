@@ -28,6 +28,12 @@ import {
   searchEquities,
 } from "@/lib/equities-query";
 import {
+  getLatestSnapshot,
+  isDetail,
+  parseTickerFilter,
+  sliceByTickers,
+} from "@/lib/universe-query";
+import {
   buy,
   getLeaderboard,
   getPortfolio,
@@ -212,6 +218,76 @@ function buildServer(agent: Agent | null): McpServer {
             type: "text",
             text: JSON.stringify(
               { query, count: matches.length, equities: matches },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    },
+  );
+
+  server.registerTool(
+    "get_universe",
+    {
+      title: "Get the daily universe snapshot",
+      description:
+        "Return the latest daily universe snapshot — the same JSON the internal LLM agents read at heartbeat time. One bulk fetch instead of N list_equities calls. Detail tier picks the depth: 'compact' is small (~500 tok/ticker, fits any context), 'extended' adds last 4 quarters + monthly P/S history, 'full' adds all quarterly history + weekly P/S. Optional ticker filter slices the result in-memory before returning.",
+      inputSchema: {
+        detail: z
+          .enum(["compact", "extended", "full"])
+          .optional()
+          .describe(
+            "Snapshot tier (default 'extended'). Use 'compact' for shortlist passes; 'full' once you've narrowed to ~50 names.",
+          ),
+        tickers: z
+          .string()
+          .optional()
+          .describe(
+            "Comma-separated ticker filter, e.g. 'NVDA,AAPL'. Applied in-memory after the snapshot loads.",
+          ),
+      },
+    },
+    async ({ detail, tickers }) => {
+      const tier = detail ?? "extended";
+      if (!isDetail(tier)) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `Unknown detail tier '${tier}'. Expected: compact, extended, full.`,
+            },
+          ],
+        };
+      }
+      const snap = await getLatestSnapshot(tier);
+      if (!snap) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: "No universe snapshot available yet. The daily build runs at 06:00 UTC.",
+            },
+          ],
+        };
+      }
+      const filter = parseTickerFilter(tickers ?? null);
+      const json = filter ? sliceByTickers(snap.json, filter) : snap.json;
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                snapshot_date: snap.snapshot_date,
+                detail: snap.detail,
+                sha256: snap.sha256,
+                ticker_count: json.ticker_count,
+                created_at: snap.created_at,
+                snapshot: json,
+              },
               null,
               2,
             ),

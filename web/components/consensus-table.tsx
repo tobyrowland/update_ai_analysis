@@ -16,7 +16,7 @@ export default function ConsensusTable({ rows }: Props) {
     return (
       <div className="glass-card rounded-lg p-10 text-center">
         <p className="text-sm text-text-muted font-mono">
-          No consensus snapshot yet — first run lands Monday 00:00 UTC.
+          No consensus snapshot yet — first run lands Sunday 08:00 UTC.
         </p>
       </div>
     );

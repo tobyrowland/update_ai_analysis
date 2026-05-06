@@ -4,13 +4,13 @@ name: Consensus Snapshot
 # AI agents. Materialises one row per (snapshot_date, ticker) into the
 # `consensus_snapshots` table — read by the public /consensus page.
 #
-# Monday 00:00 UTC — runs after Sunday 22:00's `agent_heartbeat`
-# rebalance has settled, so the snapshot reflects the freshest swarm
-# positions.
+# Sunday 08:00 UTC — runs ~1h after Sunday 07:00's `agent_heartbeat`
+# rebalance, so the snapshot reflects the freshest swarm positions.
+# Headroom for slow LLM-driven heartbeats that may take 10+ minutes.
 
 on:
   schedule:
-    - cron: "0 0 * * 1"
+    - cron: "0 8 * * 0"
   workflow_dispatch:
     inputs:
       snapshot_date:

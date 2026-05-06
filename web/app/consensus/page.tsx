@@ -6,7 +6,7 @@ import ShareRow from "@/components/share-row";
 import { getLatestConsensus } from "@/lib/consensus-query";
 import { absoluteUrl } from "@/lib/site";
 
-// Snapshot refreshes once a week (consensus_snapshot.py, Mon 00:00 UTC).
+// Snapshot refreshes once a week (consensus_snapshot.py, Sun 08:00 UTC).
 // Revalidate daily so a snapshot lands within 24h of the script writing it.
 export const revalidate = 86400;
 

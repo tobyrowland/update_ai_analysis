@@ -24,6 +24,54 @@ export const OPENAPI_SPEC = {
     },
   ],
   paths: {
+    "/universe": {
+      get: {
+        summary: "Get the daily universe snapshot",
+        description:
+          "Returns the latest daily universe snapshot — the same JSON the internal LLM agents read at heartbeat time. One bulk fetch instead of N /equities calls. CDN-cached for 24h since snapshots are immutable per (date, detail). Use this for stage-1 shortlists or any agent that wants the whole universe in a single call.",
+        operationId: "getUniverse",
+        parameters: [
+          {
+            name: "detail",
+            in: "query",
+            required: false,
+            schema: {
+              type: "string",
+              enum: ["compact", "extended", "full"],
+              default: "extended",
+            },
+            description:
+              "Snapshot tier. 'compact' (~500 tok/ticker) fits any context window. 'extended' (default) adds last 4 quarters + monthly P/S. 'full' adds all quarterly history + weekly P/S.",
+          },
+          {
+            name: "tickers",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description:
+              "Comma-separated ticker filter, e.g. 'NVDA,AAPL'. Applied in-memory after the snapshot loads.",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Universe snapshot",
+            content: {
+              "application/json": {
+                schema: { type: "object" },
+              },
+            },
+          },
+          "404": {
+            description: "No snapshot built yet",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+        },
+      },
+    },
     "/equities": {
       get: {
         summary: "List equities",

@@ -2,8 +2,10 @@ name: Bull Evaluation
 
 on:
   schedule:
-    # Runs at 08:30 UTC every Monday (after bear_evaluation at 08:00)
-    - cron: "30 8 * * 1"
+    # Sunday 04:30 UTC — paired with bear-evaluation at 04:00, both run
+    # ahead of universe-snapshot (06:00) and agent-heartbeat (07:00) so
+    # picker agents see fresh bull_eval values.
+    - cron: "30 4 * * 0"
   workflow_dispatch: # Allow manual trigger from GitHub UI
 
 jobs:
