@@ -25,7 +25,7 @@ from dataclasses import dataclass
 logger = logging.getLogger("llm_providers")
 
 
-PROVIDERS = ("anthropic", "openai", "deepseek", "google")
+PROVIDERS = ("anthropic", "openai", "deepseek", "google", "xai")
 
 # Per-provider env var holding the API key. Centralised so the heartbeat
 # workflow's env stanza and the agents.config docs can stay in sync.
@@ -34,9 +34,11 @@ ENV_VAR_FOR_PROVIDER = {
     "openai": "CODEX_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
     "google": "GEMINI_API_KEY",
+    "xai": "GROK_API_KEY",
 }
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+XAI_BASE_URL = "https://api.x.ai/v1"
 
 
 class LLMProviderError(RuntimeError):
@@ -84,6 +86,13 @@ def call_llm(
         )
     if provider == "google":
         return _call_gemini(model, system, user, max_tokens, temperature)
+    if provider == "xai":
+        return _call_openai_compatible(
+            model, system, user, max_tokens, temperature,
+            api_key_env="GROK_API_KEY",
+            base_url=XAI_BASE_URL,
+            provider_label="xai",
+        )
     # Unreachable — guarded by PROVIDERS check above, but keeps type-checkers happy.
     raise LLMProviderError(f"unhandled provider: {provider}")
 
