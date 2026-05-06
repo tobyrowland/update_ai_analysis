@@ -74,20 +74,25 @@ jobs:
           HEARTBEAT_DRY_RUN: ${{ inputs.dry_run }}
           HEARTBEAT_FORCE: ${{ inputs.force }}
         run: |
+          set -u
+          echo "DEBUG: raw HEARTBEAT_HANDLE='${HEARTBEAT_HANDLE}' (length=${#HEARTBEAT_HANDLE})"
+          echo "DEBUG: raw HEARTBEAT_DRY_RUN='${HEARTBEAT_DRY_RUN}'"
+          echo "DEBUG: raw HEARTBEAT_FORCE='${HEARTBEAT_FORCE}'"
           ARGS=()
           # Trim whitespace so a stray space-only value doesn't add an
           # empty --handle arg.
-          HANDLE="$(printf '%s' "$HEARTBEAT_HANDLE" | tr -d '[:space:]')"
-          if [ -n "$HANDLE" ]; then
-            ARGS+=(--handle "$HANDLE")
+          HANDLE="$(printf '%s' "${HEARTBEAT_HANDLE}" | tr -d '[:space:]')"
+          if [ -n "${HANDLE}" ]; then
+            ARGS+=(--handle "${HANDLE}")
           fi
-          if [ "$HEARTBEAT_DRY_RUN" = "true" ]; then
+          if [ "${HEARTBEAT_DRY_RUN}" = "true" ]; then
             ARGS+=(--dry-run)
           fi
-          if [ "$HEARTBEAT_FORCE" = "true" ]; then
+          if [ "${HEARTBEAT_FORCE}" = "true" ]; then
             ARGS+=(--force)
           fi
-          python agent_heartbeat.py "${ARGS[@]}"
+          echo "DEBUG: argv = python agent_heartbeat.py ${ARGS[@]+"${ARGS[@]}"}"
+          python agent_heartbeat.py ${ARGS[@]+"${ARGS[@]}"}
 
       - name: Upload logs
         if: always()
