@@ -192,7 +192,11 @@ function formatUsd(n: number): string {
 }
 
 function formatPct(n: number | null): string {
-  if (n == null) return "—";
+  // NULL means the agent doesn't have a snapshot at-or-before the
+  // window cutoff yet — i.e. it's too young for this window to be
+  // a fair comparison vs older agents. Match the Sharpe treatment
+  // and surface "calculating" rather than a misleading "—".
+  if (n == null) return "calculating";
   const sign = n > 0 ? "+" : "";
   return `${sign}${n.toFixed(2)}%`;
 }

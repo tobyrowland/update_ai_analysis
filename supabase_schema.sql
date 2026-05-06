@@ -481,13 +481,6 @@ WITH latest AS (
     FROM agent_portfolio_history
     ORDER BY agent_id, snapshot_date DESC
 ),
-first_snapshot AS (
-    SELECT DISTINCT ON (agent_id)
-        agent_id,
-        total_value_usd AS value_anchor
-    FROM agent_portfolio_history
-    ORDER BY agent_id, snapshot_date ASC
-),
 one_day_ago AS (
     SELECT DISTINCT ON (agent_id)
         agent_id,
@@ -505,12 +498,16 @@ thirty_days_ago AS (
     ORDER BY agent_id, snapshot_date DESC
 ),
 year_start AS (
+    -- YTD anchor: the snapshot AT-OR-BEFORE Jan 1 (i.e. agent existed
+    -- before the year started). Agents born mid-year produce NULL here
+    -- so the column reads "calculating" rather than relabelling
+    -- since-inception P&L as "YTD".
     SELECT DISTINCT ON (agent_id)
         agent_id,
         total_value_usd AS value_anchor
     FROM agent_portfolio_history
-    WHERE snapshot_date >= DATE_TRUNC('year', CURRENT_DATE)::DATE
-    ORDER BY agent_id, snapshot_date ASC
+    WHERE snapshot_date < DATE_TRUNC('year', CURRENT_DATE)::DATE
+    ORDER BY agent_id, snapshot_date DESC
 ),
 one_year_ago AS (
     SELECT DISTINCT ON (agent_id)
@@ -551,29 +548,30 @@ SELECT
     l.pnl_usd,
     l.pnl_pct,
     l.num_positions,
+    -- Period returns return NULL ("calculating") when the agent has no
+    -- snapshot at-or-before the cutoff. No since-inception fallback —
+    -- otherwise a 14-day-old agent's "30d" cell would be its 14-day
+    -- return and ranks across windows would be incomparable. The
+    -- all-time pnl_pct stays where since-inception lives.
     CASE
-        WHEN COALESCE(t1d.value_anchor, tfirst.value_anchor) IS NULL
-          OR COALESCE(t1d.value_anchor, tfirst.value_anchor) = 0 THEN NULL
-        ELSE ROUND(((l.total_value_usd - COALESCE(t1d.value_anchor, tfirst.value_anchor))
-                    / COALESCE(t1d.value_anchor, tfirst.value_anchor)) * 100, 4)
+        WHEN t1d.value_anchor IS NULL OR t1d.value_anchor = 0 THEN NULL
+        ELSE ROUND(((l.total_value_usd - t1d.value_anchor)
+                    / t1d.value_anchor) * 100, 4)
     END AS pnl_pct_1d,
     CASE
-        WHEN COALESCE(t30.value_anchor, tfirst.value_anchor) IS NULL
-          OR COALESCE(t30.value_anchor, tfirst.value_anchor) = 0 THEN NULL
-        ELSE ROUND(((l.total_value_usd - COALESCE(t30.value_anchor, tfirst.value_anchor))
-                    / COALESCE(t30.value_anchor, tfirst.value_anchor)) * 100, 4)
+        WHEN t30.value_anchor IS NULL OR t30.value_anchor = 0 THEN NULL
+        ELSE ROUND(((l.total_value_usd - t30.value_anchor)
+                    / t30.value_anchor) * 100, 4)
     END AS pnl_pct_30d,
     CASE
-        WHEN COALESCE(tytd.value_anchor, tfirst.value_anchor) IS NULL
-          OR COALESCE(tytd.value_anchor, tfirst.value_anchor) = 0 THEN NULL
-        ELSE ROUND(((l.total_value_usd - COALESCE(tytd.value_anchor, tfirst.value_anchor))
-                    / COALESCE(tytd.value_anchor, tfirst.value_anchor)) * 100, 4)
+        WHEN tytd.value_anchor IS NULL OR tytd.value_anchor = 0 THEN NULL
+        ELSE ROUND(((l.total_value_usd - tytd.value_anchor)
+                    / tytd.value_anchor) * 100, 4)
     END AS pnl_pct_ytd,
     CASE
-        WHEN COALESCE(t1y.value_anchor, tfirst.value_anchor) IS NULL
-          OR COALESCE(t1y.value_anchor, tfirst.value_anchor) = 0 THEN NULL
-        ELSE ROUND(((l.total_value_usd - COALESCE(t1y.value_anchor, tfirst.value_anchor))
-                    / COALESCE(t1y.value_anchor, tfirst.value_anchor)) * 100, 4)
+        WHEN t1y.value_anchor IS NULL OR t1y.value_anchor = 0 THEN NULL
+        ELSE ROUND(((l.total_value_usd - t1y.value_anchor)
+                    / t1y.value_anchor) * 100, 4)
     END AS pnl_pct_1yr,
     -- Since-inception Sharpe with 5% annual rf. Min 30 weekday returns.
     CASE
@@ -585,7 +583,6 @@ SELECT
     COALESCE(s.n_returns, 0)::int AS sharpe_n_returns
 FROM latest l
 JOIN agents a ON a.id = l.agent_id
-LEFT JOIN first_snapshot  tfirst ON tfirst.agent_id = l.agent_id
 LEFT JOIN one_day_ago     t1d    ON t1d.agent_id    = l.agent_id
 LEFT JOIN thirty_days_ago t30    ON t30.agent_id    = l.agent_id
 LEFT JOIN year_start      tytd   ON tytd.agent_id   = l.agent_id
