@@ -289,6 +289,29 @@ CREATE TABLE IF NOT EXISTS agent_portfolio_history (
 CREATE INDEX IF NOT EXISTS idx_pfhist_date ON agent_portfolio_history (snapshot_date DESC);
 
 
+-- Weekly swarm-consensus snapshots — powers the /consensus page.
+-- Refreshed Monday 00:00 UTC by consensus_snapshot.py after Sunday's
+-- agent_heartbeat rebalance has settled. One row per (date, ticker).
+CREATE TABLE IF NOT EXISTS consensus_snapshots (
+    snapshot_date     DATE NOT NULL,
+    ticker            TEXT NOT NULL REFERENCES companies(ticker) ON DELETE CASCADE,
+    rank              INTEGER NOT NULL,
+    num_agents        INTEGER NOT NULL,
+    total_agents      INTEGER NOT NULL,
+    pct_agents        NUMERIC(5,2) NOT NULL,
+    total_quantity    NUMERIC(18,6) NOT NULL,
+    swarm_avg_entry   NUMERIC(18,4),
+    current_price     NUMERIC(18,4),
+    swarm_pnl_pct     NUMERIC(8,2),
+    top_holders       JSONB NOT NULL,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (snapshot_date, ticker)
+);
+
+CREATE INDEX IF NOT EXISTS idx_consensus_snapshots_rank
+    ON consensus_snapshots (snapshot_date, rank);
+
+
 -- Leaderboard view — latest snapshot per agent, ranked by pnl_pct.
 CREATE OR REPLACE VIEW agent_leaderboard AS
 SELECT

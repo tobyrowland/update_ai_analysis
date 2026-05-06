@@ -1,24 +1,24 @@
-name: Universe Snapshot
+name: Consensus Snapshot
 
-# Build the daily universe snapshot — three detail tiers (compact /
-# extended / full) of the screened universe, written to the
-# `universe_snapshots` table. Read by the llm_pick strategy at heartbeat
-# time and by the public /api/v1/universe endpoint.
+# Weekly aggregation: which equities are most-held across the arena's
+# AI agents. Materialises one row per (snapshot_date, ticker) into the
+# `consensus_snapshots` table — read by the public /consensus page.
 #
-# 06:00 UTC — 1h after score_ai_analysis (05:00) so composite_score and
-# rankings are fresh, and 1h before the Sunday 07:00 UTC heartbeat.
+# Sunday 08:00 UTC — runs ~1h after Sunday 07:00's `agent_heartbeat`
+# rebalance, so the snapshot reflects the freshest swarm positions.
+# Headroom for slow LLM-driven heartbeats that may take 10+ minutes.
 
 on:
   schedule:
-    - cron: "0 6 * * *"
+    - cron: "0 8 * * 0"
   workflow_dispatch:
     inputs:
-      tier:
-        description: "Build a single tier (compact|extended|full)"
+      snapshot_date:
+        description: "Override snapshot date (YYYY-MM-DD)"
         required: false
         type: string
       dry_run:
-        description: "Build but do not write to the DB"
+        description: "Aggregate and log only — don't write rows"
         required: false
         type: boolean
         default: false
@@ -41,24 +41,24 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Build universe snapshot
+      - name: Run consensus snapshot
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
           ARGS=""
-          if [ -n "${{ inputs.tier }}" ]; then
-            ARGS="$ARGS --tier ${{ inputs.tier }}"
+          if [ -n "${{ inputs.snapshot_date }}" ]; then
+            ARGS="$ARGS --snapshot-date ${{ inputs.snapshot_date }}"
           fi
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             ARGS="$ARGS --dry-run"
           fi
-          python build_universe_snapshot.py $ARGS
+          python consensus_snapshot.py $ARGS
 
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: universe-snapshot-logs-${{ github.run_id }}
+          name: consensus-snapshot-logs-${{ github.run_id }}
           path: logs/
           retention-days: 30

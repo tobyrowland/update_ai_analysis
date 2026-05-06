@@ -204,6 +204,108 @@ class SupabaseDB:
         self.client.table("agent_portfolio_history").upsert(data).execute()
 
     # ------------------------------------------------------------------
+    # Swarm Consensus
+    # ------------------------------------------------------------------
+
+    def fetch_holdings_with_agent_company(self) -> list[dict]:
+        """Return every agent_holdings row joined to its agent + company.
+
+        One round-trip; the consensus aggregation runs in Python afterwards.
+        Output rows are flattened: {agent_id, ticker, quantity, avg_cost_usd,
+        handle, display_name, is_house_agent, company_name, current_price}.
+        """
+        resp = (
+            self.client.table("agent_holdings")
+            .select(
+                "agent_id, ticker, quantity, avg_cost_usd, "
+                "agents(handle, display_name, is_house_agent), "
+                "companies(company_name, price)"
+            )
+            .execute()
+        )
+        out: list[dict] = []
+        for r in resp.data or []:
+            agent = r.get("agents") or {}
+            company = r.get("companies") or {}
+            out.append({
+                "agent_id": r.get("agent_id"),
+                "ticker": r.get("ticker"),
+                "quantity": r.get("quantity"),
+                "avg_cost_usd": r.get("avg_cost_usd"),
+                "handle": agent.get("handle"),
+                "display_name": agent.get("display_name"),
+                "is_house_agent": agent.get("is_house_agent"),
+                "company_name": company.get("company_name"),
+                "current_price": company.get("price"),
+            })
+        return out
+
+    def get_latest_consensus_top_tickers(
+        self, limit: int = 5
+    ) -> tuple[list[dict], str | None]:
+        """Return the highest-conviction tickers from the latest snapshot.
+
+        Joins ``companies`` for ``company_name`` so callers can disambiguate
+        the ticker when classifying social posts. Used by the Bluesky
+        heartbeat's equity-targeting phase.
+        """
+        latest = (
+            self.client.table("consensus_snapshots")
+            .select("snapshot_date")
+            .order("snapshot_date", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if not latest.data:
+            return [], None
+        snapshot_date = latest.data[0]["snapshot_date"]
+
+        resp = (
+            self.client.table("consensus_snapshots")
+            .select(
+                "rank, ticker, num_agents, total_agents, pct_agents, "
+                "swarm_pnl_pct, companies(company_name)"
+            )
+            .eq("snapshot_date", snapshot_date)
+            .order("rank", desc=False)
+            .limit(limit)
+            .execute()
+        )
+        rows: list[dict] = []
+        for r in resp.data or []:
+            company = r.get("companies") or {}
+            rows.append({
+                "rank": r.get("rank"),
+                "ticker": r.get("ticker"),
+                "company_name": company.get("company_name") or r.get("ticker"),
+                "num_agents": r.get("num_agents"),
+                "total_agents": r.get("total_agents"),
+                "pct_agents": r.get("pct_agents"),
+                "swarm_pnl_pct": r.get("swarm_pnl_pct"),
+            })
+        return rows, snapshot_date
+
+    def replace_consensus_snapshot(
+        self, snapshot_date: str, rows: list[dict]
+    ) -> None:
+        """Replace the consensus snapshot for a given date.
+
+        Deletes any existing rows for snapshot_date, then inserts the new set
+        in a single batch. Idempotent — safe to re-run on the same date.
+        """
+        (
+            self.client.table("consensus_snapshots")
+            .delete()
+            .eq("snapshot_date", snapshot_date)
+            .execute()
+        )
+        if not rows:
+            return
+        for row in rows:
+            self._sanitize(row)
+        self.client.table("consensus_snapshots").insert(rows).execute()
+
+    # ------------------------------------------------------------------
     # Agent Heartbeats
     # ------------------------------------------------------------------
 
