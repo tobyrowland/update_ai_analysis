@@ -91,9 +91,9 @@ def _screen_markets(markets: list[str], spy_perf_y: float, logger) -> list[dict]
             .set_markets(*markets)
             .select(*TV_SELECT_FIELDS)
             .where(
-                col("market_cap_basic").between(2_000_000_000, 500_000_000_000),
+                col("market_cap_basic").between(500_000_000, 500_000_000_000),
                 col("gross_profit_margin_fy") > 25,
-                col("total_revenue_yoy_growth_ttm").between(10, 500),
+                col("total_revenue_yoy_growth_ttm").between(0, 500),
                 col("total_revenue_ttm") > 100_000_000,
                 col("price_revenue_ttm") < 15,
                 col("recommendation_mark") <= 2.5,
