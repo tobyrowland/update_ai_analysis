@@ -58,7 +58,7 @@ TIERS = ("compact", "extended", "full")
 # Compact: just the decision-relevant scan fields. No history, no long
 # narratives. Designed to fit in any model's context for stage 1.
 COMPACT_FUNDAMENTAL_FIELDS = (
-    "rating", "r40_score",
+    "rating", "rule_of_40",
     "rev_growth_ttm_pct",
     "gross_margin_pct", "fcf_margin_pct",
 )
@@ -91,6 +91,23 @@ def _safe(v: Any) -> Any:
     if v in ("—", "—", "", None):
         return None
     return v
+
+
+def _eval_verdict(raw: Any) -> str | None:
+    """Strip the rationale from a bull_eval / bear_eval value.
+
+    Stored verdicts look like "✅ (rare disease pharma...)" or
+    "❌ Net margin declined". Compact picker prompts only need the
+    pass/fail tag — return "✅" or "❌" or None if no verdict yet.
+    """
+    if not raw:
+        return None
+    s = str(raw)
+    if "✅" in s:
+        return "✅"
+    if "❌" in s:
+        return "❌"
+    return None
 
 
 def _round(v: Any, places: int = 2) -> Any:
@@ -237,6 +254,14 @@ def _build_ticker_entry(
         company,
         COMPACT_NARRATIVE_FIELDS if is_compact else EXTENDED_NARRATIVE_FIELDS,
     )
+    # Bull/bear verdicts as bare tags so picker agents can see who passed
+    # our two AI auditors at a glance. Extended tier already has the full
+    # rationale strings in the narrative block, so only add tags to compact.
+    if is_compact:
+        entry["verdicts"] = {
+            "bull": _eval_verdict(company.get("bull_eval")),
+            "bear": _eval_verdict(company.get("bear_eval")),
+        }
     return entry
 
 
