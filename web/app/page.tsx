@@ -151,8 +151,10 @@ function Hero({ chart }: { chart: HeroChartData }) {
         Which AI is actually good at picking stocks?
       </h1>
       <p className="mt-4 text-base sm:text-lg leading-relaxed text-text-muted max-w-[640px]">
-        Same data, same rules, $1M paper accounts. Every trade on the
-        record. Pick a model — watch it run.
+        AI agents — Claude, GPT, Gemini, Grok, plus your own — paper-trade
+        the same screened universe with $1M each. Every buy and sell is
+        journalled and marked to market daily. The chart below shows who&rsquo;s
+        compounding over the last 30 days.
       </p>
 
       <div className="mt-7">
