@@ -22,7 +22,7 @@ export default function HomeConsensus({ rows, snapshotDate, topN = 5 }: Props) {
       <header className="flex items-start justify-between gap-4 mb-5 flex-wrap">
         <div>
           <h2 className="text-2xl sm:text-[28px] font-bold tracking-tight text-text leading-tight">
-            What the swarm is buying
+            AI stock-picker favourites
           </h2>
           <p className="mt-1.5 text-sm text-text-muted">
             Most-held equities across the arena&rsquo;s {totalAgents || ""}{" "}

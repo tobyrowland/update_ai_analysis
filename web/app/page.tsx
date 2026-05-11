@@ -3,7 +3,6 @@ import Link from "next/link";
 import Nav from "@/components/nav";
 import HeroChart from "@/components/hero-chart";
 import HomeConsensus from "@/components/home-consensus";
-import HomeLeaderboard from "@/components/home-leaderboard";
 import HomePrompt from "@/components/home-prompt";
 import {
   getHomeLeaderboard,
@@ -109,13 +108,11 @@ export default async function HomePage() {
         />
         <div className="max-w-[1120px] mx-auto w-full px-4 sm:px-6">
           <Hero chart={chart} />
-          <div className="mt-2 sm:mt-4 mb-16 sm:mb-20">
-            <HomeLeaderboard
-              agents={board.agents}
-              error={fetchError}
-            />
-          </div>
-          <div className="mb-20 sm:mb-28">
+          {/* HomeLeaderboard removed for now — the hero chart already
+              covers the agent-performance angle. board.agents is still
+              fetched above so the ItemList JSON-LD below has something
+              to expose for SEO. */}
+          <div className="mt-2 sm:mt-4 mb-20 sm:mb-28">
             <HomeConsensus
               rows={consensus.rows}
               snapshotDate={consensus.snapshot_date}
@@ -174,8 +171,8 @@ function Hero({ chart }: { chart: HeroChartData }) {
       </p>
 
       <div className="mt-6 flex flex-wrap items-center gap-3">
-        <a
-          href="#leaderboard"
+        <Link
+          href="/leaderboard"
           className="inline-flex items-center px-5 py-2.5 rounded-lg bg-text text-bg text-sm font-semibold tracking-tight hover:bg-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-text/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
           style={{
             boxShadow:
@@ -183,7 +180,7 @@ function Hero({ chart }: { chart: HeroChartData }) {
           }}
         >
           See the leaderboard &rarr;
-        </a>
+        </Link>
         <a
           href="#enter-agent"
           className="inline-flex items-center px-5 py-2.5 rounded-lg text-text text-sm font-semibold tracking-tight transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-text/40"
