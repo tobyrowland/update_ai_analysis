@@ -280,7 +280,9 @@ export default async function CompanyPage({
           swarmLine={swarmLine}
         />
 
-        <ConsensusBriefSection
+        <KillerMetricCallout company={company} />
+
+        <DebateSection
           ticker={company.ticker}
           companyName={company.company_name}
           consensus={consensus}
@@ -288,6 +290,15 @@ export default async function CompanyPage({
           totalAgents={swarm.total_agents}
           bullRationale={bullRationale}
           bearRationale={bearRationale}
+        />
+
+        {povs.length > 0 && (
+          <ConsensusSplitBlock buckets={buckets} ticker={company.ticker} />
+        )}
+
+        <WhyRanksChart
+          ticker={company.ticker}
+          company={company}
         />
 
         {povs.length > 0 && (
@@ -498,11 +509,26 @@ function HeroSection({
       </p>
 
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 sm:gap-6">
-        <HeroStat
-          label="Current price"
-          value={formatPrice(company.price)}
-          accent="text"
-        />
+        <div>
+          <p className="text-[10px] uppercase tracking-wider text-text-muted font-mono mb-1">
+            Current price
+          </p>
+          <p className="font-mono text-base sm:text-lg font-bold text-text">
+            {formatPrice(company.price)}
+          </p>
+          {/* Freshness sits directly under the price (not in a separate
+              tile) so readers know at a glance that this isn't a tick
+              quote. Phrasing is "latest daily refresh" — intentional,
+              not apologetic. */}
+          <p className="text-[10px] font-mono text-text-muted mt-1 leading-tight">
+            Latest daily refresh
+            {company.scored_at
+              ? ` · ${company.scored_at}`
+              : ""}
+            <br />
+            <span>Not a live quote</span>
+          </p>
+        </div>
         <HeroStat
           label="Agents holding"
           value={`${swarm.num_agents} / ${swarm.total_agents}`}
@@ -519,9 +545,9 @@ function HeroSection({
           accent="text"
         />
         <HeroStat
-          label="Last updated"
-          value={company.scored_at ?? company.data_updated_at ?? "—"}
-          accent="muted"
+          label="Score"
+          value={formatNumber(company.composite_score, { decimals: 0 })}
+          accent="text"
         />
       </div>
 
@@ -596,10 +622,12 @@ function HeroStat({
 }
 
 // ---------------------------------------------------------------------------
-// AI Consensus Brief
+// The TICKER Debate (renamed from "AI Consensus Brief" — editorial,
+// not dashboard. Section now frames the page as a debate up top with
+// the same Bull / Bear / What-changed cards below.)
 // ---------------------------------------------------------------------------
 
-function ConsensusBriefSection({
+function DebateSection({
   ticker,
   companyName,
   consensus,
@@ -630,14 +658,21 @@ function ConsensusBriefSection({
         : "#FFD700";
   const name = companyName ?? ticker;
 
-  // Above-fold SEO intro. Composes naturally even when bull/bear
-  // rationales are missing — empty fragments just disappear.
+  // Lead with one sentence framing the actual disagreement, then the
+  // longer SEO-intro paragraph, then the three cards. Order is:
+  // hook → context → drill-down.
   return (
     <section className="mb-6">
       <h2 className="text-xs font-mono uppercase tracking-wider text-text-muted mb-2">
-        What AI Agents Think About {ticker}
+        The {ticker} Debate
       </h2>
       <div className="glass-card rounded-lg p-4 sm:p-5">
+        {bullRationale && bearRationale && (
+          <p className="text-base sm:text-lg font-bold text-text leading-snug mb-3">
+            The {ticker} debate is {lowerSentence(bullRationale)} vs{" "}
+            {lowerSentence(bearRationale)}.
+          </p>
+        )}
         <p className="text-sm sm:text-base text-text-dim leading-relaxed">
           {ticker} stock is currently rated{" "}
           <span className="font-bold" style={{ color: verdictColor }}>
@@ -737,6 +772,321 @@ function AgentPovGrid({
       </div>
     </section>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Killer Metric callout — pick the single most-impressive number and
+// dramatise it above the fold. "The core reason agents are bullish."
+// Order of preference matches the user's "what's most worth shouting
+// about" instinct: Rule of 40 → FCF margin → revenue growth →
+// composite score. Falls back gracefully when nothing crosses a
+// threshold.
+// ---------------------------------------------------------------------------
+
+function KillerMetricCallout({ company }: { company: Company }) {
+  const callout = pickKillerMetric(company);
+  if (!callout) return null;
+  return (
+    <section className="mb-6">
+      <div
+        className="rounded-xl p-5 sm:p-6 flex flex-col sm:flex-row sm:items-baseline gap-3 sm:gap-6"
+        style={{
+          background:
+            "linear-gradient(135deg, rgba(0,255,65,0.10) 0%, rgba(0,30,15,0.4) 100%)",
+          border: "1px solid rgba(0,255,65,0.22)",
+        }}
+      >
+        <p
+          className="font-mono font-bold leading-none text-3xl sm:text-5xl"
+          style={{ color: "#00FF41" }}
+        >
+          {callout.value}
+        </p>
+        <div className="min-w-0">
+          <p className="text-[10px] font-mono uppercase tracking-wider text-text-muted mb-1">
+            {callout.label}
+          </p>
+          <p className="text-sm sm:text-base text-text-dim leading-snug">
+            {callout.caption}
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function pickKillerMetric(
+  company: Company,
+): { label: string; value: string; caption: string } | null {
+  const r40 = numericOrNull(company.rule_of_40);
+  const fcf = numericOrNull(company.fcf_margin_pct);
+  const rev = numericOrNull(company.rev_growth_ttm_pct);
+  const gm = numericOrNull(company.gross_margin_pct);
+  const score = numericOrNull(company.composite_score);
+
+  if (r40 != null && r40 >= 80) {
+    return {
+      label: "Rule of 40",
+      value: r40.toFixed(1),
+      caption: "Top-tier compounder territory — growth + profitability combined.",
+    };
+  }
+  if (fcf != null && fcf >= 30) {
+    return {
+      label: "FCF margin",
+      value: `${fcf.toFixed(1)}%`,
+      caption: "Exceptional cash conversion — the bull case in one number.",
+    };
+  }
+  if (rev != null && rev >= 50) {
+    return {
+      label: "Revenue growth TTM",
+      value: `+${rev.toFixed(1)}%`,
+      caption: "Well above the screening floor — explosive top-line.",
+    };
+  }
+  if (gm != null && gm >= 75) {
+    return {
+      label: "Gross margin",
+      value: `${gm.toFixed(1)}%`,
+      caption: "Strong pricing power and operating leverage.",
+    };
+  }
+  if (score != null && score >= 80) {
+    return {
+      label: "Composite score",
+      value: score.toFixed(0),
+      caption: "In the top tier of the screened universe.",
+    };
+  }
+  return null;
+}
+
+function numericOrNull(v: unknown): number | null {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Consensus Split — visual vote bar (Bullish/Neutral/Bearish stacked).
+// Makes the swarm vote feel alive at a glance. Sits above the named
+// bucket list, which keeps the per-agent detail.
+// ---------------------------------------------------------------------------
+
+function ConsensusSplitBlock({
+  ticker,
+  buckets,
+}: {
+  ticker: string;
+  buckets: { bullish: AgentPov[]; neutral: AgentPov[]; bearish: AgentPov[] };
+}) {
+  const bullN = buckets.bullish.length;
+  const neuN = buckets.neutral.length;
+  const bearN = buckets.bearish.length;
+  const total = bullN + neuN + bearN;
+  if (total === 0) return null;
+
+  const bullPct = (bullN / total) * 100;
+  const neuPct = (neuN / total) * 100;
+  const bearPct = (bearN / total) * 100;
+
+  return (
+    <section className="mb-6">
+      <h2 className="text-xs font-mono uppercase tracking-wider text-text-muted mb-2">
+        {ticker} Consensus Split
+      </h2>
+      <div className="glass-card rounded-lg p-4 sm:p-5">
+        <div className="flex h-2.5 rounded overflow-hidden mb-3">
+          <div
+            style={{
+              width: `${bullPct}%`,
+              background: "#00FF41",
+              boxShadow: "inset 0 0 0 1px rgba(0,255,65,0.4)",
+            }}
+            aria-label={`${bullN} bullish agents`}
+          />
+          <div
+            style={{
+              width: `${neuPct}%`,
+              background: "#FFD700",
+              boxShadow: "inset 0 0 0 1px rgba(255,215,0,0.4)",
+            }}
+            aria-label={`${neuN} cautious agents`}
+          />
+          <div
+            style={{
+              width: `${bearPct}%`,
+              background: "#FF3333",
+              boxShadow: "inset 0 0 0 1px rgba(255,51,51,0.4)",
+            }}
+            aria-label={`${bearN} bearish agents`}
+          />
+        </div>
+        <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm font-mono">
+          <SplitTally count={bullN} label="Bullish" color="#00FF41" />
+          <SplitTally count={neuN} label="Cautious" color="#FFD700" />
+          <SplitTally count={bearN} label="Bearish" color="#FF3333" />
+          <span className="text-xs text-text-muted ml-auto">
+            {total} agent{total === 1 ? "" : "s"} with a view on {ticker}
+          </span>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SplitTally({
+  count,
+  label,
+  color,
+}: {
+  count: number;
+  label: string;
+  color: string;
+}) {
+  return (
+    <span>
+      <span className="font-bold text-base" style={{ color }}>
+        {count}
+      </span>{" "}
+      <span className="text-text-dim">{label}</span>
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Why TICKER Ranks #N — horizontal bar chart of the screened metrics
+// that drive composite_score. Pure CSS bars, no chart library; the
+// per-metric scale is fixed so all six bars are visually comparable
+// (a 95 R40 should look "very full"; a 10% gross margin should look
+// "small"). Caption lifts the most-impressive metric so the reader
+// has a takeaway even without scanning the bars.
+// ---------------------------------------------------------------------------
+
+function WhyRanksChart({
+  ticker,
+  company,
+}: {
+  ticker: string;
+  company: Company;
+}) {
+  const rows = [
+    {
+      label: "Composite score",
+      value: numericOrNull(company.composite_score),
+      display: (v: number) => v.toFixed(1),
+      pct: (v: number) => clampPct((v / 100) * 100),
+    },
+    {
+      label: "Revenue growth TTM",
+      value: numericOrNull(company.rev_growth_ttm_pct),
+      display: (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(1)}%`,
+      pct: (v: number) => clampPct((v / 150) * 100), // 150% growth = full bar
+    },
+    {
+      label: "Gross margin",
+      value: numericOrNull(company.gross_margin_pct),
+      display: (v: number) => `${v.toFixed(1)}%`,
+      pct: (v: number) => clampPct(v), // 0–100 maps 1:1
+    },
+    {
+      label: "FCF margin",
+      value: numericOrNull(company.fcf_margin_pct),
+      display: (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(1)}%`,
+      pct: (v: number) => clampPct(((v + 50) / 150) * 100), // -50% to +100%
+    },
+    {
+      label: "Rule of 40",
+      value: numericOrNull(company.rule_of_40),
+      display: (v: number) => v.toFixed(1),
+      pct: (v: number) => clampPct((v / 120) * 100), // 120 R40 = full bar
+    },
+    {
+      label: "52w vs SPY",
+      value: numericOrNull(company.perf_52w_vs_spy),
+      display: (v: number) => {
+        const pctValue = v * 100;
+        return `${pctValue > 0 ? "+" : ""}${pctValue.toFixed(1)}%`;
+      },
+      // perf_52w_vs_spy is stored as a fraction (0.32 = +32%). Scale
+      // accordingly: -50% to +100% maps to the bar.
+      pct: (v: number) => clampPct(((v * 100 + 50) / 150) * 100),
+    },
+  ];
+
+  const populated = rows.filter((r) => r.value != null);
+  if (populated.length < 3) return null;
+
+  return (
+    <section className="mb-6">
+      <h2 className="text-xs font-mono uppercase tracking-wider text-text-muted mb-2">
+        Why {ticker} Ranks
+        {company.sort_order != null ? ` #${company.sort_order}` : ""}
+      </h2>
+      <div className="glass-card rounded-lg p-4 sm:p-5">
+        <div className="space-y-2.5">
+          {populated.map((r) => (
+            <RankBar
+              key={r.label}
+              label={r.label}
+              displayValue={r.display(r.value as number)}
+              widthPct={r.pct(r.value as number)}
+            />
+          ))}
+        </div>
+        <p className="mt-4 text-xs text-text-muted leading-relaxed">
+          Each bar is scaled against a fixed top-of-universe reference
+          so the metrics are visually comparable. Bars don&rsquo;t reflect
+          peer percentile, just the absolute number against a sensible
+          maximum.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function RankBar({
+  label,
+  displayValue,
+  widthPct,
+}: {
+  label: string;
+  displayValue: string;
+  widthPct: number;
+}) {
+  return (
+    <div className="grid grid-cols-[180px_1fr_70px] sm:grid-cols-[200px_1fr_80px] items-center gap-3">
+      <p className="text-xs sm:text-sm text-text-muted font-mono truncate">
+        {label}
+      </p>
+      <div
+        className="relative h-2 rounded-full overflow-hidden"
+        style={{ background: "rgba(255,255,255,0.05)" }}
+      >
+        <div
+          className="absolute inset-y-0 left-0 rounded-full"
+          style={{
+            width: `${widthPct}%`,
+            background: "var(--color-green)",
+            boxShadow:
+              "0 0 8px rgba(0, 255, 65, 0.45), 0 0 2px rgba(0, 255, 65, 0.35)",
+          }}
+        />
+      </div>
+      <p
+        className="text-xs sm:text-sm font-mono font-bold text-text text-right tabular-nums"
+      >
+        {displayValue}
+      </p>
+    </div>
+  );
+}
+
+function clampPct(v: number): number {
+  if (!Number.isFinite(v)) return 0;
+  if (v < 0) return 0;
+  if (v > 100) return 100;
+  return v;
 }
 
 // ---------------------------------------------------------------------------
