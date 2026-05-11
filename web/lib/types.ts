@@ -11,6 +11,11 @@ export interface Company {
   status: string;
   composite_score: number | null;
   price: number | null;
+  // ISO-8601 timestamp. When companies.price was last refreshed —
+  // 15-min delayed during US market hours, close-of-business otherwise.
+  // Null only while migration 015 is rolling out or before the first
+  // intraday_prices.py run.
+  price_asof: string | null;
   ps_now: number | null;
   price_pct_of_52w_high: number | null;
   perf_52w_vs_spy: number | null;

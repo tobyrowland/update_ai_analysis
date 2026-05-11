@@ -32,6 +32,43 @@ export function formatPrice(val: number | null | undefined): string {
   return formatNumber(val, { prefix: "$", decimals: 2 });
 }
 
+/**
+ * Compact "price as-of" formatter for the freshness pill.
+ *
+ *   same UTC day               → "14:32 UTC"
+ *   prior calendar UTC day     → "yesterday 21:30 UTC"
+ *   anything older (weekends,
+ *     holidays, stale data)    → "close of 2026-05-09"
+ *
+ * Returns "—" for null/undefined/invalid input so callers don't need to
+ * guard. Uses UTC (not the viewer's locale) so the value matches what
+ * the cron actually wrote — predictable across visitors.
+ */
+export function formatAsof(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return "—";
+
+  const now = new Date();
+  const tDay = Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate());
+  const nowDay = Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+  );
+  const dayDiff = Math.round((nowDay - tDay) / 86400000);
+
+  const hh = String(t.getUTCHours()).padStart(2, "0");
+  const mm = String(t.getUTCMinutes()).padStart(2, "0");
+
+  if (dayDiff === 0) return `${hh}:${mm} UTC`;
+  if (dayDiff === 1) return `yesterday ${hh}:${mm} UTC`;
+  const y = t.getUTCFullYear();
+  const m = String(t.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(t.getUTCDate()).padStart(2, "0");
+  return `close of ${y}-${m}-${d}`;
+}
+
 export function parseStatus(status: string | null | undefined): {
   label: string | null;
   color: string;

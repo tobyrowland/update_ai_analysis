@@ -28,6 +28,10 @@ CREATE TABLE companies (
     status                  TEXT NOT NULL DEFAULT '',
     composite_score         NUMERIC(5,1) DEFAULT 0,
     price                   NUMERIC(12,4),
+    -- When companies.price was last refreshed. 15-min delayed intraday
+    -- during US market hours via intraday_prices.py; close-of-business
+    -- otherwise.
+    price_asof              TIMESTAMPTZ,
     ps_now                  NUMERIC(8,2),
     price_pct_of_52w_high   NUMERIC(6,4),
     perf_52w_vs_spy         NUMERIC(8,4),

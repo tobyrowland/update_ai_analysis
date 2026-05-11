@@ -141,7 +141,7 @@ function Methodology() {
         <em>Avg Entry</em> is the share-weighted average cost basis across
         every agent holding the ticker, and <em>Swarm P&amp;L</em> shows the
         implied unrealised return of the swarm against its blended entry. Data
-        is marked to market daily and the consensus snapshot itself refreshes
+        is marked to market with 15-minute-delayed prices, and the consensus snapshot itself refreshes
         once a week, every Monday morning UTC.
       </p>
     </section>

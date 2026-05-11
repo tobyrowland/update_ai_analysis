@@ -27,6 +27,9 @@ Weekly (Sunday UTC):
 Sun 07:00       agent_heartbeat.py        Rebalance every agent's portfolio via its strategy
 Sun 08:00       consensus_snapshot.py     Aggregate agent_holdings → consensus_snapshots (powers /consensus)
 
+Every 15 min (Mon–Fri, 13:00–22:00 UTC):
+                intraday_prices.py        Refresh companies.price + price_asof via EODHD /real-time (15-min delayed quotes)
+
 Every 4h:
                 moltbook_heartbeat.py     Reply to notifications + engage with finance submolts on Moltbook
                 bluesky_heartbeat.py      Reply to mentions + AI-in-finance posts + posts about top swarm-consensus tickers on Bluesky
@@ -70,6 +73,17 @@ Fetches revenue, margins, cash flow, EPS, R40 score from EODHD API.
 Updates `companies` table. Staleness threshold: 7 days. Rate limit: 1s between calls.
 Evaluates screening criteria and stores flag results in the `flags` JSONB column.
 Supports `--force`, `--ticker`, `--dry-run`, `--limit` flags.
+
+### intraday_prices.py (every 15 min, Mon–Fri, 13:00–22:00 UTC)
+Refreshes `companies.price` + `companies.price_asof` via EODHD's
+`/real-time` bulk endpoint — 15-minute-delayed quotes during US market
+hours. Only touches the price columns (uses `db.bulk_upsert_company_prices`
+which whitelists `ticker / price / price_asof`); fundamentals, R40, AI
+narrative, sort_order, flags etc. keep their daily/weekly cadence.
+Outside market hours `price_asof` rolls forward to the prior trading
+day's last intraday tick (~21:45 UTC) so `portfolio_valuation.py` at
+05:30 UTC still snapshots close-of-business prices into
+`agent_portfolio_history`. Supports `--dry-run` and `--tickers` flags.
 
 ### update_ai_narratives.py (04:00 UTC daily)
 Refreshes stale narratives (90+ days) using Gemini 2.5 Flash.
@@ -170,7 +184,7 @@ print(pm.get_portfolio(agent_id))    # MTM at latest companies.price
 ### companies (primary — replaces AI Analysis sheet)
 ```
 COMPANY:     ticker (PK), exchange, company_name, country, sector, description
-SCREENING:   status, composite_score, price, ps_now, price_pct_of_52w_high, perf_52w_vs_spy, rating, sort_order
+SCREENING:   status, composite_score, price, price_asof, ps_now, price_pct_of_52w_high, perf_52w_vs_spy, rating, sort_order
 OVERVIEW:    r40_score, fundamentals_snapshot, short_outlook
 REVENUE:     annual_revenue_5y, quarterly_revenue, rev_growth_ttm_pct, rev_growth_qoq_pct, rev_cagr_pct, rev_consistency_score
 MARGINS:     gross_margin_pct, gm_trend, operating_margin_pct, net_margin_pct, net_margin_yoy_pct, fcf_margin_pct
@@ -349,6 +363,9 @@ python update_ai_narratives.py             # refresh AI narratives
 python score_ai_analysis.py                # score + rank
 python price_sales_updater.py              # P/S update
 python price_sales_updater.py --tickers NVDA AAPL --force
+python intraday_prices.py                   # 15-min delayed prices via EODHD /real-time
+python intraday_prices.py --dry-run
+python intraday_prices.py --tickers NVDA AAPL META
 python build_universe_snapshot.py           # daily 3-tier JSON snapshot
 python build_universe_snapshot.py --tier compact --dry-run
 

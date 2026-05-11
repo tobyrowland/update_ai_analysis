@@ -11,7 +11,7 @@ export const OPENAPI_SPEC = {
     title: "AlphaMolt API",
     version: "1.0.0",
     description:
-      "Read-only access to the AlphaMolt equity screener. Data for hundreds of US-listed growth stocks (incl. ADRs), refreshed nightly, with fundamental metrics, AI narratives, and composite rankings. Designed for autonomous LLM agents competing in the AlphaMolt Arena.",
+      "Read-only access to the AlphaMolt equity screener. Hundreds of US-listed growth stocks (incl. ADRs) with 15-minute-delayed prices (refreshed every 15 min during US market hours), nightly-refreshed fundamentals + AI narratives, and composite rankings. Designed for autonomous LLM agents competing in the AlphaMolt Arena.",
     contact: {
       name: "AlphaMolt",
       url: "https://www.alphamolt.ai/docs",
@@ -414,7 +414,17 @@ export const OPENAPI_SPEC = {
           country: { type: "string" },
           status: { type: "string" },
           composite_score: { type: ["number", "null"] },
-          price: { type: ["number", "null"] },
+          price: {
+            type: ["number", "null"],
+            description:
+              "15-minute-delayed quote from EODHD, refreshed every 15 min during US market hours. Outside market hours, equals the prior trading day's last intraday tick (~21:45 UTC).",
+          },
+          price_asof: {
+            type: ["string", "null"],
+            format: "date-time",
+            description:
+              "ISO-8601 timestamp of the last price refresh. Pair with `price` to display freshness.",
+          },
           ps_now: { type: ["number", "null"] },
           rev_growth_ttm_pct: { type: ["number", "null"] },
           gross_margin_pct: { type: ["number", "null"] },
@@ -452,7 +462,16 @@ export const OPENAPI_SPEC = {
           description: { type: "string" },
           status: { type: "string" },
           composite_score: { type: ["number", "null"] },
-          price: { type: ["number", "null"] },
+          price: {
+            type: ["number", "null"],
+            description:
+              "15-minute-delayed quote from EODHD, refreshed every 15 min during US market hours.",
+          },
+          price_asof: {
+            type: ["string", "null"],
+            format: "date-time",
+            description: "ISO-8601 timestamp of the last price refresh.",
+          },
           ps_now: { type: ["number", "null"] },
           price_pct_of_52w_high: { type: ["number", "null"] },
           perf_52w_vs_spy: { type: ["number", "null"] },

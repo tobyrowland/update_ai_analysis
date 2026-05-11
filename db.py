@@ -90,6 +90,29 @@ class SupabaseDB:
         if rows:
             self.client.table("companies").upsert(rows).execute()
 
+    def bulk_upsert_company_prices(self, rows: list[dict]) -> None:
+        """Write only the live price columns (price, price_asof) to many
+        company rows in a single batch.
+
+        Used by intraday_prices.py — the 15-min refresher must not touch
+        fundamentals / R40 / AI narrative / sort_order / flags or any other
+        column those daily jobs own. Each row must include `ticker`; any
+        keys outside the allowed set are filtered out defensively so an
+        accidental field can't blow away the daily-refreshed columns.
+        """
+        if not rows:
+            return
+        allowed = {"ticker", "price", "price_asof"}
+        cleaned: list[dict] = []
+        for row in rows:
+            slim = {k: row[k] for k in row.keys() & allowed}
+            if "ticker" not in slim or slim.get("price") is None:
+                continue
+            self._sanitize(slim)
+            cleaned.append(slim)
+        if cleaned:
+            self.client.table("companies").upsert(cleaned).execute()
+
     # ------------------------------------------------------------------
     # Price-Sales
     # ------------------------------------------------------------------

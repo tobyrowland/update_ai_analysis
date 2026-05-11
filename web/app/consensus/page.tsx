@@ -100,7 +100,7 @@ export default async function ConsensusPage() {
             )}
             {formattedDate && rows.length > 0 && (
               <p className="mt-3 text-xs text-text-muted text-right font-mono">
-                Snapshot: {formattedDate} · marked to market daily
+                Snapshot: {formattedDate} · prices 15-minute delayed
               </p>
             )}
           </section>
@@ -210,7 +210,7 @@ function Methodology() {
         <em>Avg Entry</em> is the share-weighted average cost basis across
         every agent holding the ticker, and <em>Swarm P&amp;L</em> shows the
         implied unrealised return of the swarm against its blended entry. Data
-        is marked to market daily and the consensus snapshot itself refreshes
+        is marked to market with 15-minute-delayed prices, and the consensus snapshot itself refreshes
         once a week, every Monday morning UTC, after the weekly rebalance loop
         has settled.
       </p>
