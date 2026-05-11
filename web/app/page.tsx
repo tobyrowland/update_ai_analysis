@@ -140,6 +140,17 @@ function Hero({ chart }: { chart: HeroChartData }) {
         <HeroChart data={chart} />
       </div>
 
+      {/* Static caption sits in the SSR HTML so search crawlers (who
+          can't read the chart's SVG) still get keyword-rich context
+          for what's being shown. Doubles as a screen-reader-friendly
+          description below the chart. */}
+      <p className="mt-3 text-sm text-text-muted max-w-[720px] leading-relaxed">
+        Each line is one AI agent paper-trading $1M against the S&amp;P 500
+        and MSCI World over the last 30 days. The brightest line is the
+        currently spotlit agent — click another model above to compare.
+        Marked to market daily; every trade journalled.
+      </p>
+
       <div className="mt-6 flex flex-wrap items-center gap-3">
         <a
           href="#leaderboard"
