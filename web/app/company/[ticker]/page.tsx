@@ -4,6 +4,7 @@ import Link from "next/link";
 import { getSupabase } from "@/lib/supabase";
 import { Company, PriceSales } from "@/lib/types";
 import {
+  formatAsof,
   formatPct,
   formatPrice,
   formatNumber,
@@ -35,7 +36,10 @@ import {
   type SwarmViewLine,
 } from "@/lib/company-agents-query";
 
-export const revalidate = 600;
+// 300s ISR matches the 15-min intraday cadence — readers see fresh
+// prices within 5 min of the next refresh, but we don't re-render
+// on every request.
+export const revalidate = 300;
 
 // ---------------------------------------------------------------------------
 // Data
@@ -304,10 +308,10 @@ export default async function CompanyPage({
   // ?v=… is a cache-bust for X.com's per-URL og:image cache — bump when
   // the OG design changes. Paired with og:url being omitted in the
   // generateMetadata above.
-  // ?v=4 bumped when the OG card redesigned (monogram POV cards, no
-  // brand logos) — forces X.com to re-fetch the new image for any
-  // previously-shared URL.
-  const shareUrl = `${absoluteUrl(`/company/${encodeURIComponent(decoded)}`)}?v=4`;
+  // ?v=5 bumped when the OG card freshness copy changed to
+  // "Quote 15-minute delayed" — forces X.com to re-fetch the new image
+  // for any previously-shared URL.
+  const shareUrl = `${absoluteUrl(`/company/${encodeURIComponent(decoded)}`)}?v=5`;
   const shareText =
     consensus.verdict === "bullish"
       ? `AI agents are bullish on $${decoded} — see who holds it, what they paid, and why on AlphaMolt.`
@@ -593,16 +597,14 @@ function HeroSection({
             {formatPrice(company.price)}
           </p>
           {/* Freshness sits directly under the price (not in a separate
-              tile) so readers know at a glance that this isn't a tick
-              quote. Phrasing is "latest daily refresh" — intentional,
-              not apologetic. */}
+              tile) so readers know at a glance that this is a delayed
+              quote, not a live tick. price_asof comes from EODHD's
+              /real-time endpoint via intraday_prices.py — 15-min delayed
+              during US market hours, prior-close otherwise. */}
           <p className="text-[10px] font-mono text-text-muted mt-1 leading-tight">
-            Latest daily refresh
-            {company.scored_at
-              ? ` · ${company.scored_at}`
-              : ""}
+            15-min delayed quote
             <br />
-            <span>Not a live quote</span>
+            <span>last refresh {formatAsof(company.price_asof)}</span>
           </p>
         </div>
         <HeroStat
@@ -631,7 +633,7 @@ function HeroSection({
           loudly that the price isn't tick-by-tick and the page is
           research, not advice. Increases trust by being explicit. */}
       <div className="mt-5 pt-4 border-t border-white/5 flex flex-wrap gap-2 text-[11px] font-mono text-text-muted">
-        <TrustPill>● Latest daily refresh, not live market data</TrustPill>
+        <TrustPill>● Quote 15-min delayed (EODHD)</TrustPill>
         <TrustPill>● Paper-trading only</TrustPill>
         <TrustPill>● Research aid, not financial advice</TrustPill>
       </div>
@@ -1468,10 +1470,11 @@ function ResearchContextSection() {
           recommendations, or an instruction to buy or sell any security.
         </p>
         <p className="mt-2">
-          Prices on this page reflect the latest daily market-data refresh
-          (typically within the last 24 hours), not live tick data. Holdings
-          and trade journals are paper-traded against $1M virtual accounts;
-          no real money changes hands.
+          Prices on this page are 15-minute-delayed quotes from EODHD,
+          refreshed every 15 minutes during US market hours and rolling
+          forward to the prior close overnight and on weekends. Holdings
+          and trade journals are paper-traded against $1M virtual
+          accounts; no real money changes hands.
         </p>
       </div>
     </section>

@@ -208,7 +208,7 @@ function LeftPanel({ args }: { args: CompanyOgArgs }) {
           color: TEXT_MUTED,
         }}
       >
-        Latest daily refresh · not a live quote
+        Quote 15-minute delayed · EODHD
       </div>
 
       {/* Stat cards row */}

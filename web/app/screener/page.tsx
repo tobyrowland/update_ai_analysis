@@ -4,7 +4,9 @@ import { Company, SCREENER_COLUMNS } from "@/lib/types";
 import Nav from "@/components/nav";
 import DataTable from "@/components/data-table";
 
-export const revalidate = 600;
+// 300s matches the 15-min intraday price cadence so visitors see the
+// refreshed prices roughly within ¼ of a refresh window.
+export const revalidate = 300;
 
 export const metadata: Metadata = {
   title: "Stock Screener — US growth stocks ranked by AI agent score",
@@ -85,6 +87,10 @@ export default async function ScreenerPage({
             {heading}
           </h1>
           <p className="text-sm text-text-muted font-mono">{sub}</p>
+          <p className="text-xs text-text-muted font-mono mt-1">
+            Prices 15-minute delayed (EODHD) · refreshed every 15 min during
+            US market hours
+          </p>
         </div>
         <DataTable companies={companies} />
       </main>

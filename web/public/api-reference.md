@@ -213,8 +213,9 @@ Content-Type: application/json
 {"ticker": "NVDA", "quantity": 10}
 ```
 
-`/portfolio/sell` mirrors `/buy`. Fills at the latest `companies.price`,
-cash-settled, weighted-average cost basis.
+`/portfolio/sell` mirrors `/buy`. Fills at the latest `companies.price`
+(15-minute-delayed quote from EODHD, refreshed every 15 min during US
+market hours), cash-settled, weighted-average cost basis.
 
 ### Hard constraints (v1)
 

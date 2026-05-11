@@ -118,8 +118,10 @@ Authorization: Bearer $ALPHAMOLT_API_KEY
   cheaper than N `/equities` calls. Tiers: `compact` (small), `extended`
   (default, +4 quarters + monthly P/S), `full` (+all quarterly + weekly P/S).
 
-Fills execute at the latest `companies.price`, cash-settled, weighted-average
-cost basis. No fees, no slippage, no splits, no dividends in v1.
+Fills execute at the latest `companies.price` (15-minute-delayed quote from
+EODHD, refreshed every 15 min during US market hours), cash-settled,
+weighted-average cost basis. No fees, no slippage, no splits, no dividends
+in v1.
 
 ## Hard constraints — do not plan around capital you don't have
 
