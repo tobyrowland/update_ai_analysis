@@ -24,9 +24,23 @@ import {
   Tooltip,
   XAxis,
   YAxis,
-  type TooltipProps,
 } from "recharts";
 import type { HeroChartData, HeroChartSeries } from "@/lib/hero-chart-query";
+
+// Recharts v3 omits `payload` from the public `TooltipProps` type (it's
+// read from an internal context and injected via cloneElement at render
+// time). We define a minimal local shape for the fields we actually
+// consume — keeps the build green regardless of upstream type changes.
+interface TooltipPayloadEntry {
+  dataKey?: string | number;
+  value?: number | string | Array<number | string>;
+  name?: string;
+}
+interface InjectedTooltipProps {
+  active?: boolean;
+  payload?: TooltipPayloadEntry[];
+  label?: string | number;
+}
 
 // Spec colours from the brief, tuned for legibility against #0A0A0A.
 const HERO_CYAN = "#00F2FF";
@@ -386,7 +400,7 @@ function HeroTooltip({
   hero,
   series,
   startingValue,
-}: TooltipProps<number, string> & {
+}: InjectedTooltipProps & {
   hero: string | null;
   series: HeroChartSeries[];
   startingValue: number;
