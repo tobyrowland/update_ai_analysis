@@ -11,7 +11,8 @@
  * hovered day plus its % change vs day 1.
  *
  * Recharts handles draw-in via its built-in left-to-right animation —
- * `animationDuration` on each `<Line>` is the brief's "2-second draw".
+ * `animationDuration` on each `<Line>` is tuned (see DRAW_MS below) to
+ * read as "drawing in" without delaying perceived page completion.
  * Skips Framer Motion entirely so we stay under the 100KB JS budget.
  */
 
@@ -49,6 +50,11 @@ const BENCH_COLORS: Record<string, string> = {
   "SPY.US": "#FF4B4B",
   "URTH.US": "#888888",
 };
+
+// Draw-in animation. The brief asked for 2s but real-user feedback was
+// that the long sweep delayed perceived page completion; 600ms still
+// reads as "drawing in" without holding the eye hostage.
+const DRAW_MS = 600;
 
 const Y_PAD = 0.04; // 4% headroom on the axis so the top line isn't clipped.
 
@@ -105,15 +111,29 @@ export default function HeroChart({ data }: { data: HeroChartData }) {
   // so the page still renders.
   if (agents.length === 0 || data.points.length === 0) {
     return (
-      <div className="glass-card rounded-xl p-6 text-sm text-text-muted font-mono">
+      <div
+        role="status"
+        aria-live="polite"
+        className="glass-card rounded-xl p-6 text-sm text-text-muted font-mono"
+      >
         Waiting on the first portfolio snapshot — agents will appear here
         once portfolio_valuation.py runs.
       </div>
     );
   }
 
+  const ariaLabel = `30-day equity curves for ${agents.length} AI agents (${agents
+    .map((a) => a.label)
+    .join(", ")}) compared with ${benchmarks
+    .map((b) => b.label)
+    .join(" and ")} benchmarks. All start at $1,000,000.`;
+
   return (
-    <div className="glass-card rounded-xl overflow-hidden border border-border/60">
+    <div
+      role="img"
+      aria-label={ariaLabel}
+      className="glass-card rounded-xl overflow-hidden border border-border/60"
+    >
       <Header
         agents={agents}
         benchmarks={benchmarks}
@@ -188,7 +208,7 @@ export default function HeroChart({ data }: { data: HeroChartData }) {
                   dot={false}
                   activeDot={false}
                   isAnimationActive
-                  animationDuration={2000}
+                  animationDuration={DRAW_MS}
                   animationEasing="ease-out"
                 />
               ),
@@ -205,7 +225,7 @@ export default function HeroChart({ data }: { data: HeroChartData }) {
                   dot={false}
                   activeDot={{ r: 3, fill: AGENT_DIM, stroke: "none" }}
                   isAnimationActive
-                  animationDuration={2000}
+                  animationDuration={DRAW_MS}
                   animationEasing="ease-out"
                 />
               ))}
@@ -224,7 +244,7 @@ export default function HeroChart({ data }: { data: HeroChartData }) {
                   strokeWidth: 2,
                 }}
                 isAnimationActive
-                animationDuration={2000}
+                animationDuration={DRAW_MS}
                 animationEasing="ease-out"
                 style={{ filter: "drop-shadow(0 0 6px #00F2FF)" }}
               />
