@@ -1,11 +1,22 @@
-name: Daily portfolio valuation
+name: Portfolio valuation
 
 on:
   schedule:
-    # Runs at 5:30 AM UTC — 30 minutes after score_ai_analysis so
-    # companies.price is freshest before we snapshot agent portfolios.
+    # 1) Daily close-of-business snapshot at 05:30 UTC. Markets have
+    #    been closed since ~22:00 UTC the night before, so companies.price
+    #    is the prior trading day's close. This run guarantees every
+    #    weekday + weekend has a row, which keeps the agent_leaderboard
+    #    view's 1d / 1w / 30d window joins clean.
     - cron: "30 5 * * *"
-  workflow_dispatch: # Allow manual trigger from GitHub UI
+    # 2) Intraday revaluation every 15 min during US market hours,
+    #    Mon–Fri 13:00–22:00 UTC. Same upsert path overwrites the
+    #    (agent_id, snapshot_date) row repeatedly during the day —
+    #    end-of-day = close-of-business, intraday = live MTM. The
+    #    leaderboard's 1d return becomes "yesterday-close → today-
+    #    intraday-mid" instead of strict close-to-close, which makes
+    #    the page feel alive without changing how the view computes.
+    - cron: "*/15 13-22 * * 1-5"
+  workflow_dispatch:
 
 jobs:
   valuation:
@@ -36,5 +47,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: portfolio-valuation-logs-${{ github.run_id }}
+          # Intraday runs produce ~40 log files/day — drop retention from
+          # 30d to 7d to keep the artifact store from ballooning.
+          retention-days: 7
           path: logs/
-          retention-days: 30
