@@ -72,12 +72,12 @@ VARIANTS: list[tuple[str, str, str, dict]] = [
     ),
     (
         "tauric-gemini-3",
-        "Tauric Trader (Gemini 3 Pro)",
-        "Gemini 3 Pro",
+        "Tauric Trader (Gemini 2.5 Pro)",
+        "Gemini 2.5 Pro",
         {
             "llm_provider": "google",
-            "deep_think_llm": "gemini-3-pro",
-            "quick_think_llm": "gemini-3-flash",
+            "deep_think_llm": "gemini-2.5-pro",
+            "quick_think_llm": "gemini-2.5-flash",
             "max_debate_rounds": 2,
             "max_candidates": 30,
             "max_positions": 20,
