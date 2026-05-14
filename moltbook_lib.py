@@ -35,11 +35,13 @@ FEED_SUBMOLTS = frozenset({
 })
 
 DRAFT_MODEL = "claude-haiku-4-5"
-# Sonnet 4-6 was bailing on the heavily-obfuscated challenges ("lOoBxqst",
-# "MoL tInG", "umm errr { lxq }") — racking up "no parseable answer" failures.
-# Opus 4-7 with extended thinking decodes the ransom-note framing reliably.
+# Opus 4-7 reliably decodes the ransom-note framing ("lOoBxqst", "MoL tInG",
+# "umm errr { lxq }"). 4-7 dropped the legacy `thinking.type=enabled` +
+# `budget_tokens` shape; adaptive thinking + `output_config.effort` is the
+# replacement. `display: "summarized"` opts thinking content back in so the
+# fallback in `_single_math_solve` can scan it when the text block is empty.
 MATH_MODEL = "claude-opus-4-7"
-MATH_THINKING_BUDGET = 2000
+MATH_EFFORT = "high"
 
 # Cached system prompt — persona + platform context. Stable across runs so
 # Anthropic prompt caching gives us near-free re-reads.
@@ -738,8 +740,9 @@ def _single_math_solve(
     """
     resp = client.messages.create(
         model=MATH_MODEL,
-        max_tokens=4000 + MATH_THINKING_BUDGET,
-        thinking={"type": "enabled", "budget_tokens": MATH_THINKING_BUDGET},
+        max_tokens=16000,
+        thinking={"type": "adaptive", "display": "summarized"},
+        output_config={"effort": MATH_EFFORT},
         messages=[
             {
                 "role": "user",
@@ -829,12 +832,28 @@ def solve_math_challenge(challenge_text: str) -> str:
     failed retries. Voting across independent samples dramatically improves
     accuracy at negligible cost.
     """
+    # Re-raise 4xx config errors on attempt 1 instead of burning all three votes
+    # on the same hopeless request. The May 11 fix shipped `thinking.type=enabled`
+    # against opus-4-7 (which 400s) and we lost two days because three identical
+    # BadRequestErrors got bundled into a generic "no parseable answer" message.
+    from anthropic import (
+        AuthenticationError,
+        BadRequestError,
+        NotFoundError,
+        PermissionDeniedError,
+    )
+    NON_RETRYABLE = (
+        BadRequestError, AuthenticationError, PermissionDeniedError, NotFoundError,
+    )
+
     client = _anthropic_client()
     attempts: list[str] = []
     diagnostics: list[str] = []
     for i in range(_SOLVER_VOTES):
         try:
             answer, label = _single_math_solve(client, challenge_text, attempt=i + 1)
+        except NON_RETRYABLE:
+            raise
         except Exception as exc:
             log.warning("math solver attempt %d raised: %s", i + 1, exc)
             diagnostics.append(f"#{i + 1}=raised:{type(exc).__name__}:{exc}")
@@ -902,3 +921,20 @@ def post_and_verify(
         )
 
     return True, f"posted and verified (answer={answer})", comment_id
+
+
+if __name__ == "__main__":
+    # Smoke-test the math solver against a stuck challenge from a FAILED issue:
+    #   python moltbook_lib.py --solve "A] LooObBsStTeR ClAw] FoRcE Is ThIrTy ..."
+    # Lets us iterate on the solver without waiting for a 4-hour cron cycle.
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Moltbook utilities")
+    parser.add_argument("--solve", metavar="CHALLENGE", help="Solve a math captcha")
+    args = parser.parse_args()
+
+    if args.solve:
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+        print(solve_math_challenge(args.solve))
+    else:
+        parser.print_help()
