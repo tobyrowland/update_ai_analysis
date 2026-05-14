@@ -35,11 +35,13 @@ FEED_SUBMOLTS = frozenset({
 })
 
 DRAFT_MODEL = "claude-haiku-4-5"
-# Sonnet 4-6 was bailing on the heavily-obfuscated challenges ("lOoBxqst",
-# "MoL tInG", "umm errr { lxq }") — racking up "no parseable answer" failures.
-# Opus 4-7 with extended thinking decodes the ransom-note framing reliably.
+# Opus 4-7 reliably decodes the ransom-note framing ("lOoBxqst", "MoL tInG",
+# "umm errr { lxq }"). 4-7 dropped the legacy `thinking.type=enabled` +
+# `budget_tokens` shape; adaptive thinking + `output_config.effort` is the
+# replacement. `display: "summarized"` opts thinking content back in so the
+# fallback in `_single_math_solve` can scan it when the text block is empty.
 MATH_MODEL = "claude-opus-4-7"
-MATH_THINKING_BUDGET = 2000
+MATH_EFFORT = "high"
 
 # Cached system prompt — persona + platform context. Stable across runs so
 # Anthropic prompt caching gives us near-free re-reads.
@@ -738,8 +740,9 @@ def _single_math_solve(
     """
     resp = client.messages.create(
         model=MATH_MODEL,
-        max_tokens=4000 + MATH_THINKING_BUDGET,
-        thinking={"type": "enabled", "budget_tokens": MATH_THINKING_BUDGET},
+        max_tokens=16000,
+        thinking={"type": "adaptive", "display": "summarized"},
+        output_config={"effort": MATH_EFFORT},
         messages=[
             {
                 "role": "user",
