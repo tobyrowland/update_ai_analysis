@@ -44,6 +44,22 @@ logger = logging.getLogger(__name__)
 DEFAULT_STARTING_CASH = 1_000_000.00
 
 
+def _thesis_kwargs(thesis: dict | None) -> dict:
+    """Normalise the optional ``thesis`` kwarg into ``record_thesis`` args.
+
+    Accepts ``None`` (snapshot-only), or a dict with any subset of
+    ``thesis_text`` / ``extend_signals`` / ``break_signals``. Unknown
+    keys are ignored so callers can pass extra metadata without breaking.
+    """
+    if not thesis:
+        return {}
+    return {
+        "thesis_text": thesis.get("thesis_text"),
+        "extend_signals": thesis.get("extend_signals"),
+        "break_signals": thesis.get("break_signals"),
+    }
+
+
 class PortfolioError(Exception):
     """Raised when a portfolio operation cannot be executed."""
 
@@ -116,12 +132,20 @@ class PortfolioManager:
         ticker: str,
         quantity: float,
         note: str = "",
+        *,
+        thesis: dict | None = None,
     ) -> dict:
         """Buy `quantity` of `ticker` at the latest price. Cash-settled.
 
         Rejects if the ticker has no usable price, if quantity <= 0, or if
         the agent lacks the cash to cover the fill. Weighted-average cost
         basis is updated on each buy.
+
+        Every successful BUY records an ``investment_theses`` row with
+        a frozen snapshot of the equity's state (mandatory). When
+        ``thesis`` is provided, the row also stores the agent's
+        narrative + extend/break signals; otherwise it's a
+        snapshot-only ``source='auto'`` row.
         """
         if quantity <= 0:
             raise PortfolioError(f"buy quantity must be > 0, got {quantity}")
@@ -180,7 +204,7 @@ class PortfolioManager:
             "cash_after_usd": new_cash,
             "note": note,
         }
-        self.db.insert_agent_trade(trade)
+        trade_id = self.db.insert_agent_trade(trade)
         logger.info(
             "BUY %s %s @ $%.4f  gross=$%.2f  cash=%.2f",
             agent_id[:8],
@@ -189,6 +213,22 @@ class PortfolioManager:
             gross,
             new_cash,
         )
+
+        # Mandatory snapshot capture; agent thesis text passed through if provided.
+        try:
+            import theses
+            theses.record_thesis(
+                self.db,
+                agent_id=agent_id,
+                ticker=ticker,
+                trade_id=trade_id,
+                **_thesis_kwargs(thesis),
+            )
+        except Exception as exc:  # noqa: BLE001 — never block a trade on thesis I/O
+            logger.warning(
+                "BUY %s %s: thesis record failed (trade still succeeded): %s",
+                agent_id[:8], ticker, exc,
+            )
         return trade
 
     def sell(
@@ -222,7 +262,8 @@ class PortfolioManager:
         new_cash = round(float(account["cash_usd"]) + gross, 2)
 
         remaining = round(held - quantity, 6)
-        if remaining <= 1e-9:
+        position_zeroed = remaining <= 1e-9
+        if position_zeroed:
             self.db.delete_agent_holding(agent_id, ticker)
         else:
             # avg_cost_usd unchanged on sells (weighted-avg convention).
@@ -257,7 +298,157 @@ class PortfolioManager:
             gross,
             new_cash,
         )
+
+        # Close any open theses if the position is fully exited. Idempotent.
+        if position_zeroed:
+            try:
+                import theses
+                theses.close_theses_for_position(
+                    self.db, agent_id=agent_id, ticker=ticker,
+                )
+            except Exception as exc:  # noqa: BLE001 — never block a sell on thesis I/O
+                logger.warning(
+                    "SELL %s %s: thesis close failed (sell still succeeded): %s",
+                    agent_id[:8], ticker, exc,
+                )
         return trade
+
+    # ------------------------------------------------------------------
+    # Atomic variants — wrap cash-deduct + holding-upsert + trade-insert
+    # in a single Postgres transaction with row-level locks via the
+    # `execute_atomic_buy` / `execute_atomic_sell` RPCs (migration 019).
+    # Required when multiple processes might mutate the same agent
+    # concurrently — e.g. the per-ticker matrix workflow that splits
+    # one heartbeat across N parallel GHA runners.
+    # ------------------------------------------------------------------
+
+    def buy_atomic(
+        self,
+        agent_id: str,
+        ticker: str,
+        quantity: float,
+        note: str = "",
+        *,
+        thesis: dict | None = None,
+    ) -> dict:
+        """Atomic buy via the `execute_atomic_buy` Supabase RPC.
+
+        Same cash-settlement and weighted-avg-cost semantics as ``buy``,
+        but the RPC takes ``SELECT FOR UPDATE`` locks on agent_accounts
+        + agent_holdings so concurrent callers cannot oversell cash.
+
+        Returns the RPC result dict. ``status='ok'`` means the trade
+        landed; ``status='insufficient_cash'`` means the lock-window
+        view of cash didn't cover the buy and no rows were written.
+        Raises ``PortfolioError`` on missing price or invalid quantity.
+
+        On ``status='ok'``, records an ``investment_theses`` row with
+        the snapshot (always) + optional ``thesis`` payload (when
+        provided). Same contract as ``buy``.
+        """
+        if quantity <= 0:
+            raise PortfolioError(f"buy quantity must be > 0, got {quantity}")
+        price = self.get_price(ticker)
+        result = self.db.client.rpc(
+            "execute_atomic_buy",
+            {
+                "p_agent_id": agent_id,
+                "p_ticker": ticker,
+                "p_quantity": quantity,
+                "p_price_usd": round(price, 4),
+                "p_note": note,
+            },
+        ).execute()
+        data = result.data or {}
+        if data.get("status") == "ok":
+            logger.info(
+                "BUY %s %s @ $%.4f  gross=$%.2f  cash=%.2f  [atomic trade_id=%s]",
+                agent_id[:8],
+                ticker,
+                price,
+                float(data.get("gross_usd", 0)),
+                float(data.get("new_cash_usd", 0)),
+                data.get("trade_id"),
+            )
+            try:
+                import theses
+                theses.record_thesis(
+                    self.db,
+                    agent_id=agent_id,
+                    ticker=ticker,
+                    trade_id=data.get("trade_id"),
+                    **_thesis_kwargs(thesis),
+                )
+            except Exception as exc:  # noqa: BLE001 — never block a trade on thesis I/O
+                logger.warning(
+                    "BUY %s %s: thesis record failed (trade still succeeded): %s",
+                    agent_id[:8], ticker, exc,
+                )
+        else:
+            logger.warning(
+                "BUY %s %s rejected by RPC: %s",
+                agent_id[:8], ticker, data,
+            )
+        return data
+
+    def sell_atomic(
+        self,
+        agent_id: str,
+        ticker: str,
+        quantity: float,
+        note: str = "",
+    ) -> dict:
+        """Atomic sell via the `execute_atomic_sell` Supabase RPC.
+
+        Same semantics as ``sell`` but with row-level locks. Returns
+        the RPC result dict. ``status='ok'`` is success;
+        ``status='no_position'`` and ``status='insufficient_quantity'``
+        are recoverable rejections (no rows mutated).
+        """
+        if quantity <= 0:
+            raise PortfolioError(f"sell quantity must be > 0, got {quantity}")
+        price = self.get_price(ticker)
+        result = self.db.client.rpc(
+            "execute_atomic_sell",
+            {
+                "p_agent_id": agent_id,
+                "p_ticker": ticker,
+                "p_quantity": quantity,
+                "p_price_usd": round(price, 4),
+                "p_note": note,
+            },
+        ).execute()
+        data = result.data or {}
+        if data.get("status") == "ok":
+            logger.info(
+                "SELL %s %s @ $%.4f  gross=$%.2f  cash=%.2f  [atomic trade_id=%s]",
+                agent_id[:8],
+                ticker,
+                price,
+                float(data.get("gross_usd", 0)),
+                float(data.get("new_cash_usd", 0)),
+                data.get("trade_id"),
+            )
+            # Close any open theses if the position is fully exited.
+            # The atomic sell RPC returns the post-trade quantity in
+            # ``remaining_quantity`` (see migrations/019).
+            if float(data.get("remaining_quantity", 0) or 0) <= 1e-9:
+                try:
+                    import theses
+                    theses.close_theses_for_position(
+                        self.db, agent_id=agent_id, ticker=ticker,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "SELL %s %s: thesis close failed (sell still succeeded): %s",
+                        agent_id[:8], ticker, exc,
+                    )
+        else:
+            logger.warning(
+                "SELL %s %s rejected by RPC: %s",
+                agent_id[:8], ticker, data,
+            )
+        return data
 
     # ------------------------------------------------------------------
     # Valuation

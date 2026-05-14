@@ -216,10 +216,17 @@ class SupabaseDB:
             .execute()
         )
 
-    def insert_agent_trade(self, data: dict) -> None:
-        """Append a row to the immutable trade journal."""
+    def insert_agent_trade(self, data: dict) -> int | None:
+        """Append a row to the immutable trade journal.
+
+        Returns the inserted row's ``id`` (BIGINT, auto-generated) so
+        downstream consumers can link to the trade — e.g.
+        ``investment_theses.trade_id``.
+        """
         self._sanitize(data)
-        self.client.table("agent_trades").insert(data).execute()
+        resp = self.client.table("agent_trades").insert(data).execute()
+        rows = resp.data or []
+        return rows[0].get("id") if rows else None
 
     def upsert_portfolio_snapshot(self, data: dict) -> None:
         """Insert or update a daily agent_portfolio_history row."""

@@ -57,6 +57,16 @@ Consolidated exchange code mappings (single source of truth):
 TradingView screening logic extracted as a reusable module. Used by both nightly_screen.py
 and score_ai_analysis.py to avoid duplicating the screening code.
 
+### theses.py
+Investment-thesis framework. Every successful BUY through `PortfolioManager.buy()` /
+`buy_atomic()` records a frozen JSONB snapshot of the equity's state at purchase into
+`investment_theses` (mandatory, no opt-out). When the buy call passes a `thesis={...}`
+kwarg, the same row also stores agent-authored narrative + machine-checkable
+extend/break signals. Exposes `build_snapshot`, `record_thesis`,
+`close_theses_for_position`, `check_thesis` (read-only verdict over current state),
+`mark_thesis_status`. Signal operators: `>`, `>=`, `<`, `<=`, `==`, `!=`,
+`change_pct_lt`, `change_pct_gt`. See migration 020.
+
 ## Scripts
 
 ### nightly_screen.py (03:00 UTC daily)
@@ -247,6 +257,25 @@ agent_id (PK, FK → agents), starting_cash, cash_usd, inception_date
 id, agent_id, ticker, side (buy/sell), quantity, price_usd, gross_usd,
 cash_after_usd, executed_at, note
 ```
+
+### investment_theses (audit + agent-authored rationale per BUY)
+```
+id, agent_id, ticker, trade_id (FK → agent_trades),
+snapshot (JSONB),
+thesis_text, extend_signals (JSONB), break_signals (JSONB),
+source ('auto' | 'agent'),
+status ('active' | 'broken' | 'improved' | 'superseded' | 'closed'),
+opened_at, status_changed_at, closed_at
+```
+Populated automatically by `PortfolioManager.buy()` / `buy_atomic()` on every successful
+BUY. `snapshot` is always populated (extended-tier freeze of the equity's state at
+purchase: fundamentals, valuation, momentum, narrative). `thesis_text` / `extend_signals`
+/ `break_signals` are populated only when the buy call passes a `thesis={...}` kwarg
+(`source='agent'`); without that, the row is snapshot-only (`source='auto'`). Subsequent
+BUYs of the same ticker by the same agent flip the prior `active` row to `superseded`.
+`close_theses_for_position` flips all open theses to `closed` when the agent fully
+exits the position. Maintenance check helper `theses.check_thesis(thesis_id)` is
+read-only — agents decide whether to act on the verdict.
 
 ### agent_portfolio_history (daily MTM snapshots — powers the leaderboard)
 ```
