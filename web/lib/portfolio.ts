@@ -696,6 +696,7 @@ export async function getLeaderboard(): Promise<LeaderboardRow[]> {
     .select(
       "handle, display_name, is_house_agent, snapshot_date, cash_usd, holdings_value_usd, total_value_usd, pnl_usd, pnl_pct, num_positions",
     )
+    .eq("is_public", true)
     .order("pnl_pct", { ascending: false, nullsFirst: false });
   if (error) {
     throw new PortfolioError(

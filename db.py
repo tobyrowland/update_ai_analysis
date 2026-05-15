@@ -322,6 +322,90 @@ class SupabaseDB:
         self._sanitize(row)
         self.client.table("portfolio_agents").upsert(row).execute()
 
+    # ------------------------------------------------------------------
+    # Portfolio-level trading (migration 025) — shared-pot cash + holdings
+    # for human-owned portfolios. Keyed on portfolio_id, not agent_id.
+    # ------------------------------------------------------------------
+
+    def get_launched_human_portfolios(self) -> list[dict]:
+        """Human-owned portfolios that have gone live (launched_at set)."""
+        resp = (
+            self.client.table("portfolios")
+            .select("*")
+            .not_.is_("owner_user_id", "null")
+            .not_.is_("launched_at", "null")
+            .execute()
+        )
+        return resp.data
+
+    def update_portfolio_last_heartbeat(self, portfolio_id: str, ts: str) -> None:
+        """Stamp portfolios.last_heartbeat_at after a portfolio rebalance."""
+        (
+            self.client.table("portfolios")
+            .update({"last_heartbeat_at": ts})
+            .eq("id", portfolio_id)
+            .execute()
+        )
+
+    def get_portfolio_account(self, portfolio_id: str) -> dict | None:
+        """Return a single portfolio_accounts row, or None."""
+        resp = (
+            self.client.table("portfolio_accounts")
+            .select("*")
+            .eq("portfolio_id", portfolio_id)
+            .execute()
+        )
+        return resp.data[0] if resp.data else None
+
+    def get_all_portfolio_accounts(self) -> list[dict]:
+        """Return all portfolio_accounts rows."""
+        resp = self.client.table("portfolio_accounts").select("*").execute()
+        return resp.data
+
+    def upsert_portfolio_account(self, portfolio_id: str, data: dict) -> None:
+        """Insert or update a portfolio_accounts row."""
+        data["portfolio_id"] = portfolio_id
+        self._sanitize(data)
+        self.client.table("portfolio_accounts").upsert(data).execute()
+
+    def get_portfolio_holdings(self, portfolio_id: str) -> list[dict]:
+        """Return all holdings rows for a portfolio."""
+        resp = (
+            self.client.table("portfolio_holdings")
+            .select("*")
+            .eq("portfolio_id", portfolio_id)
+            .execute()
+        )
+        return resp.data
+
+    def get_portfolio_holding(
+        self, portfolio_id: str, ticker: str
+    ) -> dict | None:
+        """Return a single portfolio_holdings row, or None."""
+        resp = (
+            self.client.table("portfolio_holdings")
+            .select("*")
+            .eq("portfolio_id", portfolio_id)
+            .eq("ticker", ticker)
+            .execute()
+        )
+        return resp.data[0] if resp.data else None
+
+    def upsert_portfolio_holding(self, data: dict) -> None:
+        """Insert or update a portfolio_holdings row. Caller sets portfolio_id+ticker."""
+        self._sanitize(data)
+        self.client.table("portfolio_holdings").upsert(data).execute()
+
+    def delete_portfolio_holding(self, portfolio_id: str, ticker: str) -> None:
+        """Remove a portfolio_holdings row (used when quantity reaches 0)."""
+        (
+            self.client.table("portfolio_holdings")
+            .delete()
+            .eq("portfolio_id", portfolio_id)
+            .eq("ticker", ticker)
+            .execute()
+        )
+
     def get_agent_holdings(self, agent_id: str) -> list[dict]:
         """Return all holdings rows for an agent."""
         resp = (
@@ -371,9 +455,18 @@ class SupabaseDB:
         return rows[0].get("id") if rows else None
 
     def upsert_portfolio_snapshot(self, data: dict) -> None:
-        """Insert or update a daily agent_portfolio_history row."""
+        """Insert or update a daily agent_portfolio_history row.
+
+        Conflict target is the (portfolio_id, snapshot_date) primary key
+        (migration 025) so both agent-owned and human-owned portfolios
+        upsert correctly.
+        """
         self._sanitize(data)
-        self.client.table("agent_portfolio_history").upsert(data).execute()
+        (
+            self.client.table("agent_portfolio_history")
+            .upsert(data, on_conflict="portfolio_id,snapshot_date")
+            .execute()
+        )
 
     # ------------------------------------------------------------------
     # Swarm Consensus

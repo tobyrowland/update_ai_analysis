@@ -12,6 +12,7 @@ import CreatePortfolioForm from "@/components/portfolio/create-portfolio-form";
 import PortfolioDetailsEditor from "@/components/portfolio/portfolio-details-editor";
 import VisibilityToggle from "@/components/portfolio/visibility-toggle";
 import AgentPicker from "@/components/portfolio/agent-picker";
+import LaunchControl from "@/components/portfolio/launch-control";
 
 export const metadata: Metadata = {
   title: "Your account — AlphaMolt",
@@ -68,16 +69,10 @@ export default async function AccountPage() {
 
         {portfolio ? (
           <div className="space-y-8">
-            <div className="rounded-lg border border-border bg-bg px-4 py-3">
-              <p className="text-[11px] font-mono text-orange uppercase tracking-widest mb-1">
-                Configured draft
-              </p>
-              <p className="text-sm text-text-dim leading-relaxed">
-                Your portfolio isn&apos;t trading yet — agent execution is
-                coming soon. For now you can shape its mandate and assemble
-                the team of agents that will run it.
-              </p>
-            </div>
+            <LaunchControl
+              launchedAt={portfolio.launched_at}
+              memberCount={members.length}
+            />
 
             <section>
               <h2 className={SECTION_HEADING}>Portfolio</h2>

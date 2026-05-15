@@ -238,6 +238,88 @@ class EnsurePortfolioTests(unittest.TestCase):
         self.assertIn(("upsert", "portfolio_agents"), ops)
 
 
+# ---------------------------------------------------------------------------
+# Portfolio-keyed shared-pot trading (migration 025)
+# ---------------------------------------------------------------------------
+
+
+class PortfolioTradingTests(unittest.TestCase):
+    """buy_portfolio / sell_portfolio / get_portfolio_book operate on the
+    portfolio_accounts + portfolio_holdings tables, not the agent ones."""
+
+    def _make_pm(self) -> "portfolio_module.PortfolioManager":
+        pm = portfolio_module.PortfolioManager.__new__(
+            portfolio_module.PortfolioManager
+        )
+        db = SupabaseDB.__new__(SupabaseDB)
+        db.client = _StubDB()
+        pm.db = db
+        return pm
+
+    def _can_price(self, db, ticker: str, price: float) -> None:
+        db.client.canned_selects[
+            ("companies", frozenset({("ticker", ticker)}))
+        ] = [{"ticker": ticker, "price": price}]
+
+    def test_require_portfolio_account_raises_when_missing(self):
+        pm = self._make_pm()
+        with self.assertRaises(portfolio_module.PortfolioError):
+            pm._require_portfolio_account("p-missing")
+
+    def test_get_portfolio_book_marks_to_market(self):
+        pm = self._make_pm()
+        pm.db.client.canned_selects[
+            ("portfolio_accounts", frozenset({("portfolio_id", "p-1")}))
+        ] = [{"portfolio_id": "p-1", "cash_usd": 400000, "starting_cash": 1000000}]
+        pm.db.client.canned_selects[
+            ("portfolio_holdings", frozenset({("portfolio_id", "p-1")}))
+        ] = [{"ticker": "NVDA", "quantity": 1000, "avg_cost_usd": 500}]
+        self._can_price(pm.db, "NVDA", 700)
+
+        book = pm.get_portfolio_book("p-1")
+        self.assertEqual(book["cash_usd"], 400000)
+        self.assertEqual(book["holdings_value_usd"], 700000.0)
+        self.assertEqual(book["total_value_usd"], 1100000.0)
+        self.assertEqual(book["pnl_usd"], 100000.0)
+        self.assertEqual(book["holdings"][0]["unrealized_pnl_usd"], 200000.0)
+
+    def test_buy_portfolio_debits_shared_cash(self):
+        pm = self._make_pm()
+        pm.db.client.canned_selects[
+            ("portfolio_accounts", frozenset({("portfolio_id", "p-1")}))
+        ] = [{"portfolio_id": "p-1", "cash_usd": 1000000, "starting_cash": 1000000}]
+        self._can_price(pm.db, "NVDA", 100)
+
+        trade = pm.buy_portfolio("p-1", "agent-9", "NVDA", 10, note="t")
+        self.assertEqual(trade["side"], "buy")
+        self.assertEqual(trade["portfolio_id"], "p-1")
+        self.assertEqual(trade["agent_id"], "agent-9")
+        self.assertEqual(trade["gross_usd"], 1000.0)
+        self.assertEqual(trade["cash_after_usd"], 999000.0)
+        ops = [(o["op"], o["table"]) for o in pm.db.client.log]
+        self.assertIn(("upsert", "portfolio_accounts"), ops)
+        self.assertIn(("upsert", "portfolio_holdings"), ops)
+        self.assertIn(("insert", "agent_trades"), ops)
+
+    def test_buy_portfolio_rejects_insufficient_cash(self):
+        pm = self._make_pm()
+        pm.db.client.canned_selects[
+            ("portfolio_accounts", frozenset({("portfolio_id", "p-1")}))
+        ] = [{"portfolio_id": "p-1", "cash_usd": 500, "starting_cash": 1000000}]
+        self._can_price(pm.db, "NVDA", 100)
+        with self.assertRaises(portfolio_module.PortfolioError):
+            pm.buy_portfolio("p-1", "agent-9", "NVDA", 10)
+
+    def test_sell_portfolio_rejects_missing_position(self):
+        pm = self._make_pm()
+        pm.db.client.canned_selects[
+            ("portfolio_accounts", frozenset({("portfolio_id", "p-1")}))
+        ] = [{"portfolio_id": "p-1", "cash_usd": 1000, "starting_cash": 1000000}]
+        self._can_price(pm.db, "NVDA", 100)
+        with self.assertRaises(portfolio_module.PortfolioError):
+            pm.sell_portfolio("p-1", "agent-9", "NVDA", 5)
+
+
 if __name__ == "__main__":
     result = unittest.main(exit=False, verbosity=2).result
     sys.exit(0 if result.wasSuccessful() else 1)

@@ -146,7 +146,7 @@ Be selective. The shortlist should reflect YOUR strategy — momentum, value, gr
 Output strict JSON only. No prose, no markdown fences."""
 
 STAGE1_USER_TEMPLATE = """\
-UNIVERSE (compact tier, snapshot {snapshot_date}):
+{mandate_block}UNIVERSE (compact tier, snapshot {snapshot_date}):
 {universe_json}
 
 CURRENT PORTFOLIO:
@@ -177,7 +177,7 @@ Constraints:
 Output strict JSON only. No prose, no markdown fences."""
 
 STAGE2_USER_TEMPLATE = """\
-DEEP DATA on your shortlist (full tier, snapshot {snapshot_date}):
+{mandate_block}DEEP DATA on your shortlist (full tier, snapshot {snapshot_date}):
 {universe_json}
 
 YOUR STAGE 1 SHORTLIST (for context — your prior reasoning):
@@ -210,7 +210,7 @@ Constraints:
 Output strict JSON only. No prose, no markdown fences."""
 
 SINGLE_FULL_USER_TEMPLATE = """\
-UNIVERSE (snapshot {snapshot_date}):
+{mandate_block}UNIVERSE (snapshot {snapshot_date}):
 {universe_json}
 
 CURRENT PORTFOLIO:
@@ -224,6 +224,25 @@ OUTPUT SCHEMA (strict JSON, no other text):
 }}
 
 Pick 15-25 tickers. weight_pct sum: 95-100. Output JSON only."""
+
+
+def _mandate_block(mandate: str | None) -> str:
+    """Render a portfolio mandate as a prompt preamble, or '' when absent.
+
+    Human-owned portfolios (migration 024+) carry a free-text mandate in
+    ``portfolios.description``. When present it is prepended to the picker's
+    user prompt so the LLM trades to the owner's brief. Legacy 1:1 agent
+    portfolios have no mandate — the block is empty and the prompt is byte
+    identical to before.
+    """
+    text = (mandate or "").strip()
+    if not text:
+        return ""
+    return (
+        "PORTFOLIO MANDATE (the human owner's investment instructions — "
+        "honour these):\n"
+        f"{text}\n\n"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +345,9 @@ def rebalance_llm_pick(ctx: RebalanceContext) -> RebalanceResult:
     result = RebalanceResult()
     params = {**LLM_PICK_DEFAULTS, **(ctx.params or {})}
     handle = ctx.agent.get("handle", ctx.agent["id"][:8])
+    # When operating a human-owned portfolio, ctx.mandate carries the owner's
+    # brief; it is prepended to every picker prompt. Empty for legacy agents.
+    mandate_block = _mandate_block(ctx.mandate)
 
     provider = params.get("provider")
     model = params.get("model")
@@ -367,7 +389,7 @@ def rebalance_llm_pick(ctx: RebalanceContext) -> RebalanceResult:
     }
 
     # Portfolio state — feeds into both prompt and trade diffing.
-    portfolio = ctx.pm.get_portfolio(ctx.agent["id"])
+    portfolio = ctx.get_book()
     total_value = float(portfolio["total_value_usd"])
     if total_value <= 0:
         result.errors.append(f"total_value_usd <= 0 for agent {handle}")
@@ -391,6 +413,7 @@ def rebalance_llm_pick(ctx: RebalanceContext) -> RebalanceResult:
         "provider": provider,
         "model": model,
         "picker_mode": picker_mode,
+        "has_mandate": bool(ctx.mandate),
     }
 
     # ----- Stage 1: shortlist (two_stage only) -----
@@ -405,6 +428,7 @@ def rebalance_llm_pick(ctx: RebalanceContext) -> RebalanceResult:
                 portfolio=portfolio_summary,
                 universe_tickers=universe_tickers,
                 params=params,
+                mandate_block=mandate_block,
             )
         except LLMProviderError as exc:
             result.errors.append(f"stage 1 failed: {exc}")
@@ -462,6 +486,7 @@ def rebalance_llm_pick(ctx: RebalanceContext) -> RebalanceResult:
                 portfolio=portfolio_summary,
                 valid_tickers=valid_after_stage1,
                 params=params,
+                mandate_block=mandate_block,
             )
             stage_label = "stage2"
         else:
@@ -473,6 +498,7 @@ def rebalance_llm_pick(ctx: RebalanceContext) -> RebalanceResult:
                 portfolio=portfolio_summary,
                 valid_tickers=valid_after_stage1,
                 params=params,
+                mandate_block=mandate_block,
             )
             stage_label = "single"
     except LLMProviderError as exc:
@@ -521,14 +547,14 @@ def rebalance_llm_pick(ctx: RebalanceContext) -> RebalanceResult:
     # Sells before buys to free cash.
     for ticker, qty, rationale in trades_planned["sells"]:
         try:
-            ctx.pm.sell(ctx.agent["id"], ticker, qty, note=rationale)
+            ctx.sell(ticker, qty, note=rationale)
             result.sells += 1
         except PortfolioError as exc:
             result.errors.append(f"sell {ticker} x{qty}: {exc}")
 
     for ticker, qty, rationale in trades_planned["buys"]:
         try:
-            ctx.pm.buy(ctx.agent["id"], ticker, qty, note=rationale)
+            ctx.buy(ticker, qty, note=rationale)
             result.buys += 1
         except PortfolioError as exc:
             # Cash drift between plan and execution is the most common
@@ -557,6 +583,7 @@ def pick_shortlist_via_llm(
     shortlist_max: int,
     max_tokens: int = 16384,
     temperature: float = 0.2,
+    mandate_block: str = "",
 ) -> tuple[str, list[dict], list[str], tuple[int | None, int | None], str | None]:
     """Reusable shortlist call — shared by llm_pick stage 1 and trading_agents.
 
@@ -574,6 +601,7 @@ def pick_shortlist_via_llm(
         universe_json=json.dumps(snapshot, separators=(",", ":")),
         portfolio_json=json.dumps(portfolio, separators=(",", ":")),
         shortlist_max=shortlist_max,
+        mandate_block=mandate_block,
     )
     resp = call_llm(
         provider=provider,
@@ -607,6 +635,7 @@ def _run_stage1(
     portfolio: dict,
     universe_tickers: set[str],
     params: dict,
+    mandate_block: str = "",
 ) -> tuple[str, list[dict], list[str], tuple[int | None, int | None], str | None]:
     return pick_shortlist_via_llm(
         provider=provider,
@@ -620,6 +649,7 @@ def _run_stage1(
         shortlist_max=int(params["shortlist_max"]),
         max_tokens=int(params["stage1_max_tokens"]),
         temperature=float(params["temperature"]),
+        mandate_block=mandate_block,
     )
 
 
@@ -633,12 +663,14 @@ def _run_stage2(
     portfolio: dict,
     valid_tickers: set[str],
     params: dict,
+    mandate_block: str = "",
 ) -> tuple[str, list[dict], list[str], tuple[int | None, int | None], str | None]:
     user = STAGE2_USER_TEMPLATE.format(
         snapshot_date=snapshot_date,
         universe_json=json.dumps(snapshot, separators=(",", ":")),
         stage1_json=json.dumps({"shortlist": shortlist}, separators=(",", ":")),
         portfolio_json=json.dumps(portfolio, separators=(",", ":")),
+        mandate_block=mandate_block,
     )
     resp = call_llm(
         provider=provider,
@@ -674,11 +706,13 @@ def _run_single_full(
     portfolio: dict,
     valid_tickers: set[str],
     params: dict,
+    mandate_block: str = "",
 ) -> tuple[str, list[dict], list[str], tuple[int | None, int | None], str | None]:
     user = SINGLE_FULL_USER_TEMPLATE.format(
         snapshot_date=snapshot_date,
         universe_json=json.dumps(snapshot, separators=(",", ":")),
         portfolio_json=json.dumps(portfolio, separators=(",", ":")),
+        mandate_block=mandate_block,
     )
     resp = call_llm(
         provider=provider,

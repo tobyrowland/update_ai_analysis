@@ -534,6 +534,347 @@ class PortfolioManager:
         return data
 
     # ------------------------------------------------------------------
+    # Portfolio-level trading (migration 025) — shared-pot cash + holdings
+    # for human-owned portfolios. One cash balance per portfolio, traded
+    # by all its member agents; each fill records the executing agent.
+    # ------------------------------------------------------------------
+
+    def open_portfolio_account(
+        self,
+        portfolio_id: str,
+        starting_cash: float = DEFAULT_STARTING_CASH,
+    ) -> dict:
+        """Idempotently create a `portfolio_accounts` row for a portfolio."""
+        existing = self.db.get_portfolio_account(portfolio_id)
+        if existing:
+            return existing
+        self.db.upsert_portfolio_account(portfolio_id, {
+            "starting_cash": starting_cash,
+            "cash_usd": starting_cash,
+            "inception_date": date.today().isoformat(),
+        })
+        logger.info(
+            "Opened portfolio account %s with $%.2f starting cash",
+            portfolio_id, starting_cash,
+        )
+        return self.db.get_portfolio_account(portfolio_id)
+
+    def _require_portfolio_account(self, portfolio_id: str) -> dict:
+        account = self.db.get_portfolio_account(portfolio_id)
+        if not account:
+            raise PortfolioError(
+                f"No portfolio_accounts row for {portfolio_id} — "
+                "portfolio not launched"
+            )
+        return account
+
+    def buy_portfolio(
+        self,
+        portfolio_id: str,
+        agent_id: str,
+        ticker: str,
+        quantity: float,
+        note: str = "",
+        *,
+        thesis: dict | None = None,
+    ) -> dict:
+        """Buy into a shared-pot portfolio. ``agent_id`` is the executing member.
+
+        Same cash-settlement and weighted-avg-cost semantics as ``buy``, but
+        debits ``portfolio_accounts`` and upserts ``portfolio_holdings``.
+        """
+        if quantity <= 0:
+            raise PortfolioError(f"buy quantity must be > 0, got {quantity}")
+
+        account = self._require_portfolio_account(portfolio_id)
+        price = self.get_price(ticker)
+        gross = round(quantity * price, 2)
+        cash = float(account["cash_usd"])
+        if gross > cash:
+            raise PortfolioError(
+                f"Insufficient cash: need ${gross:.2f}, have ${cash:.2f}"
+            )
+        new_cash = round(cash - gross, 2)
+
+        existing = self.db.get_portfolio_holding(portfolio_id, ticker)
+        if existing:
+            old_qty = float(existing["quantity"])
+            old_cost = float(existing["avg_cost_usd"])
+            new_qty = old_qty + quantity
+            new_avg_cost = round(
+                (old_qty * old_cost + quantity * price) / new_qty, 4
+            )
+            self.db.upsert_portfolio_holding({
+                "portfolio_id": portfolio_id,
+                "ticker": ticker,
+                "quantity": new_qty,
+                "avg_cost_usd": new_avg_cost,
+                "first_bought_at": existing["first_bought_at"],
+            })
+        else:
+            self.db.upsert_portfolio_holding({
+                "portfolio_id": portfolio_id,
+                "ticker": ticker,
+                "quantity": quantity,
+                "avg_cost_usd": round(price, 4),
+            })
+
+        self.db.upsert_portfolio_account(portfolio_id, {"cash_usd": new_cash})
+
+        trade = {
+            "agent_id": agent_id,
+            "portfolio_id": portfolio_id,
+            "ticker": ticker,
+            "side": "buy",
+            "quantity": quantity,
+            "price_usd": round(price, 4),
+            "gross_usd": gross,
+            "cash_after_usd": new_cash,
+            "note": note,
+        }
+        trade_id = self.db.insert_agent_trade(trade)
+        logger.info(
+            "BUY [pf %s] %s %s @ $%.4f  gross=$%.2f  cash=%.2f",
+            portfolio_id[:8], agent_id[:8], ticker, price, gross, new_cash,
+        )
+        try:
+            import theses
+            theses.record_thesis(
+                self.db,
+                agent_id=agent_id,
+                portfolio_id=portfolio_id,
+                ticker=ticker,
+                trade_id=trade_id,
+                **_thesis_kwargs(thesis),
+            )
+        except Exception as exc:  # noqa: BLE001 — never block a trade on thesis I/O
+            logger.warning(
+                "BUY [pf %s] %s: thesis record failed (trade still succeeded): %s",
+                portfolio_id[:8], ticker, exc,
+            )
+        return trade
+
+    def sell_portfolio(
+        self,
+        portfolio_id: str,
+        agent_id: str,
+        ticker: str,
+        quantity: float,
+        note: str = "",
+    ) -> dict:
+        """Sell from a shared-pot portfolio. ``agent_id`` is the executing member."""
+        if quantity <= 0:
+            raise PortfolioError(f"sell quantity must be > 0, got {quantity}")
+
+        account = self._require_portfolio_account(portfolio_id)
+        holding = self.db.get_portfolio_holding(portfolio_id, ticker)
+        if not holding:
+            raise PortfolioError(
+                f"No position in {ticker} for portfolio {portfolio_id}"
+            )
+        held = float(holding["quantity"])
+        if quantity > held + 1e-9:
+            raise PortfolioError(
+                f"Cannot sell {quantity} of {ticker}: holding only {held}"
+            )
+
+        price = self.get_price(ticker)
+        gross = round(quantity * price, 2)
+        new_cash = round(float(account["cash_usd"]) + gross, 2)
+
+        remaining = round(held - quantity, 6)
+        position_zeroed = remaining <= 1e-9
+        if position_zeroed:
+            self.db.delete_portfolio_holding(portfolio_id, ticker)
+        else:
+            self.db.upsert_portfolio_holding({
+                "portfolio_id": portfolio_id,
+                "ticker": ticker,
+                "quantity": remaining,
+                "avg_cost_usd": float(holding["avg_cost_usd"]),
+                "first_bought_at": holding["first_bought_at"],
+            })
+
+        self.db.upsert_portfolio_account(portfolio_id, {"cash_usd": new_cash})
+
+        trade = {
+            "agent_id": agent_id,
+            "portfolio_id": portfolio_id,
+            "ticker": ticker,
+            "side": "sell",
+            "quantity": quantity,
+            "price_usd": round(price, 4),
+            "gross_usd": gross,
+            "cash_after_usd": new_cash,
+            "note": note,
+        }
+        self.db.insert_agent_trade(trade)
+        logger.info(
+            "SELL [pf %s] %s %s @ $%.4f  gross=$%.2f  cash=%.2f",
+            portfolio_id[:8], agent_id[:8], ticker, price, gross, new_cash,
+        )
+        if position_zeroed:
+            try:
+                import theses
+                theses.close_theses_for_position(
+                    self.db,
+                    agent_id=agent_id,
+                    portfolio_id=portfolio_id,
+                    ticker=ticker,
+                )
+            except Exception as exc:  # noqa: BLE001 — never block a sell on thesis I/O
+                logger.warning(
+                    "SELL [pf %s] %s: thesis close failed (sell still succeeded): %s",
+                    portfolio_id[:8], ticker, exc,
+                )
+        return trade
+
+    def buy_portfolio_atomic(
+        self,
+        portfolio_id: str,
+        agent_id: str,
+        ticker: str,
+        quantity: float,
+        note: str = "",
+        *,
+        thesis: dict | None = None,
+    ) -> dict:
+        """Atomic shared-pot buy via the ``execute_portfolio_buy`` RPC."""
+        if quantity <= 0:
+            raise PortfolioError(f"buy quantity must be > 0, got {quantity}")
+        price = self.get_price(ticker)
+        result = self.db.client.rpc(
+            "execute_portfolio_buy",
+            {
+                "p_portfolio_id": portfolio_id,
+                "p_agent_id": agent_id,
+                "p_ticker": ticker,
+                "p_quantity": quantity,
+                "p_price_usd": round(price, 4),
+                "p_note": note,
+            },
+        ).execute()
+        data = result.data or {}
+        if data.get("status") == "ok":
+            try:
+                import theses
+                theses.record_thesis(
+                    self.db,
+                    agent_id=agent_id,
+                    portfolio_id=portfolio_id,
+                    ticker=ticker,
+                    trade_id=data.get("trade_id"),
+                    **_thesis_kwargs(thesis),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "BUY [pf %s] %s: thesis record failed: %s",
+                    portfolio_id[:8], ticker, exc,
+                )
+        else:
+            logger.warning(
+                "BUY [pf %s] %s rejected by RPC: %s",
+                portfolio_id[:8], ticker, data,
+            )
+        return data
+
+    def sell_portfolio_atomic(
+        self,
+        portfolio_id: str,
+        agent_id: str,
+        ticker: str,
+        quantity: float,
+        note: str = "",
+    ) -> dict:
+        """Atomic shared-pot sell via the ``execute_portfolio_sell`` RPC."""
+        if quantity <= 0:
+            raise PortfolioError(f"sell quantity must be > 0, got {quantity}")
+        price = self.get_price(ticker)
+        result = self.db.client.rpc(
+            "execute_portfolio_sell",
+            {
+                "p_portfolio_id": portfolio_id,
+                "p_agent_id": agent_id,
+                "p_ticker": ticker,
+                "p_quantity": quantity,
+                "p_price_usd": round(price, 4),
+                "p_note": note,
+            },
+        ).execute()
+        data = result.data or {}
+        if data.get("status") == "ok":
+            if float(data.get("remaining_quantity", 0) or 0) <= 1e-9:
+                try:
+                    import theses
+                    theses.close_theses_for_position(
+                        self.db,
+                        agent_id=agent_id,
+                        portfolio_id=portfolio_id,
+                        ticker=ticker,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "SELL [pf %s] %s: thesis close failed: %s",
+                        portfolio_id[:8], ticker, exc,
+                    )
+        else:
+            logger.warning(
+                "SELL [pf %s] %s rejected by RPC: %s",
+                portfolio_id[:8], ticker, data,
+            )
+        return data
+
+    def get_portfolio_book(self, portfolio_id: str) -> dict:
+        """Mark-to-market a shared-pot portfolio.
+
+        Returns the same dict shape as ``get_portfolio`` (cash, holdings,
+        total/pnl) so strategy code is agnostic to the account model.
+        """
+        account = self._require_portfolio_account(portfolio_id)
+        holdings = self.db.get_portfolio_holdings(portfolio_id)
+
+        cash = float(account["cash_usd"])
+        starting = float(account["starting_cash"])
+
+        enriched = []
+        holdings_value = 0.0
+        for h in holdings:
+            qty = float(h["quantity"])
+            avg_cost = float(h["avg_cost_usd"])
+            try:
+                price = self.get_price(h["ticker"])
+            except PortfolioError:
+                price = avg_cost
+            mv = round(qty * price, 2)
+            holdings_value += mv
+            enriched.append(
+                {
+                    "ticker": h["ticker"],
+                    "quantity": qty,
+                    "avg_cost_usd": avg_cost,
+                    "price_usd": round(price, 4),
+                    "market_value_usd": mv,
+                    "unrealized_pnl_usd": round((price - avg_cost) * qty, 2),
+                }
+            )
+
+        holdings_value = round(holdings_value, 2)
+        total = round(cash + holdings_value, 2)
+        pnl = round(total - starting, 2)
+        pnl_pct = round((pnl / starting) * 100, 4) if starting else 0.0
+
+        return {
+            "portfolio_id": portfolio_id,
+            "cash_usd": cash,
+            "starting_cash": starting,
+            "holdings": enriched,
+            "holdings_value_usd": holdings_value,
+            "total_value_usd": total,
+            "pnl_usd": pnl,
+            "pnl_pct": pnl_pct,
+        }
+
+    # ------------------------------------------------------------------
     # Valuation
     # ------------------------------------------------------------------
 
@@ -663,6 +1004,45 @@ class PortfolioManager:
                 logger.exception("Snapshot failed for %s: %s", agent_id, exc)
                 errors += 1
                 details.append({"agent_id": agent_id, "error": str(exc)})
+
+        # Migration 025: snapshot launched human-owned portfolios (shared-pot).
+        # Skipped when scoped to a single agent handle.
+        if not agent_handle:
+            for pacc in self.db.get_all_portfolio_accounts():
+                portfolio_id = pacc["portfolio_id"]
+                try:
+                    book = self.get_portfolio_book(portfolio_id)
+                    row = {
+                        "portfolio_id": portfolio_id,
+                        "snapshot_date": snapshot_date,
+                        "cash_usd": book["cash_usd"],
+                        "holdings_value_usd": book["holdings_value_usd"],
+                        "total_value_usd": book["total_value_usd"],
+                        "pnl_usd": book["pnl_usd"],
+                        "pnl_pct": book["pnl_pct"],
+                        "num_positions": len(book["holdings"]),
+                    }
+                    if dry_run:
+                        logger.info("[dry-run] %s", row)
+                        skipped += 1
+                    else:
+                        self.db.upsert_portfolio_snapshot(row)
+                        updated += 1
+                    details.append({
+                        "portfolio_id": portfolio_id,
+                        "total_value_usd": book["total_value_usd"],
+                        "pnl_pct": book["pnl_pct"],
+                        "num_positions": len(book["holdings"]),
+                    })
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception(
+                        "Snapshot failed for portfolio %s: %s",
+                        portfolio_id, exc,
+                    )
+                    errors += 1
+                    details.append(
+                        {"portfolio_id": portfolio_id, "error": str(exc)}
+                    )
 
         return {
             "updated": updated,

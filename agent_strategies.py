@@ -49,6 +49,47 @@ class RebalanceContext:
     dry_run: bool = False
     # Optional overrides (agents.config JSONB could feed these later).
     params: dict = field(default_factory=dict)
+    # Set when the strategy operates a shared-pot human portfolio
+    # (migration 025). None for legacy 1:1 agent portfolios — in which
+    # case the facade below routes to the agent-keyed account.
+    portfolio_id: str | None = None
+    members: list[dict] | None = None
+    mandate: str | None = None
+
+    # --- account-model-agnostic trading facade -------------------------
+    # Strategies call ctx.buy / ctx.sell / ctx.get_book without caring
+    # whether they operate an agent's own account or a shared human
+    # portfolio. ``ctx.agent["id"]`` is always the executing agent.
+
+    def buy(
+        self,
+        ticker: str,
+        quantity: float,
+        note: str = "",
+        *,
+        thesis: dict | None = None,
+    ) -> dict:
+        if self.portfolio_id:
+            return self.pm.buy_portfolio(
+                self.portfolio_id, self.agent["id"], ticker, quantity,
+                note=note, thesis=thesis,
+            )
+        return self.pm.buy(
+            self.agent["id"], ticker, quantity, note=note, thesis=thesis,
+        )
+
+    def sell(self, ticker: str, quantity: float, note: str = "") -> dict:
+        if self.portfolio_id:
+            return self.pm.sell_portfolio(
+                self.portfolio_id, self.agent["id"], ticker, quantity,
+                note=note,
+            )
+        return self.pm.sell(self.agent["id"], ticker, quantity, note=note)
+
+    def get_book(self) -> dict:
+        if self.portfolio_id:
+            return self.pm.get_portfolio_book(self.portfolio_id)
+        return self.pm.get_portfolio(self.agent["id"])
 
 
 @dataclass
@@ -308,7 +349,7 @@ def rebalance_dual_positive(ctx: RebalanceContext) -> RebalanceResult:
     price_map = dict(priced)
 
     # Snapshot: compute current total value.
-    portfolio = ctx.pm.get_portfolio(agent_id)
+    portfolio = ctx.get_book()
     total_value = portfolio["total_value_usd"]
     if total_value <= 0:
         result.errors.append(f"total_value_usd <= 0 for agent {handle}")
@@ -393,7 +434,7 @@ def rebalance_dual_positive(ctx: RebalanceContext) -> RebalanceResult:
     for ticker, qty, reason in sells:
         note = _format_dual_positive_sell_note(ticker, reason)
         try:
-            ctx.pm.sell(agent_id, ticker, qty, note=note)
+            ctx.sell(ticker, qty, note=note)
             result.sells += 1
         except PortfolioError as exc:
             result.errors.append(f"sell {ticker} x{qty}: {exc}")
@@ -406,7 +447,7 @@ def rebalance_dual_positive(ctx: RebalanceContext) -> RebalanceResult:
             meta.get("rank") or 0,
         )
         try:
-            ctx.pm.buy(agent_id, ticker, qty, note=note)
+            ctx.buy(ticker, qty, note=note)
             result.buys += 1
         except PortfolioError as exc:
             # Insufficient cash is the most likely failure mode (prices drift
@@ -520,7 +561,7 @@ def rebalance_momentum(ctx: RebalanceContext) -> RebalanceResult:
     eligible = _eligible_momentum(ctx.db, params)
     eligible_by_ticker = {c["ticker"]: c for c in eligible}
 
-    portfolio = ctx.pm.get_portfolio(agent_id)
+    portfolio = ctx.get_book()
     holdings = portfolio["holdings"]
     total_value = portfolio["total_value_usd"]
     if total_value <= 0:
@@ -731,7 +772,7 @@ def rebalance_momentum(ctx: RebalanceContext) -> RebalanceResult:
             ticker, meta, meta.get("reasons", []), params,
         )
         try:
-            ctx.pm.sell(agent_id, ticker, held_qty, note=note)
+            ctx.sell(ticker, held_qty, note=note)
             result.sells += 1
         except PortfolioError as exc:
             result.errors.append(f"sell {ticker} x{held_qty}: {exc}")
@@ -739,7 +780,7 @@ def rebalance_momentum(ctx: RebalanceContext) -> RebalanceResult:
     for ticker, qty, bc in buys:
         note = _format_momentum_buy_note(ticker, bc, bc["rank"])
         try:
-            ctx.pm.buy(agent_id, ticker, qty, note=note)
+            ctx.buy(ticker, qty, note=note)
             result.buys += 1
         except PortfolioError as exc:
             # Most likely: price drift between plan and fill left us short

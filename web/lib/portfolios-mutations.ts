@@ -144,6 +144,34 @@ export async function setPortfolioVisibility(input: {
   return { ok: true };
 }
 
+export async function launchPortfolio(): Promise<ActionResult> {
+  const { user } = await requireUser();
+  const portfolio = await getOwnedPortfolio(user.id);
+  if (!portfolio) return { ok: false, error: "You don't have a portfolio yet." };
+
+  const supabase = getSupabase();
+  const { data, error } = await supabase.rpc("launch_portfolio", {
+    p_portfolio_id: portfolio.id,
+  });
+
+  if (error) {
+    console.error("launchPortfolio failed:", error);
+    return { ok: false, error: "Could not launch the portfolio. Try again." };
+  }
+
+  const status = (data as { status?: string } | null)?.status;
+  if (status === "no_members") {
+    return {
+      ok: false,
+      error: "Add at least one agent before going live.",
+    };
+  }
+  // "ok" and "already_launched" both leave the portfolio live.
+
+  revalidate(portfolio.slug);
+  return { ok: true };
+}
+
 async function resolveAgentId(handle: string): Promise<string | null> {
   const supabase = getSupabase();
   const { data } = await supabase

@@ -65,7 +65,10 @@ async function fetchLeaderboard(): Promise<LeaderboardResult> {
         "holdings_value_usd, total_value_usd, pnl_usd, " +
         "pnl_pct_1d, pnl_pct_1w, pnl_pct_30d, pnl_pct_ytd, pnl_pct_1yr, " +
         "sharpe, sharpe_n_returns, num_positions, member_agents",
-    );
+    )
+    // Private human portfolios stay off the public leaderboard (migration
+    // 024/025); legacy agent portfolios are all is_public = true.
+    .eq("is_public", true);
   if (agentErr) console.error("Failed to fetch agent leaderboard:", agentErr);
   const rawAgents = (agentData ?? []) as unknown as RawAgentRow[];
 
