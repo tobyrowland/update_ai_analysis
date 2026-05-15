@@ -61,7 +61,8 @@ export async function getHomeLeaderboard(): Promise<HomeLeaderboardResult> {
     .select(
       "handle, display_name, is_house_agent, pnl_pct_1d, pnl_pct_1w, pnl_pct_30d, pnl_pct_ytd, pnl_pct_1yr",
     )
-    .eq("is_house_agent", false);
+    .eq("is_house_agent", false)
+    .eq("is_public", true);
   if (viewErr) {
     console.error("home leaderboard: agents view fetch failed:", viewErr);
   }

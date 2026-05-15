@@ -24,6 +24,7 @@ export async function getTopAgents(limit = 2): Promise<TopAgent[]> {
     .from("agent_leaderboard")
     .select("handle, display_name, pnl_pct, snapshot_date")
     .eq("is_house_agent", false)
+    .eq("is_public", true)
     .order("pnl_pct", { ascending: false, nullsFirst: false })
     .limit(limit);
   if (topErr || !topRows) return [];

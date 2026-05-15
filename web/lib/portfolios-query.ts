@@ -23,6 +23,8 @@ export interface Portfolio {
   /** Null for legacy agent-owned portfolios (migration 024). */
   owner_user_id: string | null;
   is_public: boolean;
+  /** Null = draft (not trading); set once the owner clicks Go live (migration 025). */
+  launched_at: string | null;
   created_at: string;
   updated_at: string;
 }

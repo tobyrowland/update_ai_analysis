@@ -70,7 +70,13 @@ def _journal(
     result: RebalanceResult | None = None,
     error_message: str | None = None,
     dry_run: bool = False,
+    portfolio_id: str | None = None,
+    advance_agent: bool = True,
 ) -> None:
+    notes = dict(result.notes) if result else {}
+    # For human-portfolio member runs, tag the journal with the portfolio.
+    if portfolio_id:
+        notes["portfolio_id"] = portfolio_id
     row = {
         "agent_id": agent_id,
         "strategy": strategy,
@@ -80,7 +86,7 @@ def _journal(
         "trades_executed": (result.trades if result else 0),
         "buys": (result.buys if result else 0),
         "sells": (result.sells if result else 0),
-        "notes": (result.notes if result else {}),
+        "notes": notes,
         "error_message": error_message,
     }
     db.insert_agent_heartbeat(row)
@@ -89,7 +95,12 @@ def _journal(
     # the strategy errored (e.g. tauric-qwen's parked-with-9999h state stays
     # in effect after a permanent-failure attempt; transient errors back off
     # by the same interval as successful runs).
-    if not dry_run:
+    #
+    # advance_agent is False for human-portfolio member runs: those rebalance
+    # on the *portfolio's* cadence (portfolios.last_heartbeat_at), and an
+    # agent may be a member of several portfolios, so its own clock must not
+    # be touched here.
+    if not dry_run and advance_agent:
         db.update_agent_last_heartbeat(agent_id, _now_utc().isoformat())
 
 
@@ -176,6 +187,119 @@ def _run_one(
     return status
 
 
+# Human portfolios rebalance weekly, matching the default agent cadence.
+PORTFOLIO_HEARTBEAT_INTERVAL_HOURS = 168
+
+
+def _portfolio_is_due(portfolio: dict, now: datetime) -> bool:
+    last = _parse_ts(portfolio.get("last_heartbeat_at"))
+    if last is None:
+        return True
+    return now >= last + timedelta(hours=PORTFOLIO_HEARTBEAT_INTERVAL_HOURS)
+
+
+def _run_portfolio(
+    db: SupabaseDB,
+    pm: PortfolioManager,
+    portfolio: dict,
+    *,
+    force: bool,
+    dry_run: bool,
+    logger: logging.Logger,
+) -> dict[str, int]:
+    """Rebalance one launched human portfolio.
+
+    Each member agent runs its own strategy, in portfolio_agents.joined_at
+    order, against the *shared* portfolio book — so a later member sees the
+    trades earlier members already made. Returns a status-count dict.
+    """
+    counts = {"ok": 0, "dry-run": 0, "skipped": 0, "error": 0}
+    slug = portfolio.get("slug") or portfolio["id"][:8]
+
+    if not force and not _portfolio_is_due(portfolio, _now_utc()):
+        logger.info("  portfolio %-22s skip (not due)", slug)
+        counts["skipped"] += 1
+        return counts
+
+    members = [m["agent"] for m in db.get_portfolio_members(portfolio["id"])]
+    mandate = portfolio.get("description")
+    logger.info("  portfolio %-22s %d member(s)", slug, len(members))
+
+    for member in members:
+        handle = member.get("handle", member["id"][:8])
+        strategy_name = member.get("strategy")
+        started = _now_utc()
+
+        if not strategy_name:
+            logger.info("    %-22s skip (no strategy)", handle)
+            counts["skipped"] += 1
+            continue
+        # trading_agents runs from its own long-timeout workflow.
+        if strategy_name == "trading_agents":
+            logger.info("    %-22s skip (trading_agents)", handle)
+            counts["skipped"] += 1
+            continue
+
+        strategy = get_strategy(strategy_name)
+        if strategy is None:
+            logger.error(
+                "    %-22s ERROR unknown strategy: %s", handle, strategy_name
+            )
+            _journal(
+                db, agent_id=member["id"], strategy=strategy_name,
+                started_at=started, status="error",
+                error_message=f"unknown strategy: {strategy_name}",
+                portfolio_id=portfolio["id"], advance_agent=False,
+                dry_run=dry_run,
+            )
+            counts["error"] += 1
+            continue
+
+        ctx = RebalanceContext(
+            db=db, pm=pm, agent=member, dry_run=dry_run,
+            params=dict(member.get("config") or {}),
+            portfolio_id=portfolio["id"],
+            members=members,
+            mandate=mandate,
+        )
+        try:
+            result = strategy(ctx)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("    %-22s strategy crashed", handle)
+            _journal(
+                db, agent_id=member["id"], strategy=strategy_name,
+                started_at=started, status="error",
+                error_message=f"{exc}\n{traceback.format_exc()}",
+                portfolio_id=portfolio["id"], advance_agent=False,
+                dry_run=dry_run,
+            )
+            counts["error"] += 1
+            continue
+
+        status = (
+            "dry-run" if dry_run else ("ok" if not result.errors else "error")
+        )
+        logger.info(
+            "    %-22s %s  buys=%d sells=%d errors=%d",
+            handle, status, result.buys, result.sells, len(result.errors),
+        )
+        _journal(
+            db, agent_id=member["id"], strategy=strategy_name,
+            started_at=started, status=status, result=result,
+            error_message="; ".join(result.errors) if result.errors else None,
+            portfolio_id=portfolio["id"], advance_agent=False, dry_run=dry_run,
+        )
+        counts[status] = counts.get(status, 0) + 1
+
+    # Stamp the portfolio's heartbeat clock once, after every member ran.
+    if not dry_run:
+        db.update_portfolio_last_heartbeat(
+            portfolio["id"], _now_utc().isoformat()
+        )
+
+    return counts
+
+
 def main() -> int:
     load_dotenv()
     parser = argparse.ArgumentParser(description=__doc__)
@@ -239,6 +363,20 @@ def main() -> int:
             logger=logger,
         )
         counts[status] = counts.get(status, 0) + 1
+
+    # Second pass: launched human-owned portfolios (migration 025). Each
+    # member agent rebalances the shared book in joined_at order. Skipped for
+    # a single --handle invocation (that targets one legacy agent).
+    if not args.handle:
+        portfolios = db.get_launched_human_portfolios()
+        logger.info("=== human portfolios: %d launched ===", len(portfolios))
+        for portfolio in portfolios:
+            pcounts = _run_portfolio(
+                db, pm, portfolio,
+                force=args.force, dry_run=args.dry_run, logger=logger,
+            )
+            for key, val in pcounts.items():
+                counts[key] = counts.get(key, 0) + val
 
     elapsed = round(time.time() - start, 1)
     logger.info(

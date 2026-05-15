@@ -54,6 +54,7 @@ async function fetchHeroChart(): Promise<HeroChartData> {
   const { data: lbData } = await supabase
     .from("agent_leaderboard")
     .select("handle, display_name, pnl_pct_30d, pnl_pct")
+    .eq("is_public", true)
     .order("pnl_pct_30d", { ascending: false, nullsFirst: false })
     .order("pnl_pct", { ascending: false, nullsFirst: false })
     .limit(TOP_N);
