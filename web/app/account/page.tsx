@@ -17,7 +17,6 @@ import PortfolioDetailsEditor from "@/components/portfolio/portfolio-details-edi
 import VisibilityToggle from "@/components/portfolio/visibility-toggle";
 import AgentPicker from "@/components/portfolio/agent-picker";
 import LaunchControl from "@/components/portfolio/launch-control";
-import AccountTabs from "@/components/account-tabs";
 
 export const metadata: Metadata = {
   title: "Your account — AlphaMolt",
@@ -90,16 +89,13 @@ export default async function AccountPage() {
       <main className="flex-1 w-full">
         <div className="max-w-[1180px] mx-auto w-full px-4 sm:px-6 py-8 sm:py-12">
           {portfolio ? (
-            <>
-              <AccountTabs />
-              <PortfolioView
-                portfolio={portfolio}
-                members={members}
-                allAgents={allAgents}
-                returns30d={returns30d}
-                email={email}
-              />
-            </>
+            <PortfolioView
+              portfolio={portfolio}
+              members={members}
+              allAgents={allAgents}
+              returns30d={returns30d}
+              email={email}
+            />
           ) : (
             <NoPortfolioView displayName={displayName} email={email} />
           )}

@@ -1,17 +1,30 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import Logo from "@/components/logo";
 import NavAuth from "@/components/nav-auth";
+import { useSessionEmail } from "@/lib/use-session";
 
-const links = [
+// Public links — shown to everyone.
+const publicLinks = [
   { href: "/leaderboard", label: "Leaderboard" },
   { href: "/consensus", label: "Consensus" },
   { href: "/docs", label: "Docs" },
 ];
 
+// Signed-in links — the user's own portfolio area. Shown only once the
+// client-side session resolves, so they pop in with the auth chip.
+const signedInLinks = [
+  { href: "/account", label: "Portfolio" },
+  { href: "/account/watchlist", label: "Watchlist" },
+];
+
 export default function Nav() {
+  const pathname = usePathname();
+  const { email, ready } = useSessionEmail();
+
   // Border shows only once the user has scrolled past the hero on the
   // homepage. On inner pages scrollY starts ~0 anyway but quickly crosses
   // the threshold, so the border reappears naturally.
@@ -36,6 +49,11 @@ export default function Nav() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // Signed-in users get their Portfolio + Watchlist tabs ahead of the
+  // public links. Until the session resolves, only the public links show.
+  const links =
+    ready && email ? [...signedInLinks, ...publicLinks] : publicLinks;
+
   return (
     <header
       className={`sticky top-0 z-50 bg-bg/90 backdrop-blur-md transition-[border-color] duration-200 ${
@@ -55,15 +73,23 @@ export default function Nav() {
         </Link>
 
         <nav className="hidden sm:flex items-center gap-1">
-          {links.map((link) => (
-            <Link
-              key={link.href}
-              href={link.href}
-              className="px-3 py-1.5 text-sm text-text-dim hover:text-text transition-colors rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-text/40"
-            >
-              {link.label}
-            </Link>
-          ))}
+          {links.map((link) => {
+            const active = pathname === link.href;
+            return (
+              <Link
+                key={link.href}
+                href={link.href}
+                aria-current={active ? "page" : undefined}
+                className={`px-3 py-1.5 text-sm transition-colors rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-text/40 ${
+                  active
+                    ? "text-[var(--color-cyan)] font-medium"
+                    : "text-text-dim hover:text-text"
+                }`}
+              >
+                {link.label}
+              </Link>
+            );
+          })}
           <NavAuth />
         </nav>
 
@@ -85,16 +111,24 @@ export default function Nav() {
           className="sm:hidden border-t border-border bg-bg/95 backdrop-blur-md"
         >
           <nav className="px-4 py-3 flex flex-col">
-            {links.map((link) => (
-              <Link
-                key={link.href}
-                href={link.href}
-                className="py-2 text-sm text-text-dim hover:text-text transition-colors"
-                onClick={() => setMenuOpen(false)}
-              >
-                {link.label}
-              </Link>
-            ))}
+            {links.map((link) => {
+              const active = pathname === link.href;
+              return (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  aria-current={active ? "page" : undefined}
+                  className={`py-2 text-sm transition-colors ${
+                    active
+                      ? "text-[var(--color-cyan)] font-medium"
+                      : "text-text-dim hover:text-text"
+                  }`}
+                  onClick={() => setMenuOpen(false)}
+                >
+                  {link.label}
+                </Link>
+              );
+            })}
             <div className="pt-1 mt-1 border-t border-border">
               <NavAuth onNavigate={() => setMenuOpen(false)} />
             </div>

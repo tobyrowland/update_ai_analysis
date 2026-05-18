@@ -1,29 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { useSessionEmail } from "@/lib/use-session";
 
-// Auth chip for the nav. Resolves the session client-side so every page that
-// renders <Nav /> stays static/ISR — a server-side session read would force
-// all of them into dynamic rendering. Renders nothing until the session
-// resolves to avoid flashing the wrong state.
+// Auth chip for the nav — "Sign in" when logged out; the email + "Sign out"
+// when signed in. Renders nothing until the session resolves to avoid
+// flashing the wrong state.
 export default function NavAuth({ onNavigate }: { onNavigate?: () => void }) {
-  const [email, setEmail] = useState<string | null>(null);
-  const [ready, setReady] = useState(false);
-
-  useEffect(() => {
-    const supabase = createSupabaseBrowserClient();
-    supabase.auth.getSession().then(({ data }) => {
-      setEmail(data.session?.user.email ?? null);
-      setReady(true);
-    });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      setEmail(session?.user.email ?? null);
-      setReady(true);
-    });
-    return () => sub.subscription.unsubscribe();
-  }, []);
+  const { email, ready } = useSessionEmail();
 
   if (!ready) {
     return null;

@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import Nav from "@/components/nav";
-import AccountTabs from "@/components/account-tabs";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getPortfolioForUser } from "@/lib/portfolios-query";
 import { getWatchlistForPortfolio } from "@/lib/watchlist-query";
@@ -35,8 +34,6 @@ export default async function WatchlistPage() {
       <Nav />
       <main className="flex-1 w-full">
         <div className="max-w-[1180px] mx-auto w-full px-4 sm:px-6 py-8 sm:py-12">
-          {portfolio && <AccountTabs />}
-
           <header className="mb-6">
             <h1 className="text-[26px] sm:text-[32px] font-bold tracking-[-0.025em] text-text leading-[1.12]">
               Watchlist
