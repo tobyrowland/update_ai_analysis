@@ -594,6 +594,58 @@ class SupabaseDB:
         self.client.table("agent_heartbeats").insert(data).execute()
 
     # ------------------------------------------------------------------
+    # Portfolio watchlist (migration 027) — curated per-portfolio shortlist.
+    # The owner writes source='user' rows; the watchlist_curator strategy
+    # writes source='agent' rows; the watchlist_buyer strategy reads both.
+    # ------------------------------------------------------------------
+
+    def get_portfolio_watchlist(self, portfolio_id: str) -> list[dict]:
+        """Return every portfolio_watchlist row for a portfolio."""
+        resp = (
+            self.client.table("portfolio_watchlist")
+            .select("*")
+            .eq("portfolio_id", portfolio_id)
+            .execute()
+        )
+        return resp.data or []
+
+    def replace_agent_watchlist(
+        self,
+        portfolio_id: str,
+        agent_id: str,
+        items: list[dict],
+    ) -> None:
+        """Replace the agent-sourced watchlist rows for a portfolio.
+
+        Deletes every existing ``source='agent'`` row for the portfolio,
+        then inserts ``items`` (each ``{ticker, rationale}``) as fresh
+        ``source='agent'`` rows attributed to ``agent_id``. The owner's
+        manual ``source='user'`` rows are never touched.
+        """
+        (
+            self.client.table("portfolio_watchlist")
+            .delete()
+            .eq("portfolio_id", portfolio_id)
+            .eq("source", "agent")
+            .execute()
+        )
+        rows = [
+            {
+                "portfolio_id": portfolio_id,
+                "ticker": it["ticker"],
+                "source": "agent",
+                "added_by_agent_id": agent_id,
+                "rationale": it.get("rationale"),
+            }
+            for it in items
+            if it.get("ticker")
+        ]
+        if rows:
+            for r in rows:
+                self._sanitize(r)
+            self.client.table("portfolio_watchlist").insert(rows).execute()
+
+    # ------------------------------------------------------------------
     # Run Logs
     # ------------------------------------------------------------------
 

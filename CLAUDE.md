@@ -141,11 +141,17 @@ build. Runs in **two passes**:
    `agent_heartbeats`.
 2. **Human-portfolio pass** — for every launched human-owned portfolio
    (`portfolios.owner_user_id` set, `launched_at` set), runs each member agent's
-   strategy in `portfolio_agents.joined_at` order against the portfolio's
-   *shared* book (`portfolio_accounts` / `portfolio_holdings`) — sequential
-   rebalance, so a later agent sees what earlier ones did. Mandate-aware
-   strategies receive `portfolios.description` as their brief. Gated on
+   strategy against the portfolio's *shared* book (`portfolio_accounts` /
+   `portfolio_holdings`) — sequential rebalance, so a later agent sees what
+   earlier ones did. Members run **curate-phase strategies before trade-phase
+   ones** (see `STRATEGY_PHASES` below), and within each phase in
+   `portfolio_agents.joined_at` order (stable sort). Mandate-aware strategies
+   receive `portfolios.description` as their brief. Gated on
    `portfolios.last_heartbeat_at`.
+
+The Pass-1 agents loop skips `trading_agents` (own long-timeout workflow) and
+the pipeline strategies `watchlist_curator` / `watchlist_buyer` (only
+meaningful operating a shared human portfolio — they run in Pass 2).
 
 Reference strategy `dual_positive` (in `agent_strategies.py`) re-reads the
 `companies` table, picks the top-N tickers with both `bear` ✅ and `bull` ✅
@@ -157,6 +163,30 @@ safe to rerun on an unchanged universe.
 Strategies trade through an account-model-agnostic `ctx.buy/sell/get_book`
 facade on `RebalanceContext` — the same strategy code drives a legacy
 agent account or a shared human portfolio depending on `ctx.portfolio_id`.
+
+**Strategy phases.** `agent_strategies.STRATEGY_PHASES` maps a strategy name
+to `'curate'` or `'trade'` (default `'trade'` — `strategy_phase(name)` returns
+the phase for any name, listed or not). A *curate* strategy produces inputs a
+*trade* strategy consumes; the portfolio heartbeat runs all curate-phase
+members first so their output is visible to the buyers in the same run.
+
+**Two-agent pipeline (`watchlist_curator` → `watchlist_buyer`).** A pair of
+strategies for human portfolios. `watchlist_curator` (phase `curate`) is a
+mandate-aware LLM curator: it loads the daily compact universe snapshot,
+prompts an LLM with the snapshot + the portfolio's mandate, parses ~15-25
+`{ticker, rationale}` items (count via `config.watchlist_size`, default 20),
+validates each against `companies`, and replaces the portfolio's
+`source='agent'` `portfolio_watchlist` rows (the owner's `source='user'`
+picks are never touched). It reuses `llm_picker`'s snapshot loader and the
+shared `pick_shortlist_via_llm` LLM-call helper; provider/model come from
+`agents.config` like `llm_pick`. `watchlist_buyer` (phase `trade`) is a
+mechanical buyer modelled on `dual_positive`: it reads the *whole* watchlist
+(both sources), equal-weights it with a 2% cash reserve, diffs against the
+shared book, sells holdings no longer on the watchlist (before buys), and
+buys watchlist tickers — passing a `thesis` kwarg on each buy so an
+`investment_theses` row is recorded (the watchlist `rationale` becomes the
+thesis text). Both are no-ops on a legacy 1:1 agent portfolio. The house
+agents `shortlist-builder` and `buying-agent` (migration 028) drive them.
 
 Supports `--handle`, `--force` (ignore interval guard), and `--dry-run`.
 
@@ -286,8 +316,12 @@ created_at, updated_at
 `strategy` is a key into `agent_strategies.STRATEGIES` (NULL = manually
 managed, no heartbeat). `heartbeat_interval_hours` defaults to 168 (weekly).
 `config` is a JSONB bag for per-agent strategy parameters — the `llm_pick`
-strategy uses `{provider, model, picker_mode, snapshot_tier}`; mechanical
-strategies ignore it. `powered_by` is an optional human-readable LLM brand
+strategy uses `{provider, model, picker_mode, snapshot_tier}`, the
+`watchlist_curator` strategy uses `{provider, model, watchlist_size}`;
+mechanical strategies (`dual_positive`, `momentum`, `watchlist_buyer`) ignore
+it. House agents `shortlist-builder` (`watchlist_curator`) and `buying-agent`
+(`watchlist_buyer`) seeded by migration 028 drive the two-agent pipeline for
+human portfolios. `powered_by` is an optional human-readable LLM brand
 (e.g. "Claude Sonnet 4.6") rendered as a chip on the public agent profile
 page; community agents set it on registration. `available_for_hire` (BOOLEAN,
 default false; house agents backfilled true) is the owner's opt-in to the
@@ -349,9 +383,10 @@ it from `/account/watchlist` (server actions in `web/lib/watchlist-mutations.ts`
 reads via `web/lib/watchlist-query.ts`). The table is agent-ready by design:
 `source` distinguishes a manual owner pick from an agent pick,
 `added_by_agent_id` attributes the latter, and `rationale` carries the "why".
-Today only the owner writes (`source='user'`); the agent wiring — one agent
-populating the list, a second trading from it — is a later PR and needs no
-schema change.
+The owner writes `source='user'` rows from the website; the
+`watchlist_curator` strategy writes `source='agent'` rows (replacing only its
+own prior rows — see `db.replace_agent_watchlist`), and the
+`watchlist_buyer` strategy trades from the union of both sources.
 
 **Trading-shaped tables and `portfolio_id`.** Since migration 021,
 every trade-related row carries both `agent_id` and `portfolio_id`

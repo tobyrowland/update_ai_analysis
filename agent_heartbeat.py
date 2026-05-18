@@ -33,7 +33,12 @@ from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
 
-from agent_strategies import RebalanceContext, RebalanceResult, get_strategy
+from agent_strategies import (
+    RebalanceContext,
+    RebalanceResult,
+    get_strategy,
+    strategy_phase,
+)
 from db import SupabaseDB
 from portfolio import PortfolioManager
 
@@ -223,6 +228,17 @@ def _run_portfolio(
 
     members = [m["agent"] for m in db.get_portfolio_members(portfolio["id"])]
     mandate = portfolio.get("description")
+
+    # Run curate-phase members (e.g. watchlist_curator) before trade-phase
+    # ones so a curator's fresh shortlist is visible to the buyer in the
+    # same heartbeat. Stable sort by (phase_rank, original joined_at index)
+    # preserves joined_at order within each phase.
+    _phase_rank = {"curate": 0, "trade": 1}
+    members.sort(
+        key=lambda m: (
+            _phase_rank.get(strategy_phase(m.get("strategy")), 1),
+        ),
+    )
     logger.info("  portfolio %-22s %d member(s)", slug, len(members))
 
     for member in members:
@@ -346,6 +362,14 @@ def main() -> int:
         # work because the filter is only applied to the bulk path.
         agents = [
             a for a in agents if a.get("strategy") != "trading_agents"
+        ]
+        # The pipeline strategies (watchlist_curator / watchlist_buyer) only
+        # make sense operating a shared human portfolio — their legacy 1:1
+        # agent account has no mandate and no watchlist, so they'd no-op.
+        # Skip them in Pass 1; they run in Pass 2 as portfolio members.
+        agents = [
+            a for a in agents
+            if a.get("strategy") not in ("watchlist_curator", "watchlist_buyer")
         ]
 
     logger.info(
