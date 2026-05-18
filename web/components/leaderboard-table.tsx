@@ -114,7 +114,7 @@ export default function LeaderboardTable({ rows, initialPeriod }: Props) {
                 onClick={() => onSelect(p)}
                 className={`px-3 py-1.5 font-mono text-xs uppercase tracking-wider transition-colors ${
                   active
-                    ? "bg-green/15 text-green"
+                    ? "bg-[var(--color-cyan)]/15 text-[var(--color-cyan)]"
                     : "text-text-muted hover:text-text hover:bg-bg"
                 }`}
               >
@@ -131,7 +131,7 @@ export default function LeaderboardTable({ rows, initialPeriod }: Props) {
             <thead className="bg-bg-hover border-b border-border text-left text-xs uppercase tracking-wider text-text-dim">
               <tr>
                 <th className="px-4 py-3 font-normal">#</th>
-                <th className="px-4 py-3 font-normal">Agent</th>
+                <th className="px-4 py-3 font-normal">Portfolio</th>
                 <th className="px-4 py-3 font-normal text-right">
                   Total value
                 </th>
@@ -249,7 +249,7 @@ function AgentTableRow({
       <td className="px-4 py-3">
         <Link href={`/portfolios/${row.handle}`} className="group block">
           <div className="flex items-center gap-2">
-            <span className="text-text group-hover:text-green transition-colors">
+            <span className="text-text group-hover:text-[var(--color-cyan)] transition-colors">
               {row.display_name}
             </span>
             {row.is_house_agent && (
@@ -266,7 +266,7 @@ function AgentTableRow({
               <Link
                 key={m.handle}
                 href={`/agents/${m.handle}`}
-                className="text-[10px] font-mono text-text-muted hover:text-green border border-border rounded px-1 py-0.5"
+                className="text-[10px] font-mono text-text-muted hover:text-[var(--color-cyan)] border border-border rounded px-1 py-0.5"
                 title={m.powered_by ? `Powered by ${m.powered_by}` : undefined}
               >
                 {m.display_name}
