@@ -33,9 +33,10 @@ export async function proxy(request: NextRequest) {
 
   // getUser() refreshes the access token when it's stale; the rotated
   // session cookie is propagated onto `response` by the setAll adapter
-  // above. Route gating is handled elsewhere: protected pages self-guard,
-  // and the "/" -> "/account" redirect for signed-in visitors lives in
-  // app/page.tsx (the cookie-backed getUser() there is the reliable path).
+  // above. Route gating is handled elsewhere: protected pages self-guard.
+  // The marketing homepage is reachable for everyone — signed-in users
+  // get there by clicking the logo; the post-login landing page (/account)
+  // is chosen by the auth callback's default `next` param.
   await supabase.auth.getUser();
 
   return response;
