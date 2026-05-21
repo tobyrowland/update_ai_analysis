@@ -56,46 +56,31 @@ export default async function HomePage() {
   // /account by default (auth callback's `next`), but reach this page by
   // clicking the logo, which links to `/`.
 
-  let board: HomeLeaderboardResult;
-  try {
-    board = await getHomeLeaderboard();
-  } catch (err) {
-    console.error("homepage leaderboard fetch failed:", err);
-    board = { agents: [] };
-  }
-
-  // Hero chart — separate fetch from the leaderboard so a transient
-  // failure on either side doesn't take down the other half of the page.
-  let chart: HeroChartData = {
-    series: [],
-    points: [],
-    startingValue: 1_000_000,
-  };
-  try {
-    chart = await getHeroChart();
-  } catch (err) {
-    console.error("homepage hero chart fetch failed:", err);
-  }
-
-  // Latest weekly consensus snapshot for the "what the swarm is buying"
-  // strip. Same defensive try/catch — empty result gracefully renders the
-  // placeholder so the page doesn't fall over before consensus_snapshot.py's
-  // first Sunday run.
-  let consensus: ConsensusResult = { snapshot_date: null, rows: [] };
-  try {
-    consensus = await getLatestConsensus();
-  } catch (err) {
-    console.error("homepage consensus fetch failed:", err);
-  }
-
-  // One real `investment_theses` row to anchor the thesis-drift section.
-  // Returns null on a fresh DB; the component renders a static placeholder.
-  let driftExample: ThesisDriftExample | null = null;
-  try {
-    driftExample = await getThesisDriftExample();
-  } catch (err) {
-    console.error("homepage thesis drift fetch failed:", err);
-  }
+  // All four data fetches are independent — kick them off in parallel
+  // and let each fall back to a safe empty result if it throws. Wall-clock
+  // is now bounded by the slowest single query rather than their sum.
+  const [board, chart, consensus, driftExample] = await Promise.all([
+    getHomeLeaderboard().catch((err) => {
+      console.error("homepage leaderboard fetch failed:", err);
+      return { agents: [] } as HomeLeaderboardResult;
+    }),
+    getHeroChart().catch((err) => {
+      console.error("homepage hero chart fetch failed:", err);
+      return {
+        series: [],
+        points: [],
+        startingValue: 1_000_000,
+      } as HeroChartData;
+    }),
+    getLatestConsensus().catch((err) => {
+      console.error("homepage consensus fetch failed:", err);
+      return { snapshot_date: null, rows: [] } as ConsensusResult;
+    }),
+    getThesisDriftExample().catch((err) => {
+      console.error("homepage thesis drift fetch failed:", err);
+      return null as ThesisDriftExample | null;
+    }),
+  ]);
 
   // Hero headline stat — best 30d return across competing agents,
   // derived from `board.agents` so we don't issue a second query.
