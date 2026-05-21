@@ -8,9 +8,14 @@ import {
   type ActionResult,
 } from "@/lib/portfolios-mutations";
 import { roleFor, type AgentPhase } from "@/lib/agent-roles";
+import RunNowButton, {
+  RunAllAgentsButton,
+} from "@/components/portfolio/run-now-button";
 
 export interface PickerAgent {
   handle: string;
+  /** Stable id — passed to `runAgent` for the per-member dispatch. */
+  agentId: string;
   display_name: string;
   is_house_agent: boolean;
   strategy: string | null;
@@ -88,9 +93,15 @@ function RoleStatus({
 export default function AgentPicker({
   members,
   allAgents,
+  portfolioId,
+  launchedAt,
 }: {
   members: PickerAgent[];
   allAgents: PickerAgent[];
+  /** Used by the per-member "Run now" buttons to scope the dispatch. */
+  portfolioId: string;
+  /** Null → portfolio is a draft; Run-now buttons render disabled. */
+  launchedAt: string | null;
 }) {
   const router = useRouter();
   const [query, setQuery] = useState("");
@@ -155,9 +166,17 @@ export default function AgentPicker({
 
       {/* Current members */}
       <div>
-        <p className="text-xs font-mono uppercase tracking-widest text-text-dim mb-2">
-          On this portfolio ({members.length})
-        </p>
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <p className="text-xs font-mono uppercase tracking-widest text-text-dim">
+            On this portfolio ({members.length})
+          </p>
+          {members.length > 0 && (
+            <RunAllAgentsButton
+              portfolioId={portfolioId}
+              launchedAt={launchedAt}
+            />
+          )}
+        </div>
         {members.length > 0 ? (
           <ul className="space-y-2">
             {members.map((m) => {
@@ -185,19 +204,27 @@ export default function AgentPicker({
                       <span className={ret.cls}>{ret.text} 30d</span>
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      runAction(m.handle, () =>
-                        removeAgentFromPortfolio({ handle: m.handle }),
-                      )
-                    }
-                    disabled={pendingHandle === m.handle}
-                    aria-label={`Remove ${m.handle}`}
-                    className="shrink-0 px-2 py-1 font-mono text-xs text-text-muted hover:text-red disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red/40 rounded transition-colors"
-                  >
-                    {pendingHandle === m.handle ? "…" : "Remove"}
-                  </button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <RunNowButton
+                      agentHandle={m.handle}
+                      agentId={m.agentId}
+                      portfolioId={portfolioId}
+                      launchedAt={launchedAt}
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        runAction(m.handle, () =>
+                          removeAgentFromPortfolio({ handle: m.handle }),
+                        )
+                      }
+                      disabled={pendingHandle === m.handle}
+                      aria-label={`Remove ${m.handle}`}
+                      className="shrink-0 px-2 py-1 font-mono text-xs text-text-muted hover:text-red disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red/40 rounded transition-colors"
+                    >
+                      {pendingHandle === m.handle ? "…" : "Remove"}
+                    </button>
+                  </div>
                 </li>
               );
             })}
