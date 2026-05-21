@@ -84,7 +84,18 @@ export default async function AccountPage() {
   return (
     <>
       <Nav />
-      <main className="flex-1 w-full">
+      <main className="flex-1 w-full relative">
+        {/* Ambient backdrop — same off-axis cyan/green glows as the
+            homepage hero, calmer opacity, scoped behind the header so
+            the form region below stays a clean dark canvas. */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 h-[440px] -z-10 opacity-80"
+          style={{
+            background:
+              "radial-gradient(60% 65% at 16% 8%, rgba(0,255,65,0.05), transparent 70%), radial-gradient(48% 55% at 86% 4%, rgba(0,242,255,0.06), transparent 70%)",
+          }}
+        />
         <div className="max-w-[820px] mx-auto w-full px-4 sm:px-6 py-10 sm:py-14">
           {portfolio ? (
             <PortfolioView
@@ -181,13 +192,32 @@ function PortfolioView({
     description: a.description,
   }));
 
+  const daysLive = live
+    ? Math.max(
+        0,
+        Math.floor(
+          (Date.now() - new Date(portfolio.launched_at!).getTime()) /
+            86_400_000,
+        ),
+      )
+    : 0;
+
   return (
-    <div className="space-y-6 sm:space-y-8">
+    <div className="space-y-7 sm:space-y-9">
       <header>
-        <h1 className="text-[30px] sm:text-[36px] font-bold tracking-[-0.02em] text-text leading-[1.08]">
-          {portfolio.display_name}
+        <DashboardStateBadge live={live} daysLive={daysLive} />
+        <h1 className="mt-4 text-[34px] sm:text-[44px] font-bold tracking-[-0.025em] text-text leading-[1.05]">
+          <span
+            className="bg-clip-text text-transparent"
+            style={{
+              backgroundImage:
+                "linear-gradient(110deg, var(--color-cyan) 0%, #6FF8A0 45%, var(--color-green) 100%)",
+            }}
+          >
+            {portfolio.display_name}
+          </span>
         </h1>
-        <p className="mt-3 text-base text-text-muted leading-relaxed max-w-[60ch]">
+        <p className="mt-4 text-base sm:text-lg text-text-muted leading-relaxed max-w-[60ch]">
           {live
             ? "Your team of agents is trading the shared $1M paper book to your mandate. Tune the setup below at any time."
             : "Two steps, then go live. Write your mandate, add the agents, launch."}
@@ -243,6 +273,47 @@ function PortfolioView({
 // Shared layout bits — match the homepage's visual language.
 // ---------------------------------------------------------------------------
 
+function DashboardStateBadge({
+  live,
+  daysLive,
+}: {
+  live: boolean;
+  daysLive: number;
+}) {
+  if (live) {
+    return (
+      <span className="inline-flex items-center gap-2 rounded-full border border-[var(--color-green)]/30 bg-[var(--color-green)]/[0.08] px-3 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--color-green)]">
+        <span
+          aria-hidden
+          className="h-1.5 w-1.5 rounded-full bg-[var(--color-green)] animate-pulse"
+          style={{ boxShadow: "0 0 8px rgba(0,255,65,0.6)" }}
+        />
+        Live
+        {daysLive > 0 && (
+          <>
+            <span aria-hidden className="text-[var(--color-green)]/40">
+              ·
+            </span>
+            <span className="font-mono">
+              {daysLive}d
+            </span>
+          </>
+        )}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-2 rounded-full border border-[var(--color-cyan)]/30 bg-[var(--color-cyan)]/[0.07] px-3 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--color-cyan)]">
+      <span
+        aria-hidden
+        className="h-1.5 w-1.5 rounded-full bg-[var(--color-cyan)]"
+        style={{ boxShadow: "0 0 6px rgba(0,242,255,0.8)" }}
+      />
+      Setup in progress
+    </span>
+  );
+}
+
 function ProgressSteps({
   steps,
 }: {
@@ -297,7 +368,7 @@ function SetupCard({
 }) {
   return (
     <section
-      className="rounded-2xl border border-white/10 p-5 sm:p-6"
+      className="group rounded-2xl border border-white/10 p-5 sm:p-6 transition-colors hover:border-white/15"
       style={{
         background:
           "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.012))",
