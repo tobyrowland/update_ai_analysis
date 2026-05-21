@@ -166,6 +166,7 @@ function PortfolioView({
 
   const pickerMembers = members.map((m) => ({
     handle: m.handle,
+    agentId: m.agent_id,
     display_name: m.display_name,
     is_house_agent: m.is_house_agent,
     strategy: m.strategy,
@@ -173,6 +174,7 @@ function PortfolioView({
   }));
   const pickerAll = allAgents.map((a) => ({
     handle: a.handle,
+    agentId: a.id,
     display_name: a.display_name,
     is_house_agent: a.is_house_agent,
     strategy: a.strategy,
@@ -228,7 +230,12 @@ function PortfolioView({
           title="Add your agents"
           intro="A portfolio needs a Shortlist Builder to curate the watchlist and a Buying Agent to trade it. The 30-day return is each agent's live track record."
         >
-          <AgentPicker members={pickerMembers} allAgents={pickerAll} />
+          <AgentPicker
+            members={pickerMembers}
+            allAgents={pickerAll}
+            portfolioId={portfolio.id}
+            launchedAt={portfolio.launched_at}
+          />
         </SetupCard>
 
         {/* 3. Go live */}

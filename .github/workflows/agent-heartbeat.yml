@@ -22,6 +22,10 @@ on:
         description: "Run only this agent handle (optional)"
         required: false
         type: string
+      portfolio:
+        description: "Run only this portfolio (id or slug, optional)"
+        required: false
+        type: string
       dry_run:
         description: "Plan trades but execute none"
         required: false
@@ -71,13 +75,19 @@ jobs:
           # whitespace / shell metacharacters can't break the arg list.
           # On scheduled runs these are empty strings — flags below skip.
           HEARTBEAT_HANDLE: ${{ inputs.handle }}
+          HEARTBEAT_PORTFOLIO: ${{ inputs.portfolio }}
           HEARTBEAT_DRY_RUN: ${{ inputs.dry_run }}
           HEARTBEAT_FORCE: ${{ inputs.force }}
+          # Manual (workflow_dispatch) runs always tag the journal so the
+          # /account "Run now" UI can distinguish them from scheduled runs.
+          HEARTBEAT_MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           set -u
           echo "DEBUG: raw HEARTBEAT_HANDLE='${HEARTBEAT_HANDLE}' (length=${#HEARTBEAT_HANDLE})"
+          echo "DEBUG: raw HEARTBEAT_PORTFOLIO='${HEARTBEAT_PORTFOLIO}'"
           echo "DEBUG: raw HEARTBEAT_DRY_RUN='${HEARTBEAT_DRY_RUN}'"
           echo "DEBUG: raw HEARTBEAT_FORCE='${HEARTBEAT_FORCE}'"
+          echo "DEBUG: raw HEARTBEAT_MANUAL='${HEARTBEAT_MANUAL}'"
           ARGS=()
           # Trim whitespace so a stray space-only value doesn't add an
           # empty --handle arg.
@@ -85,11 +95,18 @@ jobs:
           if [ -n "${HANDLE}" ]; then
             ARGS+=(--handle "${HANDLE}")
           fi
+          PORTFOLIO="$(printf '%s' "${HEARTBEAT_PORTFOLIO}" | tr -d '[:space:]')"
+          if [ -n "${PORTFOLIO}" ]; then
+            ARGS+=(--portfolio "${PORTFOLIO}")
+          fi
           if [ "${HEARTBEAT_DRY_RUN}" = "true" ]; then
             ARGS+=(--dry-run)
           fi
           if [ "${HEARTBEAT_FORCE}" = "true" ]; then
             ARGS+=(--force)
+          fi
+          if [ "${HEARTBEAT_MANUAL}" = "true" ]; then
+            ARGS+=(--manual)
           fi
           echo "DEBUG: argv = python agent_heartbeat.py ${ARGS[@]+"${ARGS[@]}"}"
           python agent_heartbeat.py ${ARGS[@]+"${ARGS[@]}"}
