@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 import Link from "next/link";
 import Nav from "@/components/nav";
 import HeroChart from "@/components/hero-chart";
@@ -56,10 +56,11 @@ export default async function HomePage() {
   // /account by default (auth callback's `next`), but reach this page by
   // clicking the logo, which links to `/`.
 
-  // All four data fetches are independent — kick them off in parallel
-  // and let each fall back to a safe empty result if it throws. Wall-clock
-  // is now bounded by the slowest single query rather than their sum.
-  const [board, chart, consensus, driftExample] = await Promise.all([
+  // Only the hero-feeding queries block the initial render. The two
+  // below-the-fold sections (thesis drift + consensus) each fetch
+  // inside their own async server component, wrapped in <Suspense>,
+  // so their HTML streams in after the hero rather than blocking it.
+  const [board, chart] = await Promise.all([
     getHomeLeaderboard().catch((err) => {
       console.error("homepage leaderboard fetch failed:", err);
       return { agents: [] } as HomeLeaderboardResult;
@@ -71,14 +72,6 @@ export default async function HomePage() {
         points: [],
         startingValue: 1_000_000,
       } as HeroChartData;
-    }),
-    getLatestConsensus().catch((err) => {
-      console.error("homepage consensus fetch failed:", err);
-      return { snapshot_date: null, rows: [] } as ConsensusResult;
-    }),
-    getThesisDriftExample().catch((err) => {
-      console.error("homepage thesis drift fetch failed:", err);
-      return null as ThesisDriftExample | null;
     }),
   ]);
 
@@ -127,22 +120,79 @@ export default async function HomePage() {
             topMonthlyReturn={topMonthlyReturn}
           />
           <StrategyCard />
-          <HomeThesisDrift example={driftExample} />
-          <section
-            id="consensus"
-            className="mt-20 sm:mt-28 scroll-mt-16"
-          >
-            <HomeConsensus
-              rows={consensus.rows}
-              snapshotDate={consensus.snapshot_date}
-            />
-          </section>
+          <Suspense fallback={<ThesisDriftSkeleton />}>
+            <HomeThesisDriftSection />
+          </Suspense>
+          <Suspense fallback={<ConsensusSkeleton />}>
+            <HomeConsensusSection />
+          </Suspense>
           <BuildYourAgent />
           <FinalCta />
           <WotBadge />
         </div>
       </main>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Below-the-fold streamed sections — each one is an async server
+// component wrapped in <Suspense> on the page, so its HTML arrives
+// in a later chunk and doesn't block the hero. Skeletons sit in the
+// initial chunk with min-heights tuned to limit layout shift when
+// the real content lands.
+// ---------------------------------------------------------------------------
+
+async function HomeThesisDriftSection() {
+  let example: ThesisDriftExample | null = null;
+  try {
+    example = await getThesisDriftExample();
+  } catch (err) {
+    console.error("homepage thesis drift fetch failed:", err);
+  }
+  return <HomeThesisDrift example={example} />;
+}
+
+async function HomeConsensusSection() {
+  let consensus: ConsensusResult = { snapshot_date: null, rows: [] };
+  try {
+    consensus = await getLatestConsensus();
+  } catch (err) {
+    console.error("homepage consensus fetch failed:", err);
+  }
+  // HomeConsensus already renders its own <section id="consensus">; we
+  // just add the vertical rhythm the page wants between major blocks.
+  return (
+    <div className="mt-20 sm:mt-28">
+      <HomeConsensus
+        rows={consensus.rows}
+        snapshotDate={consensus.snapshot_date}
+      />
+    </div>
+  );
+}
+
+function ThesisDriftSkeleton() {
+  return (
+    <section
+      aria-busy="true"
+      aria-label="Loading thesis drift example"
+      className="mt-20 sm:mt-28"
+    >
+      <div className="rounded-2xl border border-white/[0.06] bg-white/[0.015] min-h-[640px] sm:min-h-[480px]" />
+    </section>
+  );
+}
+
+function ConsensusSkeleton() {
+  return (
+    <section
+      aria-busy="true"
+      aria-label="Loading swarm consensus"
+      className="mt-20 sm:mt-28"
+    >
+      <div className="rounded-2xl border border-white/[0.06] bg-white/[0.015] min-h-[420px]" />
+    </section>
   );
 }
 
