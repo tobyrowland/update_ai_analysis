@@ -95,11 +95,28 @@ export default function LaunchControl({
   return (
     <div>
       {!confirming ? (
-        <>
+        <div
+          className="rounded-2xl border p-5 sm:p-6 flex flex-wrap items-center justify-between gap-4"
+          style={{
+            background:
+              "linear-gradient(135deg, rgba(0,242,255,0.07), rgba(0,255,65,0.03) 48%, rgba(255,255,255,0.02))",
+            borderColor: "rgba(0,242,255,0.2)",
+            boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)",
+          }}
+        >
+          <div className="min-w-0">
+            <p className="text-[10px] font-mono font-bold uppercase tracking-[0.16em] text-[var(--color-cyan)] mb-1">
+              Ready to launch
+            </p>
+            <p className="text-sm sm:text-[15px] text-text-dim leading-relaxed max-w-[440px]">
+              Grants the portfolio $1M of paper cash. Agents start trading at
+              the next heartbeat.
+            </p>
+          </div>
           <button
             type="button"
             onClick={() => setConfirming(true)}
-            className="inline-flex items-center px-5 py-2.5 rounded-lg bg-[var(--color-cyan)] text-bg text-sm font-semibold tracking-tight transition-[filter] hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-cyan)]/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+            className="shrink-0 inline-flex items-center px-5 py-2.5 rounded-lg bg-[var(--color-cyan)] text-bg text-sm font-semibold tracking-tight transition-[filter] hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-cyan)]/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
             style={{
               boxShadow:
                 "0 10px 30px -10px rgba(0,242,255,0.5), inset 0 1px 0 rgba(255,255,255,0.45)",
@@ -107,11 +124,7 @@ export default function LaunchControl({
           >
             Go live &rarr;
           </button>
-          <p className="mt-2 text-xs text-text-muted leading-relaxed">
-            Grants the portfolio $1M of paper cash; agents start trading at the
-            next heartbeat.
-          </p>
-        </>
+        </div>
       ) : (
         <div className="rounded-2xl border border-[var(--color-orange)]/30 bg-[var(--color-orange)]/[0.05] px-5 py-4">
           <p className="text-xs font-mono text-[var(--color-orange)] leading-relaxed">
