@@ -166,14 +166,11 @@ export default function AgentPicker({
   members,
   allAgents,
   portfolioId,
-  launchedAt,
 }: {
   members: PickerAgent[];
   allAgents: PickerAgent[];
   /** Used by the per-member "Run now" buttons to scope the dispatch. */
   portfolioId: string;
-  /** Null → portfolio is a draft; Run-now buttons render disabled. */
-  launchedAt: string | null;
 }) {
   const router = useRouter();
   const [query, setQuery] = useState("");
@@ -260,10 +257,7 @@ export default function AgentPicker({
             On this portfolio ({members.length})
           </p>
           {members.length > 0 && (
-            <RunAllAgentsButton
-              portfolioId={portfolioId}
-              launchedAt={launchedAt}
-            />
+            <RunAllAgentsButton portfolioId={portfolioId} />
           )}
         </div>
         {members.length > 0 ? (
@@ -305,7 +299,6 @@ export default function AgentPicker({
                       agentHandle={m.handle}
                       agentId={m.agentId}
                       portfolioId={portfolioId}
-                      launchedAt={launchedAt}
                     />
                     <button
                       type="button"

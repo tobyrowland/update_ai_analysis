@@ -13,7 +13,6 @@ import { revalidatePath } from "next/cache";
 import { getSupabase } from "@/lib/supabase";
 import { requireUser } from "@/lib/auth/require-user";
 import { uniquePortfolioSlug } from "@/lib/slug";
-import { roleFor } from "@/lib/agent-roles";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -64,17 +63,18 @@ export async function createPortfolio(input: {
 
   const supabase = getSupabase();
   const slug = await uniquePortfolioSlug(displayName);
-  const { error } = await supabase.from("portfolios").insert({
-    slug,
-    display_name: displayName,
-    description: mandate || null,
-    owner_user_id: user.id,
-    owner_agent_id: null,
-    is_public: true,
+
+  // Atomic creation: inserts the portfolios row + seeds the $1M
+  // portfolio_accounts row in one transaction. The RPC sets is_public=false
+  // (migration 031 default). Replaces the old two-step insert + launch flow.
+  const { error } = await supabase.rpc("create_portfolio_funded", {
+    p_owner_user_id: user.id,
+    p_slug: slug,
+    p_display_name: displayName,
+    p_description: mandate || null,
   });
 
   if (error) {
-    // 23505 here is almost certainly the one-portfolio-per-user partial index.
     if (error.code === "23505") {
       return { ok: false, error: "You already have a portfolio." };
     }
@@ -137,59 +137,20 @@ export async function setPortfolioVisibility(input: {
     .eq("owner_user_id", user.id);
 
   if (error) {
+    // Migration 031's `enforce_portfolio_public_threshold` trigger refuses
+    // false->true flips when the portfolio holds <15 equities.
+    if (
+      error.code === "23514" ||
+      /needs >= 15/.test(error.message ?? "")
+    ) {
+      return {
+        ok: false,
+        error: "Hold at least 15 equities to flip public.",
+      };
+    }
     console.error("setPortfolioVisibility failed:", error);
     return { ok: false, error: "Could not update visibility. Try again." };
   }
-
-  revalidate(portfolio.slug);
-  return { ok: true };
-}
-
-export async function launchPortfolio(): Promise<ActionResult> {
-  const { user } = await requireUser();
-  const portfolio = await getOwnedPortfolio(user.id);
-  if (!portfolio) return { ok: false, error: "You don't have a portfolio yet." };
-
-  const supabase = getSupabase();
-
-  // Role gate: a launchable portfolio needs both a shortlist builder
-  // (curate phase) and a buying agent (trade phase). Resolve the members'
-  // strategies and check before spending the launch RPC.
-  const { data: memberRows } = await supabase
-    .from("portfolio_agents")
-    .select("agents (strategy)")
-    .eq("portfolio_id", portfolio.id);
-  type StratRow = { agents: { strategy: string | null } | { strategy: string | null }[] | null };
-  const phases = ((memberRows as unknown as StratRow[] | null) ?? []).map((r) => {
-    const a = Array.isArray(r.agents) ? r.agents[0] : r.agents;
-    return roleFor(a?.strategy ?? null).phase;
-  });
-  const hasCurator = phases.includes("curate");
-  const hasBuyer = phases.includes("trade");
-  if (!hasCurator || !hasBuyer) {
-    return {
-      ok: false,
-      error: "Add a Shortlist Builder and a Buying Agent before going live.",
-    };
-  }
-
-  const { data, error } = await supabase.rpc("launch_portfolio", {
-    p_portfolio_id: portfolio.id,
-  });
-
-  if (error) {
-    console.error("launchPortfolio failed:", error);
-    return { ok: false, error: "Could not launch the portfolio. Try again." };
-  }
-
-  const status = (data as { status?: string } | null)?.status;
-  if (status === "no_members") {
-    return {
-      ok: false,
-      error: "Add at least one agent before going live.",
-    };
-  }
-  // "ok" and "already_launched" both leave the portfolio live.
 
   revalidate(portfolio.slug);
   return { ok: true };

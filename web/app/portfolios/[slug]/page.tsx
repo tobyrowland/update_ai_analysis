@@ -8,6 +8,7 @@ import { TradeTape, type Trade } from "@/components/trade-tape";
 import VisibilityToggle from "@/components/portfolio/visibility-toggle";
 import { getPortfolio, type PortfolioSnapshot } from "@/lib/portfolio";
 import {
+  getHoldingsCountForPortfolio,
   getMembersForPortfolio,
   getPortfolioBySlug,
   getRecentTradesForPortfolio,
@@ -105,6 +106,7 @@ async function getPortfolioPageData(slug: string): Promise<{
   thesesByTicker: Record<string, InvestmentThesis>;
   trades: Trade[];
   totalTrades: number;
+  holdingsCount: number;
 }> {
   const portfolio = await resolveVisiblePortfolio(slug);
   if (!portfolio) {
@@ -116,6 +118,7 @@ async function getPortfolioPageData(slug: string): Promise<{
       thesesByTicker: {},
       trades: [],
       totalTrades: 0,
+      holdingsCount: 0,
     };
   }
   const isOwner = await isViewerOwner(portfolio);
@@ -138,6 +141,7 @@ async function getPortfolioPageData(slug: string): Promise<{
   const { trades, totalTrades } = await getRecentTradesForPortfolio(
     portfolio.id,
   );
+  const holdingsCount = await getHoldingsCountForPortfolio(portfolio.id);
 
   return {
     portfolio,
@@ -147,6 +151,7 @@ async function getPortfolioPageData(slug: string): Promise<{
     thesesByTicker,
     trades,
     totalTrades,
+    holdingsCount,
   };
 }
 
@@ -164,6 +169,7 @@ export default async function PortfolioPage({ params }: PageParams) {
     thesesByTicker,
     trades,
     totalTrades,
+    holdingsCount,
   } = await getPortfolioPageData(slug);
   if (!portfolio) notFound();
 
@@ -196,7 +202,10 @@ export default async function PortfolioPage({ params }: PageParams) {
                 Created {created}
               </p>
               {isOwner && (
-                <VisibilityToggle isPublic={portfolio.is_public} />
+                <VisibilityToggle
+                  isPublic={portfolio.is_public}
+                  holdingsCount={holdingsCount}
+                />
               )}
             </div>
           </header>
