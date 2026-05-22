@@ -84,7 +84,13 @@ class RebalanceContext:
         thesis: dict | None = None,
     ) -> dict:
         if self.portfolio_id:
-            return self.pm.buy_portfolio(
+            # Atomic RPC: holding-upsert + cash-decrement + trade-journal in
+            # one Postgres transaction. The non-atomic `buy_portfolio` path
+            # leaves partial state on failure (holding written, cash debited,
+            # trade row never landed) — historically also seen tripping a
+            # spurious ON CONFLICT error from PostgREST on the agent_trades
+            # insert that has no easy reproduction.
+            return self.pm.buy_portfolio_atomic(
                 self.portfolio_id, self.agent["id"], ticker, quantity,
                 note=note, thesis=thesis,
             )
@@ -94,7 +100,7 @@ class RebalanceContext:
 
     def sell(self, ticker: str, quantity: float, note: str = "") -> dict:
         if self.portfolio_id:
-            return self.pm.sell_portfolio(
+            return self.pm.sell_portfolio_atomic(
                 self.portfolio_id, self.agent["id"], ticker, quantity,
                 note=note,
             )
