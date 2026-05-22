@@ -331,13 +331,12 @@ class SupabaseDB:
     # for human-owned portfolios. Keyed on portfolio_id, not agent_id.
     # ------------------------------------------------------------------
 
-    def get_launched_human_portfolios(self) -> list[dict]:
-        """Human-owned portfolios that have gone live (launched_at set)."""
+    def get_human_portfolios(self) -> list[dict]:
+        """Every human-owned portfolio. Funded with $1M at creation."""
         resp = (
             self.client.table("portfolios")
             .select("*")
             .not_.is_("owner_user_id", "null")
-            .not_.is_("launched_at", "null")
             .execute()
         )
         return resp.data

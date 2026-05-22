@@ -4,15 +4,33 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { setPortfolioVisibility } from "@/lib/portfolios-mutations";
 
+const PUBLIC_ACTIVATE_THRESHOLD = 15;
+
 /**
  * Compact inline pill — current visibility state + a single button to
  * flip it. Designed to sit next to a page H1, not own a card. The owner
- * sees this on the portfolio detail page header.
+ * sees this on the portfolio detail page header and on /account.
+ *
+ * The Public toggle is hysteresis-gated (migration 031): to flip from
+ * Private → Public the portfolio must currently hold ≥ 15 equities. If
+ * it's already Public it can always be flipped back. The trigger
+ * `enforce_portfolio_public_threshold` enforces this server-side; we
+ * mirror the gate client-side so the button can read as disabled with a
+ * helpful tooltip instead of failing on submit.
  */
-export default function VisibilityToggle({ isPublic }: { isPublic: boolean }) {
+export default function VisibilityToggle({
+  isPublic,
+  holdingsCount,
+}: {
+  isPublic: boolean;
+  holdingsCount: number;
+}) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+
+  const canFlipPublic = isPublic || holdingsCount >= PUBLIC_ACTIVATE_THRESHOLD;
+  const buttonDisabled = pending || !canFlipPublic;
 
   function toggle() {
     setError(null);
@@ -25,6 +43,16 @@ export default function VisibilityToggle({ isPublic }: { isPublic: boolean }) {
       router.refresh();
     });
   }
+
+  let buttonLabel: string;
+  if (pending) buttonLabel = "…";
+  else if (isPublic) buttonLabel = "Make private";
+  else if (canFlipPublic) buttonLabel = "Make public";
+  else buttonLabel = `${holdingsCount}/${PUBLIC_ACTIVATE_THRESHOLD} to flip public`;
+
+  const title = !canFlipPublic
+    ? `Hold ${PUBLIC_ACTIVATE_THRESHOLD}+ equities to enable Public (currently ${holdingsCount}).`
+    : undefined;
 
   return (
     <div className="inline-flex flex-col gap-1">
@@ -47,10 +75,11 @@ export default function VisibilityToggle({ isPublic }: { isPublic: boolean }) {
         <button
           type="button"
           onClick={toggle}
-          disabled={pending}
+          disabled={buttonDisabled}
+          title={title}
           className="text-text-dim hover:text-text disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-text/40 rounded transition-colors"
         >
-          {pending ? "…" : isPublic ? "Make private" : "Make public"}
+          {buttonLabel}
         </button>
       </span>
       {error && (

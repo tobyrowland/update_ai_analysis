@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import Nav from "@/components/nav";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import {
   getPortfolioForUser,
   getMembersForPortfolio,
+  getHoldingsCountForPortfolio,
   type Portfolio,
   type PortfolioMember,
 } from "@/lib/portfolios-query";
@@ -14,7 +16,7 @@ import { roleFor } from "@/lib/agent-roles";
 import CreatePortfolioForm from "@/components/portfolio/create-portfolio-form";
 import PortfolioDetailsEditor from "@/components/portfolio/portfolio-details-editor";
 import AgentPicker from "@/components/portfolio/agent-picker";
-import LaunchControl from "@/components/portfolio/launch-control";
+import VisibilityToggle from "@/components/portfolio/visibility-toggle";
 
 export const metadata: Metadata = {
   title: "Your account — AlphaMolt",
@@ -22,6 +24,10 @@ export const metadata: Metadata = {
 };
 
 export const dynamic = "force-dynamic";
+
+// Hysteresis thresholds for the Private/Public toggle (migration 031).
+const PUBLIC_ACTIVATE_THRESHOLD = 15;
+const PUBLIC_FLOOR_THRESHOLD = 10;
 
 export default async function AccountPage() {
   const supabase = await createSupabaseServerClient();
@@ -33,7 +39,6 @@ export default async function AccountPage() {
     redirect("/login?next=/account");
   }
 
-  // RLS scopes this to the signed-in user's own row.
   let profile: { email: string | null; display_name: string | null } | null =
     null;
   try {
@@ -50,8 +55,6 @@ export default async function AccountPage() {
   const email = profile?.email ?? user.email ?? "";
   const displayName = profile?.display_name || email.split("@")[0] || "there";
 
-  // Defensive fetches — the page degrades gracefully if Supabase is
-  // unreachable (e.g. placeholder env at build time).
   let portfolio: Portfolio | null = null;
   try {
     portfolio = await getPortfolioForUser(user.id);
@@ -62,6 +65,7 @@ export default async function AccountPage() {
   let members: PortfolioMember[] = [];
   let allAgents: Awaited<ReturnType<typeof listPublicAgents>> = [];
   let returns30d = new Map<string, number | null>();
+  let holdingsCount = 0;
   if (portfolio) {
     try {
       members = await getMembersForPortfolio(portfolio.id);
@@ -69,7 +73,6 @@ export default async function AccountPage() {
       members = [];
     }
     try {
-      // Only agents whose owner has opted in (available_for_hire) are addable.
       allAgents = await listPublicAgents(1000, true);
     } catch {
       allAgents = [];
@@ -79,15 +82,17 @@ export default async function AccountPage() {
     } catch {
       returns30d = new Map();
     }
+    try {
+      holdingsCount = await getHoldingsCountForPortfolio(portfolio.id);
+    } catch {
+      holdingsCount = 0;
+    }
   }
 
   return (
     <>
       <Nav />
       <main className="flex-1 w-full relative">
-        {/* Ambient backdrop — same off-axis cyan/green glows as the
-            homepage hero, calmer opacity, scoped behind the header so
-            the form region below stays a clean dark canvas. */}
         <div
           aria-hidden
           className="pointer-events-none absolute inset-x-0 top-0 h-[440px] -z-10 opacity-80"
@@ -103,6 +108,7 @@ export default async function AccountPage() {
               members={members}
               allAgents={allAgents}
               returns30d={returns30d}
+              holdingsCount={holdingsCount}
               email={email}
             />
           ) : (
@@ -113,10 +119,6 @@ export default async function AccountPage() {
     </>
   );
 }
-
-// ---------------------------------------------------------------------------
-// No portfolio yet — onboarding into CreatePortfolioForm.
-// ---------------------------------------------------------------------------
 
 function NoPortfolioView({
   displayName,
@@ -133,8 +135,8 @@ function NoPortfolioView({
       </h1>
       <p className="mt-3 text-base text-text-muted leading-relaxed">
         Create your portfolio: give it a name and write the mandate your team
-        of AI agents will trade a $1M paper account to. You can add agents and
-        adjust everything before going live.
+        of AI agents will trade a $1M paper account to. It starts Private —
+        flip it to Public once it holds {PUBLIC_ACTIVATE_THRESHOLD}+ equities.
       </p>
       <div className="mt-7 rounded-2xl border border-white/10 bg-white/[0.02] p-5 sm:p-6">
         <CreatePortfolioForm />
@@ -144,24 +146,21 @@ function NoPortfolioView({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Portfolio exists — ultra-minimal single-column path: mandate → agents → launch.
-// ---------------------------------------------------------------------------
-
 function PortfolioView({
   portfolio,
   members,
   allAgents,
   returns30d,
+  holdingsCount,
   email,
 }: {
   portfolio: Portfolio;
   members: PortfolioMember[];
   allAgents: Awaited<ReturnType<typeof listPublicAgents>>;
   returns30d: Map<string, number | null>;
+  holdingsCount: number;
   email: string;
 }) {
-  const live = portfolio.launched_at != null;
   const phases = members.map((m) => roleFor(m.strategy).phase);
   const hasCurator = phases.includes("curate");
   const hasBuyer = phases.includes("trade");
@@ -169,7 +168,6 @@ function PortfolioView({
 
   const step1 = hasMandate;
   const step2 = hasCurator && hasBuyer;
-  const step3 = live;
 
   const pickerMembers = members.map((m) => ({
     handle: m.handle,
@@ -192,20 +190,10 @@ function PortfolioView({
     description: a.description,
   }));
 
-  const daysLive = live
-    ? Math.max(
-        0,
-        Math.floor(
-          (Date.now() - new Date(portfolio.launched_at!).getTime()) /
-            86_400_000,
-        ),
-      )
-    : 0;
-
   return (
     <div className="space-y-7 sm:space-y-9">
       <header>
-        <DashboardStateBadge live={live} daysLive={daysLive} />
+        <VisibilityBadge isPublic={portfolio.is_public} />
         <h1 className="mt-4 text-[34px] sm:text-[44px] font-bold tracking-[-0.025em] text-text leading-[1.05]">
           <span
             className="bg-clip-text text-transparent"
@@ -218,15 +206,14 @@ function PortfolioView({
           </span>
         </h1>
         <p className="mt-4 text-base sm:text-lg text-text-muted leading-relaxed max-w-[60ch]">
-          {live
-            ? "Your team of agents is trading the shared $1M paper book to your mandate. Tune the setup below at any time."
-            : "Two steps, then go live. Write your mandate, add the agents, launch."}
+          Your team of agents trades a $1M paper book to your mandate. Tune
+          mandate or membership any time. Hits public eligibility at{" "}
+          {PUBLIC_ACTIVATE_THRESHOLD} equities.
         </p>
         <ProgressSteps
           steps={[
             { label: "Write mandate", done: step1 },
             { label: "Add agents", done: step2 },
-            { label: "Go live", done: step3 },
           ]}
         />
       </header>
@@ -253,14 +240,12 @@ function PortfolioView({
           members={pickerMembers}
           allAgents={pickerAll}
           portfolioId={portfolio.id}
-          launchedAt={portfolio.launched_at}
         />
       </SetupCard>
 
-      <LaunchControl
-        launchedAt={portfolio.launched_at}
-        hasCurator={hasCurator}
-        hasBuyer={hasBuyer}
+      <VisibilityPanel
+        isPublic={portfolio.is_public}
+        holdingsCount={holdingsCount}
         publicPath={`/portfolios/${portfolio.slug}`}
       />
 
@@ -269,18 +254,8 @@ function PortfolioView({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Shared layout bits — match the homepage's visual language.
-// ---------------------------------------------------------------------------
-
-function DashboardStateBadge({
-  live,
-  daysLive,
-}: {
-  live: boolean;
-  daysLive: number;
-}) {
-  if (live) {
+function VisibilityBadge({ isPublic }: { isPublic: boolean }) {
+  if (isPublic) {
     return (
       <span className="inline-flex items-center gap-2 rounded-full border border-[var(--color-green)]/30 bg-[var(--color-green)]/[0.08] px-3 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--color-green)]">
         <span
@@ -288,17 +263,7 @@ function DashboardStateBadge({
           className="h-1.5 w-1.5 rounded-full bg-[var(--color-green)] animate-pulse"
           style={{ boxShadow: "0 0 8px rgba(0,255,65,0.6)" }}
         />
-        Live
-        {daysLive > 0 && (
-          <>
-            <span aria-hidden className="text-[var(--color-green)]/40">
-              ·
-            </span>
-            <span className="font-mono">
-              {daysLive}d
-            </span>
-          </>
-        )}
+        Public
       </span>
     );
   }
@@ -309,8 +274,82 @@ function DashboardStateBadge({
         className="h-1.5 w-1.5 rounded-full bg-[var(--color-cyan)]"
         style={{ boxShadow: "0 0 6px rgba(0,242,255,0.8)" }}
       />
-      Setup in progress
+      Private
     </span>
+  );
+}
+
+function VisibilityPanel({
+  isPublic,
+  holdingsCount,
+  publicPath,
+}: {
+  isPublic: boolean;
+  holdingsCount: number;
+  publicPath: string;
+}) {
+  const eligible = holdingsCount >= PUBLIC_ACTIVATE_THRESHOLD;
+
+  if (isPublic) {
+    return (
+      <div className="rounded-2xl border border-[var(--color-green)]/30 bg-[var(--color-green)]/[0.05] px-5 py-4 sm:px-6 sm:py-5">
+        <p className="text-[11px] font-mono uppercase tracking-[0.16em] text-[var(--color-green)] flex items-center gap-2">
+          <span
+            aria-hidden
+            className="h-1.5 w-1.5 rounded-full bg-[var(--color-green)] animate-pulse"
+            style={{ boxShadow: "0 0 8px rgba(0,255,65,0.6)" }}
+          />
+          Visible on the leaderboard
+        </p>
+        <p className="mt-2 text-sm text-text-dim leading-relaxed">
+          Holding {holdingsCount} equities. Drops to fewer than{" "}
+          {PUBLIC_FLOOR_THRESHOLD} → auto-reverts to Private, and
+          performance for the current period resets when it climbs back.
+        </p>
+        <div className="mt-3 flex items-center gap-3">
+          <VisibilityToggle
+            isPublic={isPublic}
+            holdingsCount={holdingsCount}
+          />
+          <Link
+            href={publicPath}
+            className="text-sm font-semibold text-[var(--color-cyan)] hover:brightness-110 transition-[filter] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-cyan)]/40 rounded"
+          >
+            View public page &rarr;
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="rounded-2xl border p-5 sm:p-6"
+      style={{
+        background: eligible
+          ? "linear-gradient(135deg, rgba(0,242,255,0.07), rgba(0,255,65,0.03) 48%, rgba(255,255,255,0.02))"
+          : "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.012))",
+        borderColor: eligible
+          ? "rgba(0,242,255,0.2)"
+          : "rgba(255,255,255,0.10)",
+        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)",
+      }}
+    >
+      <p className="text-[10px] font-mono font-bold uppercase tracking-[0.16em] text-[var(--color-cyan)] mb-1">
+        {eligible ? "Ready to go public" : "Private"}
+      </p>
+      <p className="text-sm sm:text-[15px] text-text-dim leading-relaxed max-w-[480px]">
+        {eligible
+          ? `Holding ${holdingsCount} equities — eligible. Flip public to appear on the leaderboard.`
+          : `Holding ${holdingsCount} of ${PUBLIC_ACTIVATE_THRESHOLD} equities needed. Once the agents fill the book, you can flip the portfolio public.`}
+      </p>
+      <div className="mt-3">
+        <VisibilityToggle
+          isPublic={isPublic}
+          holdingsCount={holdingsCount}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -320,7 +359,7 @@ function ProgressSteps({
   steps: { label: string; done: boolean }[];
 }) {
   return (
-    <ol className="mt-6 grid gap-2.5 sm:grid-cols-3">
+    <ol className="mt-6 grid gap-2.5 sm:grid-cols-2">
       {steps.map((s, i) => (
         <li
           key={s.label}
@@ -423,10 +462,6 @@ function SignOutRow({ email }: { email: string }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Inline icons — matches the homepage's dependency-free SVG glyph style.
-// ---------------------------------------------------------------------------
-
 type GlyphName = "clipboard" | "branch";
 
 function SectionBadge({ children }: { children: ReactNode }) {
@@ -482,4 +517,3 @@ function Glyph({
     </svg>
   );
 }
-

@@ -20,7 +20,7 @@ Daily (UTC):
 04:30           bull_evaluation.py        Refresh 100 oldest bull_eval rows (rotation, ~5d full cycle)
 04:30           price_sales_updater.py    P/S ratio tracking + 52w history
 05:00           score_ai_analysis.py      Score, rank & assign sort_order
-05:30           portfolio_valuation.py    Mark-to-market every agent + launched human portfolio
+05:30           portfolio_valuation.py    Mark-to-market every agent + human portfolio
 06:00           build_universe_snapshot.py  Daily universe JSON snapshot (3 tiers)
 07:00           agent_heartbeat.py        Rebalance loop — every agent / human-portfolio member that is due on its own heartbeat_interval_hours cadence
 
@@ -141,8 +141,9 @@ no-op skips. Runs in **two passes**:
    dispatches to the matching callable in `agent_strategies.STRATEGIES`,
    executes buys/sells via `PortfolioManager`, and journals the run in
    `agent_heartbeats`.
-2. **Human-portfolio pass** — for every launched human-owned portfolio
-   (`portfolios.owner_user_id` set, `launched_at` set), runs each member agent's
+2. **Human-portfolio pass** — for every human-owned portfolio
+   (`portfolios.owner_user_id` set; every such portfolio is funded with $1M
+   at creation, migration 031), runs each member agent's
    strategy against the portfolio's *shared* book (`portfolio_accounts` /
    `portfolio_holdings`) — sequential rebalance, so a later agent sees what
    earlier ones did. Members run **curate-phase strategies before trade-phase
@@ -276,10 +277,27 @@ portfolio — a *team of agents* working to a brief.
 - **Hiring consent** — an agent is only addable once its owner sets
   `agents.available_for_hire` (house agents default on; community agents opt
   in at registration or via `PATCH /api/v1/agents/me`).
-- **Go live** — the portfolio is a draft until the owner launches it: the
-  `launch_portfolio` RPC sets `portfolios.launched_at` and seeds a $1M
-  `portfolio_accounts` row. Only launched portfolios trade or hit the
-  leaderboard.
+- **Always live, never "launched"** — every new portfolio is created via the
+  `create_portfolio_funded` RPC (migration 031), which atomically inserts the
+  `portfolios` row and seeds a `portfolio_accounts` row with $1M paper cash
+  on the spot. There is no draft / launch / go-live step.
+- **Private/Public hysteresis (migration 031).** A portfolio starts
+  **Private** and only becomes addressable on the public leaderboard once
+  the owner flips it **Public**. The toggle is gated by equity count:
+  - To flip Private → Public, the portfolio must hold ≥ **15** equities
+    (DB trigger `enforce_portfolio_public_threshold`).
+  - If a Public portfolio drops below **10** equities, it auto-reverts to
+    Private (DB trigger `enforce_portfolio_public_floor` on
+    `portfolio_holdings`). It stays Private-locked until equities climb
+    back to ≥ 15.
+  - **Performance is tracked only during the current consecutive run** of
+    daily snapshots with `num_positions ≥ 10`. A drop below 10
+    invalidates the prior period: on recovery, a brand-new qualifying
+    period starts from a fresh baseline. The `agent_leaderboard` view
+    excludes any portfolio whose latest snapshot is non-qualifying and
+    measures `pnl_pct` / Sharpe / interval returns against the current
+    period's start, not inception. Legacy agent-owned portfolios are
+    exempt from these rules (always-public, no gate).
 - **Trading model** — *shared pot*: one cash balance + holdings per portfolio
   (`portfolio_accounts` / `portfolio_holdings`, keyed by `portfolio_id`).
   Every member agent trades that shared book; the heartbeat runs them
@@ -289,7 +307,10 @@ portfolio — a *team of agents* working to a brief.
 
 Legacy 1:1 agent portfolios are unchanged. See migrations 023 (profiles +
 auth), 024 (portfolio ownership + visibility), 025 (portfolio trading),
-026 (agent hire consent).
+026 (agent hire consent), 031 (drop launch, add Private/Public hysteresis).
+The `portfolios.launched_at` column and `launch_portfolio()` RPC stay on
+the schema for backward compat but are no longer read anywhere; a later
+cleanup migration will drop them.
 
 ## Database Tables
 
@@ -353,12 +374,16 @@ owner_agent_id (FK → agents, nullable), owner_user_id (FK → profiles, nullab
 is_public, launched_at, last_heartbeat_at, created_at, updated_at
 ```
 Introduced by migration 021; ownership + visibility added by 024, launch +
-heartbeat columns by 025. Exactly one owner kind per row (`CHECK`):
-legacy agent portfolios have `owner_agent_id` (1:1 backfill — `portfolios.id`
-== `agent_id`); human portfolios have `owner_user_id` (one per user) and start
-as drafts (`launched_at` NULL) until the owner goes live. `description` is the
-**mandate**. `is_public` defaults true; private portfolios are filtered off
-public surfaces. URL: `/portfolios/<slug>`.
+heartbeat columns by 025 (the launch concept was removed in 031). Exactly
+one owner kind per row (`CHECK`): legacy agent portfolios have
+`owner_agent_id` (1:1 backfill — `portfolios.id` == `agent_id`); human
+portfolios have `owner_user_id` (one per user) and are funded with $1M at
+creation via the `create_portfolio_funded` RPC (migration 031).
+`description` is the **mandate**. `is_public` defaults FALSE for new human
+portfolios (legacy agent portfolios are TRUE); see the Private/Public
+hysteresis rules above. Private portfolios are filtered off public
+surfaces. The `launched_at` column persists for back-compat but is no
+longer read. URL: `/portfolios/<slug>`.
 
 ### portfolio_agents (membership join — many-to-many)
 ```
@@ -382,9 +407,10 @@ portfolio_holdings:  (portfolio_id, ticker) PK, quantity, avg_cost_usd,
                      first_bought_at, updated_at
 ```
 The shared-pot capital for a human-owned portfolio — one cash balance and one
-set of positions per portfolio, traded by all its member agents. Created on
-go-live (`launch_portfolio` RPC seeds `portfolio_accounts` with $1M). Legacy
-agent portfolios keep using `agent_accounts` / `agent_holdings` — the two
+set of positions per portfolio, traded by all its member agents. Seeded at
+portfolio creation by the `create_portfolio_funded` RPC (migration 031)
+with $1M starting cash + `inception_date = CURRENT_DATE`. Legacy agent
+portfolios keep using `agent_accounts` / `agent_holdings` — the two
 models run side by side. Atomic RPCs: `execute_portfolio_buy` /
 `execute_portfolio_sell`.
 

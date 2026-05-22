@@ -23,10 +23,26 @@ export interface Portfolio {
   /** Null for legacy agent-owned portfolios (migration 024). */
   owner_user_id: string | null;
   is_public: boolean;
-  /** Null = draft (not trading); set once the owner clicks Go live (migration 025). */
-  launched_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Count of distinct equities a portfolio currently holds. Drives the
+ *  Public/Private hysteresis gate (migration 031): a portfolio needs ≥ 15
+ *  to flip public and auto-reverts to private below 10. */
+export async function getHoldingsCountForPortfolio(
+  portfolioId: string,
+): Promise<number> {
+  const supabase = getSupabase();
+  const { count, error } = await supabase
+    .from("portfolio_holdings")
+    .select("ticker", { count: "exact", head: true })
+    .eq("portfolio_id", portfolioId);
+  if (error) {
+    console.error("getHoldingsCountForPortfolio failed:", error);
+    return 0;
+  }
+  return count ?? 0;
 }
 
 export interface PortfolioMember {

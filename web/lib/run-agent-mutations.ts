@@ -163,9 +163,6 @@ async function loadOwnedPortfolio(): Promise<
   if (!portfolio) {
     return { ok: false, error: "You don't have a portfolio yet." };
   }
-  if (!portfolio.launched_at) {
-    return { ok: false, error: "Launch the portfolio first." };
-  }
   return { ok: true, portfolio };
 }
 
@@ -175,9 +172,8 @@ async function loadOwnedPortfolio(): Promise<
  * The eligibility ladder (in order):
  *   1. signed in,
  *   2. owns a portfolio,
- *   3. that portfolio is launched,
- *   4. the named agent is a member of THIS portfolio,
- *   5. no run for this (portfolio, agent) in the last 60s.
+ *   3. the named agent is a member of THIS portfolio,
+ *   4. no run for this (portfolio, agent) in the last 60s.
  */
 export async function runAgent(input: {
   agentHandle: string;

@@ -6,12 +6,7 @@ import { runAgent, runAllAgents } from "@/lib/run-agent-mutations";
 
 const COOLDOWN_SECONDS = 60;
 
-interface BaseProps {
-  /** Null → portfolio is a draft; render the button disabled with a hint. */
-  launchedAt: string | null;
-}
-
-interface RunNowProps extends BaseProps {
+interface RunNowProps {
   agentHandle: string;
   agentId: string;
   portfolioId: string;
@@ -29,7 +24,6 @@ interface RunNowProps extends BaseProps {
 export default function RunNowButton({
   agentHandle,
   agentId,
-  launchedAt,
 }: RunNowProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -37,9 +31,6 @@ export default function RunNowButton({
   const [cooldownEndsAt, setCooldownEndsAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
-  // Tick once a second while we're inside the cooldown window so the
-  // "Cooling… 45s" countdown stays fresh. Cleaned up the moment the
-  // cooldown expires.
   useEffect(() => {
     if (cooldownEndsAt == null) return;
     const id = setInterval(() => {
@@ -57,15 +48,13 @@ export default function RunNowButton({
       ? Math.ceil((cooldownEndsAt - now) / 1000)
       : 0;
 
-  const disabled = launchedAt == null || isPending || cooling > 0;
+  const disabled = isPending || cooling > 0;
   const title =
-    launchedAt == null
-      ? "Launch the portfolio first."
-      : cooling > 0
-        ? `Cooling… ${cooling}s`
-        : isPending
-          ? "Dispatching…"
-          : "Trigger a one-off rebalance for this agent.";
+    cooling > 0
+      ? `Cooling… ${cooling}s`
+      : isPending
+        ? "Dispatching…"
+        : "Trigger a one-off rebalance for this agent.";
 
   function handleClick() {
     setError(null);
@@ -105,7 +94,7 @@ export default function RunNowButton({
   );
 }
 
-interface RunAllProps extends BaseProps {
+interface RunAllProps {
   portfolioId: string;
 }
 
@@ -113,7 +102,7 @@ interface RunAllProps extends BaseProps {
  * "Run all agents" — same shape as `RunNowButton` but dispatches without
  * a `handle` filter so every member rebalances in joined_at order.
  */
-export function RunAllAgentsButton({ launchedAt }: RunAllProps) {
+export function RunAllAgentsButton({}: RunAllProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -137,15 +126,13 @@ export function RunAllAgentsButton({ launchedAt }: RunAllProps) {
       ? Math.ceil((cooldownEndsAt - now) / 1000)
       : 0;
 
-  const disabled = launchedAt == null || isPending || cooling > 0;
+  const disabled = isPending || cooling > 0;
   const title =
-    launchedAt == null
-      ? "Launch the portfolio first."
-      : cooling > 0
-        ? `Cooling… ${cooling}s`
-        : isPending
-          ? "Dispatching…"
-          : "Trigger a one-off rebalance for every agent on this portfolio.";
+    cooling > 0
+      ? `Cooling… ${cooling}s`
+      : isPending
+        ? "Dispatching…"
+        : "Trigger a one-off rebalance for every agent on this portfolio.";
 
   function handleClick() {
     setError(null);

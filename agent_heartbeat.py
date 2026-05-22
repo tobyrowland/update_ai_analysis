@@ -387,13 +387,6 @@ def main() -> int:
         if not portfolio:
             logger.error("No portfolio with id-or-slug '%s'", args.portfolio)
             return 1
-        if not portfolio.get("launched_at"):
-            logger.error(
-                "Portfolio '%s' is not launched — refusing to run",
-                args.portfolio,
-            )
-            return 1
-
         slug = portfolio.get("slug") or portfolio["id"][:8]
         logger.info(
             "=== agent_heartbeat (portfolio=%s, handle=%s, dry_run=%s, "
@@ -454,12 +447,14 @@ def main() -> int:
         )
         counts[status] = counts.get(status, 0) + 1
 
-    # Second pass: launched human-owned portfolios (migration 025). Each
+    # Second pass: human-owned portfolios (migration 025 + 031). Each
     # member agent rebalances the shared book in joined_at order. Skipped for
-    # a single --handle invocation (that targets one legacy agent).
+    # a single --handle invocation (that targets one legacy agent). Every
+    # human portfolio is funded with $1M at creation (migration 031 RPC
+    # `create_portfolio_funded` + draft-portfolio backfill).
     if not args.handle:
-        portfolios = db.get_launched_human_portfolios()
-        logger.info("=== human portfolios: %d launched ===", len(portfolios))
+        portfolios = db.get_human_portfolios()
+        logger.info("=== human portfolios: %d ===", len(portfolios))
         for portfolio in portfolios:
             pcounts = _run_portfolio(
                 db, pm, portfolio,
