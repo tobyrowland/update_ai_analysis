@@ -122,6 +122,134 @@ export async function updatePortfolioDetails(input: {
   return { ok: true };
 }
 
+/**
+ * Owner-initiated full-position sell from the portfolio detail page.
+ * Uses the `execute_portfolio_sell` RPC for atomicity (cash credit +
+ * holding delete + trade-journal insert happen in one Postgres
+ * transaction). Attributes the trade to the `manual` house agent
+ * (migration 035) so the trade tape shows "[Manual] SOLD X" rather
+ * than misattributing to a real autonomous agent.
+ *
+ * After a successful sell, any active investment_theses row for the
+ * position is closed — preserving terminal statuses (broken/improved)
+ * is handled by `close_theses_for_position`'s active-only filter, but
+ * we update here directly since the Python flow isn't on the path.
+ *
+ * The buyer's 90-day re-buy cooldown picks this up automatically (it
+ * queries `agent_trades` for recent sells), so the ticker won't be
+ * re-considered for purchase by either the LLM buyer or the
+ * mechanical `watchlist_buyer` for the next 90 days.
+ */
+export async function sellHolding(input: {
+  ticker: string;
+}): Promise<ActionResult> {
+  const { user } = await requireUser();
+  const ticker = input.ticker.trim().toUpperCase();
+  if (!ticker) return { ok: false, error: "Ticker is required." };
+
+  const portfolio = await getOwnedPortfolio(user.id);
+  if (!portfolio) return { ok: false, error: "You don't have a portfolio yet." };
+
+  const supabase = getSupabase();
+
+  // Look up the current holding's quantity.
+  const { data: holding, error: holdingErr } = await supabase
+    .from("portfolio_holdings")
+    .select("quantity")
+    .eq("portfolio_id", portfolio.id)
+    .eq("ticker", ticker)
+    .maybeSingle();
+  if (holdingErr) {
+    console.error("sellHolding: holding lookup failed:", holdingErr);
+    return { ok: false, error: "Could not load the position. Try again." };
+  }
+  if (!holding) {
+    return { ok: false, error: `You don't hold ${ticker}.` };
+  }
+  const quantity = Number((holding as { quantity: number | string }).quantity);
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    return { ok: false, error: "Position quantity is zero or invalid." };
+  }
+
+  // Latest price from companies.price (15-min delayed during market
+  // hours, close-of-business otherwise — see intraday_prices.py).
+  const { data: company, error: companyErr } = await supabase
+    .from("companies")
+    .select("price")
+    .eq("ticker", ticker)
+    .maybeSingle();
+  if (companyErr) {
+    console.error("sellHolding: price lookup failed:", companyErr);
+    return { ok: false, error: "Could not load the latest price." };
+  }
+  const price = Number((company as { price: number | string } | null)?.price);
+  if (!Number.isFinite(price) || price <= 0) {
+    return {
+      ok: false,
+      error: `No current price on file for ${ticker}. Try again later.`,
+    };
+  }
+
+  // Manual house agent (migration 035) — placeholder for owner trades.
+  const { data: manual, error: manualErr } = await supabase
+    .from("agents")
+    .select("id")
+    .eq("handle", "manual")
+    .maybeSingle();
+  if (manualErr || !manual) {
+    console.error("sellHolding: manual agent lookup failed:", manualErr);
+    return {
+      ok: false,
+      error:
+        "Manual-trade agent not found. Apply migration 035 then retry.",
+    };
+  }
+  const manualAgentId = (manual as { id: string }).id;
+
+  // Atomic sell: cash credit + holding delete + agent_trades journal,
+  // all in one Postgres transaction.
+  const { data: rpcData, error: rpcErr } = await supabase.rpc(
+    "execute_portfolio_sell",
+    {
+      p_portfolio_id: portfolio.id,
+      p_agent_id: manualAgentId,
+      p_ticker: ticker,
+      p_quantity: quantity,
+      p_price_usd: Math.round(price * 10000) / 10000,
+      p_note: "owner-initiated full sell",
+    },
+  );
+  if (rpcErr) {
+    console.error("sellHolding: execute_portfolio_sell failed:", rpcErr);
+    return { ok: false, error: "Sell failed. Try again." };
+  }
+  const status = (rpcData as { status?: string } | null)?.status;
+  if (status !== "ok") {
+    return {
+      ok: false,
+      error: `Sell rejected: ${status ?? "unknown error"}`,
+    };
+  }
+
+  // Position is fully exited — close any active investment_theses row.
+  // Terminal statuses (broken/improved/superseded) stay as they are;
+  // the .eq("status", "active") filter mirrors
+  // theses.close_theses_for_position.
+  await supabase
+    .from("investment_theses")
+    .update({
+      status: "closed",
+      status_changed_at: new Date().toISOString(),
+      closed_at: new Date().toISOString(),
+    })
+    .eq("portfolio_id", portfolio.id)
+    .eq("ticker", ticker)
+    .eq("status", "active");
+
+  revalidate(portfolio.slug);
+  return { ok: true };
+}
+
 export async function setPortfolioVisibility(input: {
   isPublic: boolean;
 }): Promise<ActionResult> {

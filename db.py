@@ -474,6 +474,32 @@ class SupabaseDB:
         rows = resp.data or []
         return rows[0].get("id") if rows else None
 
+    def get_recently_sold_tickers(
+        self, portfolio_id: str, *, days: int = 90,
+    ) -> set[str]:
+        """Tickers a portfolio has sold within the last ``days`` days.
+
+        Used by the LLM buyer (and the mechanical watchlist_buyer) to
+        enforce a re-buy cooldown: once the owner or the reviewer agent
+        has exited a position, the buyer is not allowed to immediately
+        re-establish it. Default 90 days mirrors the user-facing rule.
+        """
+        from datetime import datetime, timedelta, timezone
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        resp = (
+            self.client.table("agent_trades")
+            .select("ticker")
+            .eq("portfolio_id", portfolio_id)
+            .eq("side", "sell")
+            .gte("executed_at", cutoff)
+            .execute()
+        )
+        return {
+            str(r.get("ticker") or "").upper()
+            for r in (resp.data or [])
+            if r.get("ticker")
+        }
+
     def upsert_portfolio_snapshot(self, data: dict) -> None:
         """Insert or update a daily agent_portfolio_history row.
 

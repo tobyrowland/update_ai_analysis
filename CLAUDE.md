@@ -211,6 +211,13 @@ Two trade-phase strategies share the buyer slot:
   (`portfolios.description`) — the single owner-written brief that
   covers both *what* to own and *how* to evaluate adds.
 
+Both buyers also enforce a **90-day re-buy cooldown** via
+`db.get_recently_sold_tickers` — once a ticker has been sold from a
+portfolio (by the owner manually, by the reviewer, or by either
+buyer), the buyer won't reconsider it for 90 days. Stops the
+mandate-aware buyer from churning straight back into a name the
+reviewer just exited.
+
 Both are no-ops on a legacy 1:1 agent portfolio.
 
 `portfolio_reviewer` (the house sell-side risk manager, migration 033)
@@ -234,11 +241,23 @@ doesn't overwrite `broken` with `closed`. Full-position sells only;
 doesn't trim. Skips legacy 1:1 agent portfolios. Also no-op on
 portfolios with no holdings.
 
+**Manual owner sells.** The portfolio detail page (`/portfolios/<slug>`)
+exposes a "Sell" button per holding for the owner — owner-initiated
+full-position exits at the latest `companies.price`. The trade is
+attributed to the `manual` house agent (migration 035) so the trade
+tape clearly distinguishes "the Buying Agent decided to sell" from
+"the owner decided to sell". The `sellHolding` server action
+(web/lib/portfolios-mutations.ts) handles auth, looks up quantity +
+price, calls the atomic `execute_portfolio_sell` RPC, and closes any
+active `investment_theses` row. Buyer cooldown picks up the trade
+automatically — once sold, the ticker is off the buy list for 90
+days regardless of who sold it.
+
 The house agents `alphamolt-shortlist` (curator, `gemini-2.5-flash`,
 24h cadence, ~40-name target), `buying-agent` (buyer, `gemini-2.5-pro`,
 24h cadence) and `portfolio-reviewer` (reviewer, `gemini-2.5-pro`,
-weekly, user-mandate-driven) — migrations 028, 030, 032, 033, and 034
-— drive the pipeline.
+weekly, user-mandate-driven) — migrations 028, 030, 032, 033, 034, and
+035 (the manual-trade attribution agent) — drive the pipeline.
 
 Supports `--handle`, `--force` (ignore interval guard), and `--dry-run`.
 

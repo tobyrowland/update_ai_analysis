@@ -1114,6 +1114,23 @@ def rebalance_watchlist_buyer(ctx: RebalanceContext) -> RebalanceResult:
         result.notes["reason"] = "portfolio watchlist is empty"
         return result
 
+    # 90-day re-buy cooldown — drop tickers the portfolio sold recently.
+    # Mirrors the LLM buyer's behaviour. Stops the buyer from churning
+    # back into a name the owner or reviewer just exited.
+    recently_sold = ctx.db.get_recently_sold_tickers(ctx.portfolio_id, days=90)
+    if recently_sold:
+        skipped = [t for t in watchlist_tickers if t in recently_sold]
+        if skipped:
+            result.notes["skipped_recent_sell_cooldown"] = skipped
+        watchlist_tickers = [
+            t for t in watchlist_tickers if t not in recently_sold
+        ]
+        if not watchlist_tickers:
+            result.notes["reason"] = (
+                "watchlist all on 90-day cooldown after recent sells"
+            )
+            return result
+
     # Price every candidate; skip unpriced ones rather than aborting.
     priced: list[tuple[str, float]] = []
     unpriced: list[str] = []

@@ -563,6 +563,17 @@ def rebalance_llm_watchlist_buyer(ctx: RebalanceContext) -> RebalanceResult:
         result.notes["skipped_active_thesis"] = skipped_active
     candidates = [t for t in candidates if t not in active]
 
+    # Filter: tickers sold from this portfolio within the last 90 days.
+    # Once the owner manually sells, or the reviewer agent exits a
+    # position, the buyer is not allowed to immediately re-establish
+    # it — gives the owner time to act on the exit decision without
+    # the buyer churning straight back in.
+    recently_sold = ctx.db.get_recently_sold_tickers(ctx.portfolio_id, days=90)
+    skipped_cooldown: list[str] = [t for t in candidates if t in recently_sold]
+    if skipped_cooldown:
+        result.notes["skipped_recent_sell_cooldown"] = skipped_cooldown
+    candidates = [t for t in candidates if t not in recently_sold]
+
     if not candidates:
         result.notes["reason"] = "no candidates after filters"
         return result
