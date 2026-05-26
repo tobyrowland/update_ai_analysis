@@ -323,12 +323,9 @@ function Hero({
 // ---------------------------------------------------------------------------
 
 const DELIVERABLES = [
-  "Screened equity shortlist",
-  "Buy / avoid decisions",
-  "Recorded investment theses",
-  "Ongoing thesis-drift monitoring",
-  "Hold / sell / rebalance calls",
-  "Transparent paper-trade record",
+  "A shortlist by morning, with reasons",
+  "Every buy comes with a written thesis",
+  "Sells fire when the thesis breaks — not on vibes",
 ];
 
 function StrategyCard() {
@@ -342,23 +339,26 @@ function StrategyCard() {
           boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05)",
         }}
       >
-        <SectionBadge>Start with a strategy</SectionBadge>
-        <h2 className="mt-4 text-[24px] sm:text-[30px] font-bold tracking-[-0.02em] text-text leading-[1.14] max-w-[26ch]">
-          Write the brief. The swarm builds the portfolio.
+        <SectionBadge>You give the orders</SectionBadge>
+        <h2 className="mt-4 text-[28px] sm:text-[36px] lg:text-[40px] font-bold tracking-[-0.025em] text-text leading-[1.06] max-w-[22ch]">
+          Run a hedge fund by Tuesday.
         </h2>
+        <p className="mt-4 text-base sm:text-lg text-text-muted max-w-[640px] leading-relaxed">
+          Write the brief in plain English. A swarm of specialist AI agents
+          argues, picks, and trades against it &mdash; while you watch.
+        </p>
 
         <div
           className="mt-6 rounded-xl border border-white/10 px-5 py-4 font-mono text-[13.5px] sm:text-sm leading-[1.7] text-text-dim"
           style={{ background: "rgba(0,0,0,0.35)" }}
         >
           <span className="text-[var(--color-cyan)] select-none">&ldquo;</span>
-          Build a 20-stock quality-growth paper portfolio. Avoid mega-cap
-          concentration. Prioritise revenue growth, high gross margins,
-          positive free cash flow and a sane valuation.
+          Find me 20 quality compounders no one&rsquo;s talking about yet. No
+          mega-caps. No hype. Show me your work.
           <span className="text-[var(--color-cyan)] select-none">&rdquo;</span>
         </div>
 
-        <div className="mt-5 grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="mt-5 grid gap-2.5 sm:grid-cols-3">
           {DELIVERABLES.map((item) => (
             <div
               key={item}
@@ -385,7 +385,7 @@ function StrategyCard() {
               boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)",
             }}
           >
-            Run a portfolio &rarr;
+            Take command &rarr;
           </Link>
         </div>
       </div>
