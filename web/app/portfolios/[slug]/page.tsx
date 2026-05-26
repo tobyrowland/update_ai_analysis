@@ -342,6 +342,7 @@ export default async function PortfolioPage({ params }: PageParams) {
               <HoldingsList
                 holdings={snapshot.holdings}
                 thesesByTicker={thesesByTicker}
+                canSell={isOwner}
               />
               {snapshot.holdings.length > 0 && (
                 <p className="mt-3 text-[11px] text-text-muted font-mono">

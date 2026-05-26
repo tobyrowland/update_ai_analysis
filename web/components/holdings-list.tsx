@@ -21,13 +21,21 @@ import Link from "next/link";
 import { useState } from "react";
 import type { HoldingWithMtm } from "@/lib/portfolio";
 import type { InvestmentThesis, ThesisSignal } from "@/lib/theses-query";
+import SellHoldingButton from "@/components/portfolio/sell-holding-button";
 
 interface Props {
   holdings: HoldingWithMtm[];
   thesesByTicker: Record<string, InvestmentThesis>;
+  /** Render the per-row "Sell" button. Owner-only on the portfolio
+   *  detail page. Default false so public viewers see no sell control. */
+  canSell?: boolean;
 }
 
-export default function HoldingsList({ holdings, thesesByTicker }: Props) {
+export default function HoldingsList({
+  holdings,
+  thesesByTicker,
+  canSell = false,
+}: Props) {
   const [openTicker, setOpenTicker] = useState<string | null>(null);
 
   if (holdings.length === 0) {
@@ -113,7 +121,7 @@ export default function HoldingsList({ holdings, thesesByTicker }: Props) {
             {isOpen && (
               <div
                 id={`thesis-panel-${h.ticker}`}
-                className="border-t border-white/[0.06] bg-white/[0.015] px-4 py-4"
+                className="border-t border-white/[0.06] bg-white/[0.015] px-4 py-4 space-y-4"
               >
                 {thesis ? (
                   <ThesisPanel thesis={thesis} />
@@ -123,6 +131,20 @@ export default function HoldingsList({ holdings, thesesByTicker }: Props) {
                     pre-dates migration 020, or the thesis row was
                     superseded / closed.
                   </p>
+                )}
+                {canSell && (
+                  <div className="pt-3 border-t border-white/[0.06] flex items-start justify-between gap-3 flex-wrap">
+                    <p className="text-[11px] font-mono text-text-muted leading-relaxed max-w-[480px]">
+                      Manual sell of the full position at the latest price.
+                      Once sold, the buyer agent won&apos;t reconsider this
+                      ticker for 90 days.
+                    </p>
+                    <SellHoldingButton
+                      ticker={h.ticker}
+                      quantity={h.quantity}
+                      marketValueUsd={h.market_value_usd}
+                    />
+                  </div>
                 )}
               </div>
             )}
