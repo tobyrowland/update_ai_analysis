@@ -203,15 +203,95 @@ def _sibling_paper_portfolio(db: SupabaseDB, live_pf: dict) -> dict | None:
     return None
 
 
+_LIVE_EXEC_ENV = "ALPACA_LIVE_EXECUTION_ENABLED"
+
+
+def _live_exec_enabled() -> bool:
+    return os.environ.get(_LIVE_EXEC_ENV, "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _mirror_all_live(
+    db: SupabaseDB,
+    pm: PortfolioManager,
+    *,
+    threshold: float,
+    dry_run: bool,
+) -> int:
+    """Mirror every mode='live' portfolio to its paper sibling.
+
+    The scheduled / automatic path (market-hours cron). Honors the
+    ALPACA_LIVE_EXECUTION_ENABLED master kill-switch: with it unset, a real run
+    is a no-op (unset the secret to halt all automatic live trading). A
+    --dry-run always previews regardless. Per-portfolio errors are logged and
+    skipped so one bad book can't abort the rest.
+    """
+    if not dry_run and not _live_exec_enabled():
+        logger.warning(
+            "%s not set — automatic live mirror is a no-op. "
+            "Set it to enable scheduled real-money mirroring.", _LIVE_EXEC_ENV,
+        )
+        return 0
+
+    live = [
+        p for p in db.get_human_portfolios()
+        if (p.get("mode") or "paper") == "live"
+    ]
+    if not live:
+        logger.info("no live portfolios to mirror")
+        return 0
+
+    try:
+        from alpaca_execution import AlpacaExecutionBackend
+        executor = AlpacaExecutionBackend()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Alpaca init failed: %s", exc)
+        return 1
+
+    rc = 0
+    for live_pf in live:
+        slug = live_pf.get("slug") or live_pf["id"][:8]
+        paper_pf = _sibling_paper_portfolio(db, live_pf)
+        if not paper_pf:
+            logger.warning("no paper sibling for %s — skipping", slug)
+            continue
+        try:
+            summary = mirror_paper_to_alpaca(
+                db, pm, executor, live_pf, paper_pf,
+                threshold=threshold, dry_run=dry_run,
+            )
+            logger.info("mirror %s: %s", slug, summary)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("mirror %s failed: %s", slug, exc)
+            rc = 1
+    return rc
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Mirror a paper portfolio to Alpaca")
-    ap.add_argument("--slug", required=True, help="the LIVE portfolio slug")
+    ap.add_argument("--slug", help="the LIVE portfolio slug")
+    ap.add_argument(
+        "--mirror-all-live",
+        action="store_true",
+        help="mirror every mode='live' portfolio to its paper sibling "
+             "(scheduled automatic path; honors ALPACA_LIVE_EXECUTION_ENABLED)",
+    )
     ap.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
 
     db = SupabaseDB()
     pm = PortfolioManager(db)
+
+    if args.mirror_all_live:
+        return _mirror_all_live(
+            db, pm, threshold=args.threshold, dry_run=args.dry_run,
+        )
+
+    if not args.slug:
+        logger.error("--slug is required (or use --mirror-all-live)")
+        return 1
     live_pf = db.get_portfolio_by_slug(args.slug)
     if not live_pf:
         logger.error("no portfolio with slug %r", args.slug)

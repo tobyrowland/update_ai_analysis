@@ -759,13 +759,21 @@ at-the-open / illiquid risk) the order doesn't fill, and the next mirror run
 re-converges. `execute_and_wait(..., ref_price=)` computes the limit; the
 mirror passes the sizing price, the forward path passes `companies.price`.
 
-**Scheduling.** The routine "mirror after rebalance" runs inside
-`agent-heartbeat` (which now carries the `ALPACA_*` secrets). The
-`live-mirror.yml` workflow drives the full lifecycle from the Actions UI
-(`workflow_dispatch`, `dry_run` default on): `create` (bootstrap the follower
-row — slug = the PAPER slug), `go-live`, `mirror` (drifted names only),
-`replicate` (full match — `--threshold 0`, buys the entire current paper book,
-not just changes), `sync`; plus a daily `--sync-all-live` drift reconcile.
+**Scheduling.** The swarm rebalances the paper book at the 07:00 UTC heartbeat,
+which is *before* the US open (13:30 UTC) — so the heartbeat's inline
+`_mirror_live_sibling` can't fill then (the mirror skips when the market is
+closed). The automatic live path is therefore a **market-hours cron** in
+`live-mirror.yml`: `--mirror-all-live` at **14:00 UTC** (≈30 min after the
+open) trades whatever the swarm changed overnight, then `--sync-all-live` at
+23:00 UTC reconciles drift after the close. Both honor the
+`ALPACA_LIVE_EXECUTION_ENABLED` master kill-switch — unset it to halt all
+*automatic* real-money trading (manual `workflow_dispatch` runs still execute,
+gated only by `dry_run`). The `live-mirror.yml` workflow also drives the full
+lifecycle from the Actions UI (`dry_run` default on): `create` (bootstrap the
+follower row — slug = the PAPER slug), `go-live`, `mirror` (drifted names
+only), `replicate` (full match — `--threshold 0`, buys the entire current
+paper book, not just changes), `sync`. The inline heartbeat mirror stays as a
+best-effort top-up for any rebalance that happens to land during market hours.
 
 The per-decision routing below (`ctx.buy/sell` → Alpaca) is the alternative
 mechanism for a live portfolio that runs *its own* agents; a follower has none,
