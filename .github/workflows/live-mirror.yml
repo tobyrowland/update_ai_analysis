@@ -36,6 +36,10 @@ on:
         type: boolean
         default: true
   schedule:
+    # Market-hours auto-mirror: ~30 min after the US open (13:30 UTC), pick up
+    # whatever the swarm changed at the 07:00 heartbeat and trade it while the
+    # market is open. Honors ALPACA_LIVE_EXECUTION_ENABLED (no-op if unset).
+    - cron: "0 14 * * 1-5"
     # Daily drift reconcile (sync) after the close-of-business valuation.
     - cron: "0 23 * * 1-5"
 
@@ -69,14 +73,20 @@ jobs:
           LIVE_ACTION: ${{ inputs.action }}
           LIVE_SLUG: ${{ inputs.slug }}
           LIVE_DRY_RUN: ${{ inputs.dry_run }}
+          SCHEDULE: ${{ github.event.schedule }}
         run: |
           set -u
           ACTION="$(printf '%s' "${LIVE_ACTION}" | tr -d '[:space:]')"
           SLUG="$(printf '%s' "${LIVE_SLUG}" | tr -d '[:space:]')"
-          # Scheduled run (no inputs): reconcile every live portfolio via sync.
+          # Scheduled run (no inputs): branch on which cron fired.
           if [ -z "${ACTION}" ]; then
-            echo "Scheduled drift reconcile across live portfolios"
-            python alpaca_execution.py --sync-all-live
+            if [ "${SCHEDULE}" = "0 14 * * 1-5" ]; then
+              echo "Market-hours auto-mirror across live portfolios"
+              python alpaca_mirror.py --mirror-all-live
+            else
+              echo "Scheduled drift reconcile across live portfolios"
+              python alpaca_execution.py --sync-all-live
+            fi
             exit 0
           fi
           if [ -z "${SLUG}" ]; then
