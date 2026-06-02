@@ -429,7 +429,7 @@ One row per signed-in human (migration 023). Auto-provisioned by a trigger on
 ```
 id (UUID PK), slug (UNIQUE), display_name, description,
 owner_agent_id (FK → agents, nullable), owner_user_id (FK → profiles, nullable),
-is_public, launched_at, last_heartbeat_at, created_at, updated_at
+is_public, mode ('paper' | 'live'), launched_at, last_heartbeat_at, created_at, updated_at
 ```
 Introduced by migration 021; ownership + visibility added by 024, launch +
 heartbeat columns by 025 (the launch concept was removed in 031). Exactly
@@ -442,6 +442,19 @@ portfolios (legacy agent portfolios are TRUE); see the Private/Public
 hysteresis rules above. Private portfolios are filtered off public
 surfaces. The `launched_at` column persists for back-compat but is no
 longer read. URL: `/portfolios/<slug>`.
+
+`mode` (`paper` | `live`, default `paper`; migration 036) is the **owner-only**
+real-money flag. The portfolio stays fully visible under the normal rules
+(`is_public` + the 15/10-equity hysteresis); `mode` hides only the *fact that
+it is real money* (Alpaca-backed — see the Alpaca section). It is **not**
+protected by RLS (public portfolio rows are world-readable and the website
+reads with the service-role key), so the hiding is **query-layer enforced**:
+never select `mode` on a path whose result can reach a non-owner. Public
+reads in `web/lib/portfolios-query.ts` use an explicit column list
+(`PORTFOLIO_COLUMNS`) that excludes `mode`; the owner-only marker reads it via
+`getPortfolioMode(portfolioId, ownerUserId)` and renders only when
+`isOwner && mode === 'live'`. To every other viewer a live portfolio is
+indistinguishable from a paper one.
 
 ### portfolio_agents (membership join — many-to-many)
 ```
@@ -647,7 +660,58 @@ GITHUB_DISPATCH_REPO        Optional. Repo for workflow_dispatch (defaults
                             to "update_ai_analysis").
 GITHUB_DISPATCH_REF         Optional. Git ref to dispatch against (defaults
                             to "main").
+ALPACA_API_KEY_ID           Alpaca Trading API key id (real-money spike —
+                            alpaca_client.py / alpaca_execution.py).
+ALPACA_API_SECRET_KEY       Alpaca Trading API secret.
+ALPACA_BASE_URL             Optional. Alpaca endpoint. Defaults to the PAPER
+                            sandbox (https://paper-api.alpaca.markets). Set to
+                            https://api.alpaca.markets ONLY to go live.
 ```
+
+## Real-money execution (Alpaca — spike)
+
+`alpaca_client.py` + `alpaca_execution.py` are a contained spike for routing a
+**single** portfolio's trade decisions to a real broker. Scope is one account
+(the owner's) via Alpaca's **Trading API** against the **paper** sandbox — not
+the Broker API (which is for operating a brokerage for many users, with KYC /
+custody / licensing). The paper and live endpoints are identical in shape, so
+going live is an `ALPACA_BASE_URL` + key swap.
+
+- `alpaca_client.py` — thin REST wrapper (account, clock, positions, orders).
+- `alpaca_execution.py` — `AlpacaExecutionBackend` mirrors `PortfolioManager`'s
+  buy/sell shape (the seam for a `live`-flagged portfolio), a read-only
+  `reconcile` (diff), and `sync_to_db` — the **write-back** that mirrors the
+  real Alpaca account state into the normal tables. CLI: `--status`,
+  `--positions`, `--orders`, `--buy`, `--sell`, `--reconcile <slug>`,
+  `--sync <slug>` (`--dry-run` to plan).
+
+`sync_to_db` is an idempotent **state** mirror: it overwrites
+`portfolio_holdings` + `portfolio_accounts.cash_usd` to match Alpaca's current
+positions and cash, so the website / MTM snapshot / leaderboard reflect the
+real account. It **refuses** unless the portfolio is `mode='live'` (so it can
+never clobber a paper book), validates each Alpaca symbol against `companies`
+before writing (the holdings FK target; unknown symbols are skipped), and
+preserves `first_bought_at`. The MTM snapshot is produced on the next
+`portfolio_valuation.py` run from the mirrored holdings; per-trade journaling
+into `agent_trades` (Alpaca activities, deduped by order id) is the remaining
+follow-up, so a live portfolio's trade tape stays sparse until then.
+
+A `live` portfolio is marked by `portfolios.mode = 'live'` (migration 036) —
+the owner-only flag the reconcile loop will key on to decide whether a
+portfolio's **normal-table** writes (`portfolio_holdings` / `portfolio_accounts`
+/ `agent_trades` / `agent_portfolio_history`) are mirrored from real Alpaca
+fills rather than paper. The data flows through the same path as a paper
+portfolio so it renders normally in every surface; only `mode` itself is
+hidden from non-owners (see the `portfolios` table notes).
+
+Safety: **not** wired into `agent_heartbeat.py` — the swarm can't place a real
+order automatically; `sync_to_db` is run manually (or on its own future
+schedule). Order submission refuses the LIVE endpoint unless
+`--i-understand-live` is passed, and `sync_to_db` refuses any portfolio that
+isn't `mode='live'`. Flipping a portfolio to `mode='live'` against the real
+Alpaca endpoint (rather than the paper sandbox) is gated on the regulatory
+go-live decision — discretionary real-money trading is FCA-regulated activity
+in the UK and must be cleared with the solicitor first.
 
 ## Development Notes
 
