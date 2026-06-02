@@ -761,9 +761,11 @@ mirror passes the sizing price, the forward path passes `companies.price`.
 
 **Scheduling.** The routine "mirror after rebalance" runs inside
 `agent-heartbeat` (which now carries the `ALPACA_*` secrets). The
-`live-mirror.yml` workflow adds Actions-UI operation (`workflow_dispatch`:
-`mirror` / `sync` / `go-live` against a slug, `dry_run` default on) plus a
-daily `--sync-all-live` drift reconcile.
+`live-mirror.yml` workflow drives the full lifecycle from the Actions UI
+(`workflow_dispatch`, `dry_run` default on): `create` (bootstrap the follower
+row — slug = the PAPER slug), `go-live`, `mirror` (drifted names only),
+`replicate` (full match — `--threshold 0`, buys the entire current paper book,
+not just changes), `sync`; plus a daily `--sync-all-live` drift reconcile.
 
 The per-decision routing below (`ctx.buy/sell` → Alpaca) is the alternative
 mechanism for a live portfolio that runs *its own* agents; a follower has none,
