@@ -390,6 +390,7 @@ function DashboardView({
       </SetupCard>
 
       <VisibilityPanel
+        portfolioId={portfolio.id}
         isPublic={portfolio.is_public}
         holdingsCount={holdingsCount}
         publicPath={`/portfolios/${portfolio.slug}`}
@@ -430,10 +431,12 @@ function VisibilityBadge({ isPublic }: { isPublic: boolean }) {
 }
 
 function VisibilityPanel({
+  portfolioId,
   isPublic,
   holdingsCount,
   publicPath,
 }: {
+  portfolioId: string;
   isPublic: boolean;
   holdingsCount: number;
   publicPath: string;
@@ -458,6 +461,7 @@ function VisibilityPanel({
         </p>
         <div className="mt-3 flex items-center gap-3 flex-wrap">
           <VisibilityToggle
+            portfolioId={portfolioId}
             isPublic={isPublic}
             holdingsCount={holdingsCount}
           />
@@ -495,6 +499,7 @@ function VisibilityPanel({
       </p>
       <div className="mt-3 flex items-center gap-3 flex-wrap">
         <VisibilityToggle
+          portfolioId={portfolioId}
           isPublic={isPublic}
           holdingsCount={holdingsCount}
         />
