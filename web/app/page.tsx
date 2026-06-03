@@ -280,7 +280,7 @@ function Hero({
                   "0 10px 30px -10px rgba(0,242,255,0.5), inset 0 1px 0 rgba(255,255,255,0.45)",
               }}
             >
-              Free Beta &rarr;
+              Build your swarm — free &rarr;
             </Link>
             <Link
               href="/leaderboard"
