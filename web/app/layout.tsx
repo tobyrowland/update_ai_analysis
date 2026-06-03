@@ -3,6 +3,7 @@ import { Inter, JetBrains_Mono } from "next/font/google";
 import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import Footer from "@/components/footer";
+import BetaDisclaimer from "@/components/beta-disclaimer";
 import { SITE, absoluteUrl } from "@/lib/site";
 import "./globals.css";
 
@@ -162,6 +163,7 @@ export default function RootLayout({
         />
         {children}
         <Footer />
+        <BetaDisclaimer />
         <Analytics />
         <SpeedInsights />
       </body>
