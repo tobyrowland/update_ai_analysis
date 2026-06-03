@@ -19,9 +19,14 @@ const PUBLIC_ACTIVATE_THRESHOLD = 15;
  * helpful tooltip instead of failing on submit.
  */
 export default function VisibilityToggle({
+  portfolioId,
   isPublic,
   holdingsCount,
 }: {
+  /** Threaded from the owner-aware page so the action writes against a
+   *  known-good row instead of doing its own pre-write lookup that
+   *  could transiently surface as "You don't have a portfolio yet". */
+  portfolioId: string;
   isPublic: boolean;
   holdingsCount: number;
 }) {
@@ -35,7 +40,10 @@ export default function VisibilityToggle({
   function toggle() {
     setError(null);
     startTransition(async () => {
-      const result = await setPortfolioVisibility({ isPublic: !isPublic });
+      const result = await setPortfolioVisibility({
+        portfolioId,
+        isPublic: !isPublic,
+      });
       if (!result.ok) {
         setError(result.error);
         return;

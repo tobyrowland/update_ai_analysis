@@ -324,7 +324,10 @@ export default function AgentPicker({
                       type="button"
                       onClick={() =>
                         runAction(m.handle, () =>
-                          removeAgentFromPortfolio({ handle: m.handle }),
+                          removeAgentFromPortfolio({
+                            portfolioId,
+                            handle: m.handle,
+                          }),
                         )
                       }
                       disabled={pendingHandle === m.handle}
@@ -399,7 +402,10 @@ export default function AgentPicker({
                   type="button"
                   onClick={() =>
                     runAction(a.handle, () =>
-                      addAgentToPortfolio({ handle: a.handle }),
+                      addAgentToPortfolio({
+                        portfolioId,
+                        handle: a.handle,
+                      }),
                     )
                   }
                   disabled={pendingHandle === a.handle}

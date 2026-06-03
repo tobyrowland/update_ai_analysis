@@ -252,6 +252,7 @@ export default async function PortfolioPage({ params }: PageParams) {
               </p>
               {isOwner && (
                 <VisibilityToggle
+                  portfolioId={portfolio.id}
                   isPublic={portfolio.is_public}
                   holdingsCount={holdingsCount}
                 />
@@ -396,6 +397,7 @@ export default async function PortfolioPage({ params }: PageParams) {
                 Holdings ({snapshot.holdings.length})
               </h3>
               <HoldingsList
+                portfolioId={portfolio.id}
                 holdings={snapshot.holdings}
                 thesesByTicker={thesesByTicker}
                 canSell={isOwner}

@@ -24,6 +24,9 @@ import type { InvestmentThesis, ThesisSignal } from "@/lib/theses-query";
 import SellHoldingButton from "@/components/portfolio/sell-holding-button";
 
 interface Props {
+  /** Threaded to SellHoldingButton when canSell is true. Allowed null
+   *  for public viewers — the button doesn't render and the prop is unused. */
+  portfolioId?: string;
   holdings: HoldingWithMtm[];
   thesesByTicker: Record<string, InvestmentThesis>;
   /** Render the per-row "Sell" button. Owner-only on the portfolio
@@ -32,6 +35,7 @@ interface Props {
 }
 
 export default function HoldingsList({
+  portfolioId,
   holdings,
   thesesByTicker,
   canSell = false,
@@ -132,7 +136,7 @@ export default function HoldingsList({
                     superseded / closed.
                   </p>
                 )}
-                {canSell && (
+                {canSell && portfolioId && (
                   <div className="pt-3 border-t border-white/[0.06] flex items-start justify-between gap-3 flex-wrap">
                     <p className="text-[11px] font-mono text-text-muted leading-relaxed max-w-[480px]">
                       Manual sell of the full position at the latest price.
@@ -140,6 +144,7 @@ export default function HoldingsList({
                       ticker for 90 days.
                     </p>
                     <SellHoldingButton
+                      portfolioId={portfolioId}
                       ticker={h.ticker}
                       quantity={h.quantity}
                       marketValueUsd={h.market_value_usd}

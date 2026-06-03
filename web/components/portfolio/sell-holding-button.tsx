@@ -15,10 +15,12 @@ import { sellHolding } from "@/lib/portfolios-mutations";
  * dense holdings table.
  */
 export default function SellHoldingButton({
+  portfolioId,
   ticker,
   quantity,
   marketValueUsd,
 }: {
+  portfolioId: string;
   ticker: string;
   quantity: number;
   marketValueUsd: number;
@@ -31,7 +33,7 @@ export default function SellHoldingButton({
   function onConfirm() {
     setError(null);
     startTransition(async () => {
-      const result = await sellHolding({ ticker });
+      const result = await sellHolding({ portfolioId, ticker });
       if (!result.ok) {
         setError(result.error);
         setConfirming(false);

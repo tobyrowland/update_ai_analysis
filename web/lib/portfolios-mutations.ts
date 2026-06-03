@@ -42,6 +42,35 @@ async function getOwnedPortfolio(userId: string): Promise<OwnedPortfolio | null>
   return (data as OwnedPortfolio | null) ?? null;
 }
 
+/**
+ * Verify that `portfolioId` belongs to `userId` and return its slug.
+ * Single query, no race window — replaces the pre-write
+ * `getOwnedPortfolio(user.id)` lookup that previously surfaced as "You
+ * don't have a portfolio yet" when it transiently failed. The DB error
+ * case is logged so server logs separate "ownership mismatch" from
+ * "DB error" instead of both rendering as the same red banner.
+ */
+async function resolveOwnedPortfolio(
+  portfolioId: string,
+  userId: string,
+): Promise<{ slug: string } | null> {
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("portfolios")
+    .select("slug")
+    .eq("id", portfolioId)
+    .eq("owner_user_id", userId)
+    .maybeSingle();
+  if (error) {
+    console.error("resolveOwnedPortfolio lookup failed:", error);
+    return null;
+  }
+  return (data as { slug: string } | null) ?? null;
+}
+
+const NOT_FOUND_ERROR =
+  "Couldn't find your portfolio. Refresh the page and try again.";
+
 function revalidate(slug: string): void {
   revalidatePath("/account");
   revalidatePath(`/portfolios/${slug}`);
@@ -158,14 +187,15 @@ export async function updatePortfolioDetails(input: {
  * mechanical `watchlist_buyer` for the next 90 days.
  */
 export async function sellHolding(input: {
+  portfolioId: string;
   ticker: string;
 }): Promise<ActionResult> {
   const { user } = await requireUser();
   const ticker = input.ticker.trim().toUpperCase();
   if (!ticker) return { ok: false, error: "Ticker is required." };
 
-  const portfolio = await getOwnedPortfolio(user.id);
-  if (!portfolio) return { ok: false, error: "You don't have a portfolio yet." };
+  const portfolio = await resolveOwnedPortfolio(input.portfolioId, user.id);
+  if (!portfolio) return { ok: false, error: NOT_FOUND_ERROR };
 
   const supabase = getSupabase();
 
@@ -173,7 +203,7 @@ export async function sellHolding(input: {
   const { data: holding, error: holdingErr } = await supabase
     .from("portfolio_holdings")
     .select("quantity")
-    .eq("portfolio_id", portfolio.id)
+    .eq("portfolio_id", input.portfolioId)
     .eq("ticker", ticker)
     .maybeSingle();
   if (holdingErr) {
@@ -228,7 +258,7 @@ export async function sellHolding(input: {
   const { data: rpcData, error: rpcErr } = await supabase.rpc(
     "execute_portfolio_sell",
     {
-      p_portfolio_id: portfolio.id,
+      p_portfolio_id: input.portfolioId,
       p_agent_id: manualAgentId,
       p_ticker: ticker,
       p_quantity: quantity,
@@ -259,7 +289,7 @@ export async function sellHolding(input: {
       status_changed_at: new Date().toISOString(),
       closed_at: new Date().toISOString(),
     })
-    .eq("portfolio_id", portfolio.id)
+    .eq("portfolio_id", input.portfolioId)
     .eq("ticker", ticker)
     .eq("status", "active");
 
@@ -268,18 +298,21 @@ export async function sellHolding(input: {
 }
 
 export async function setPortfolioVisibility(input: {
+  portfolioId: string;
   isPublic: boolean;
 }): Promise<ActionResult> {
   const { user } = await requireUser();
-  const portfolio = await getOwnedPortfolio(user.id);
-  if (!portfolio) return { ok: false, error: "You don't have a portfolio yet." };
 
+  // Single update with ownership in the WHERE clause — no pre-write
+  // lookup. `data` returns null on either ownership mismatch or no row.
   const supabase = getSupabase();
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("portfolios")
     .update({ is_public: input.isPublic })
-    .eq("id", portfolio.id)
-    .eq("owner_user_id", user.id);
+    .eq("id", input.portfolioId)
+    .eq("owner_user_id", user.id)
+    .select("slug")
+    .maybeSingle();
 
   if (error) {
     // Migration 031's `enforce_portfolio_public_threshold` trigger refuses
@@ -296,8 +329,9 @@ export async function setPortfolioVisibility(input: {
     console.error("setPortfolioVisibility failed:", error);
     return { ok: false, error: "Could not update visibility. Try again." };
   }
+  if (!data) return { ok: false, error: NOT_FOUND_ERROR };
 
-  revalidate(portfolio.slug);
+  revalidate(data.slug);
   return { ok: true };
 }
 
@@ -317,11 +351,12 @@ async function resolveAgent(handle: string): Promise<ResolvedAgent | null> {
 }
 
 export async function addAgentToPortfolio(input: {
+  portfolioId: string;
   handle: string;
 }): Promise<ActionResult> {
   const { user } = await requireUser();
-  const portfolio = await getOwnedPortfolio(user.id);
-  if (!portfolio) return { ok: false, error: "You don't have a portfolio yet." };
+  const portfolio = await resolveOwnedPortfolio(input.portfolioId, user.id);
+  if (!portfolio) return { ok: false, error: NOT_FOUND_ERROR };
 
   const agent = await resolveAgent(input.handle);
   if (!agent) return { ok: false, error: "That agent no longer exists." };
@@ -336,7 +371,7 @@ export async function addAgentToPortfolio(input: {
   const { error } = await supabase
     .from("portfolio_agents")
     .upsert(
-      { portfolio_id: portfolio.id, agent_id: agent.id },
+      { portfolio_id: input.portfolioId, agent_id: agent.id },
       { onConflict: "portfolio_id,agent_id", ignoreDuplicates: true },
     );
 
@@ -350,11 +385,12 @@ export async function addAgentToPortfolio(input: {
 }
 
 export async function removeAgentFromPortfolio(input: {
+  portfolioId: string;
   handle: string;
 }): Promise<ActionResult> {
   const { user } = await requireUser();
-  const portfolio = await getOwnedPortfolio(user.id);
-  if (!portfolio) return { ok: false, error: "You don't have a portfolio yet." };
+  const portfolio = await resolveOwnedPortfolio(input.portfolioId, user.id);
+  if (!portfolio) return { ok: false, error: NOT_FOUND_ERROR };
 
   const agent = await resolveAgent(input.handle);
   if (!agent) {
@@ -367,7 +403,7 @@ export async function removeAgentFromPortfolio(input: {
   const { error } = await supabase
     .from("portfolio_agents")
     .delete()
-    .eq("portfolio_id", portfolio.id)
+    .eq("portfolio_id", input.portfolioId)
     .eq("agent_id", agent.id);
 
   if (error) {
