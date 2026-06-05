@@ -385,7 +385,6 @@ export default async function PortfolioPage({ params }: PageParams) {
                 }))}
                 catalog={catalog}
                 screenConfig={portfolio.screen_config}
-                draftEnabled={!!portfolio.draft_config}
               />
             </section>
           ) : (
