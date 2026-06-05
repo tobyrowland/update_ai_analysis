@@ -58,7 +58,8 @@ logging.basicConfig(
 logger = logging.getLogger("backfill_tier1_val")
 
 DEFAULT_DELAY = 1.0
-BATCH_SIZE = 200
+BATCH_SIZE = 25  # small so progress is visible + crash-resilient (a mid-run
+                 # failure keeps prior batches rather than losing everything)
 WEEKS = 52
 
 
@@ -192,6 +193,7 @@ def main() -> None:
             db.upsert_valuation_batch(batch)
             written += len(batch)
             batch = []
+            logger.info("flushed → %d valuation rows written so far", written)
 
         if (idx + 1) % 100 == 0:
             logger.info("…%d/%d processed (written≈%d, no_data=%d, errors=%d)",
