@@ -484,3 +484,67 @@ export async function getAgentReturns30d(): Promise<Map<string, number | null>> 
   }
   return out;
 }
+
+/** Per-agent trade-tape stats for the swarm picker cards. */
+export interface AgentTradeStats {
+  /** Trades in the trailing 30 days. */
+  trades30d: number;
+  /** Sells in the trailing 30 days (the reviewer card's "N sells / 30D"). */
+  sells30d: number;
+  /**
+   * Realized win rate (%). Currently always `null` — computing it correctly
+   * needs a full-history cost-basis scan, too expensive to run on every page
+   * load (it was the cause of the slow portfolio page). The field stays so the
+   * cards can light up once it's precomputed (nightly stat / RPC); cards omit
+   * the token when null.
+   */
+  winPct: number | null;
+}
+
+/**
+ * Compute trade-tape stats for a set of agents (by agent id) from the
+ * `agent_trades` journal — **bounded to the trailing 30 days** so it stays
+ * cheap. Returns 30d trade + sell counts; `winPct` is left null pending a
+ * precomputed stat. Owner-only call.
+ */
+export async function getAgentTradeStats(
+  agentIds: string[],
+): Promise<Map<string, AgentTradeStats>> {
+  const out = new Map<string, AgentTradeStats>();
+  if (agentIds.length === 0) return out;
+  const supabase = getSupabase();
+
+  const cutoffIso = new Date(
+    Date.now() - 30 * 24 * 60 * 60 * 1000,
+  ).toISOString();
+
+  // Only the trailing 30 days of trades for these agents — small + fast.
+  const PAGE = 1000;
+  const MAX_ROWS = 20000;
+  const counts = new Map<string, { trades30d: number; sells30d: number }>();
+  for (let from = 0; from < MAX_ROWS; from += PAGE) {
+    const { data, error } = await supabase
+      .from("agent_trades")
+      .select("agent_id, side")
+      .in("agent_id", agentIds)
+      .gte("executed_at", cutoffIso)
+      .range(from, from + PAGE - 1);
+    if (error) {
+      console.error("getAgentTradeStats failed:", error);
+      return out;
+    }
+    const batch = (data ?? []) as { agent_id: string; side: string }[];
+    for (const r of batch) {
+      const c = counts.get(r.agent_id) ?? { trades30d: 0, sells30d: 0 };
+      c.trades30d += 1;
+      if (r.side === "sell") c.sells30d += 1;
+      counts.set(r.agent_id, c);
+    }
+    if (batch.length < PAGE) break;
+  }
+
+  for (const [id, c] of counts) {
+    out.set(id, { trades30d: c.trades30d, sells30d: c.sells30d, winPct: null });
+  }
+  return out;
+}
