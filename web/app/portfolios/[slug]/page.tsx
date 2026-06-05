@@ -165,12 +165,40 @@ async function getPortfolioPageData(slug: string): Promise<{
   const portfolioId = portfolio.id;
   const ownerAgentId = portfolio.owner_agent_id;
   const ownerUserId = portfolio.owner_user_id;
+
+  // Owner-only swarm-picker catalog (hireable agents + 30d track record). Built
+  // concurrently with the page's other reads rather than after them.
+  const loadCatalog = async (): Promise<AgentCatalogEntry[]> => {
+    if (!isOwner) return [];
+    const [agents, returns] = await Promise.all([
+      listPublicAgents(1000, true).catch(() => []),
+      getAgentReturns30d().catch(() => new Map<string, number | null>()),
+    ]);
+    const tradeStats = await getAgentTradeStats(agents.map((a) => a.id)).catch(
+      () => new Map(),
+    );
+    return agents.map((a) => {
+      const ts = tradeStats.get(a.id);
+      return {
+        handle: a.handle,
+        displayName: a.display_name,
+        poweredBy: a.powered_by,
+        isHouse: a.is_house_agent,
+        strategy: a.strategy,
+        return30d: returns.get(a.handle) ?? null,
+        winPct: ts?.winPct ?? null,
+        sells30d: ts?.sells30d ?? 0,
+      };
+    });
+  };
+
   const [
     snapshot,
     thesesByTicker,
     members,
     recent,
     holdingsCount,
+    catalog,
   ] = await Promise.all([
     ownerAgentId
       ? getPortfolio(ownerAgentId).catch((err) => {
@@ -201,36 +229,9 @@ async function getPortfolioPageData(slug: string): Promise<{
       () => ({ trades: [], totalTrades: 0 }),
     ),
     getHoldingsCountForPortfolio(portfolioId).catch(() => 0),
+    loadCatalog().catch(() => [] as AgentCatalogEntry[]),
   ]);
   const { trades, totalTrades } = recent;
-
-  // Agent catalog for the owner's swarm picker: every hireable agent + its 30d
-  // track record. Owner-only — skipped entirely for non-owners.
-  let catalog: AgentCatalogEntry[] = [];
-  if (isOwner) {
-    const [agents, returns] = await Promise.all([
-      listPublicAgents(1000, true).catch(() => []),
-      getAgentReturns30d().catch(() => new Map<string, number | null>()),
-    ]);
-    // Trade-tape stats (win %, 30d sells) keyed by agent id — a second pass so
-    // we only query trades for the hireable set.
-    const tradeStats = await getAgentTradeStats(
-      agents.map((a) => a.id),
-    ).catch(() => new Map());
-    catalog = agents.map((a) => {
-      const ts = tradeStats.get(a.id);
-      return {
-        handle: a.handle,
-        displayName: a.display_name,
-        poweredBy: a.powered_by,
-        isHouse: a.is_house_agent,
-        strategy: a.strategy,
-        return30d: returns.get(a.handle) ?? null,
-        winPct: ts?.winPct ?? null,
-        sells30d: ts?.sells30d ?? 0,
-      };
-    });
-  }
 
   return {
     portfolio,
