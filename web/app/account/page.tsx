@@ -47,19 +47,21 @@ export default async function AccountPage() {
     /* ignore — greeting falls back to the email local-part */
   }
 
-  const { portfolios, activity, spySeries } = await getDashboardData(user.id);
+  const { portfolios, livePortfolio, activity, spySeries } =
+    await getDashboardData(user.id);
 
   return (
     <>
       <Nav />
       <main className="flex-1 w-full">
         <div className="max-w-[1100px] mx-auto w-full px-4 sm:px-6 py-8 sm:py-10">
-          {portfolios.length === 0 ? (
+          {portfolios.length === 0 && !livePortfolio ? (
             <EmptyState displayName={displayName} />
           ) : (
             <Dashboard
               displayName={displayName}
               portfolios={portfolios}
+              livePortfolio={livePortfolio}
               activity={activity}
               spySeries={spySeries}
             />
@@ -76,11 +78,13 @@ export default async function AccountPage() {
 function Dashboard({
   displayName,
   portfolios,
+  livePortfolio,
   activity,
   spySeries,
 }: {
   displayName: string;
   portfolios: DashPortfolio[];
+  livePortfolio: DashPortfolio | null;
   activity: DashTrade[];
   spySeries: { date: string; pct: number }[];
 }) {
@@ -131,6 +135,10 @@ function Dashboard({
           ))}
         </div>
       </section>
+
+      {/* Private real-money follower (migration 037) — owner-only; links out to
+          its own (private) detail page. Kept separate from the arena books. */}
+      {livePortfolio && <LiveFollowerCard p={livePortfolio} />}
 
       {/* Recent swarm activity */}
       <section aria-label="Recent swarm activity">
@@ -216,6 +224,67 @@ function PortfolioCard({ p }: { p: DashPortfolio }) {
         {p.numPositions} position{p.numPositions === 1 ? "" : "s"}
       </div>
     </Link>
+  );
+}
+
+function LiveFollowerCard({ p }: { p: DashPortfolio }) {
+  const down = p.pnlPct != null && p.pnlPct < 0;
+  const color = down
+    ? "var(--color-red,#FF3333)"
+    : "var(--color-green,#00FF41)";
+  return (
+    <section aria-label="Live account">
+      <h2 className="text-[11px] font-mono font-bold uppercase tracking-[0.14em] text-text-dim mb-3">
+        Live account
+      </h2>
+      <Link
+        href={`/portfolios/${p.slug}`}
+        className="block rounded-xl border p-4 transition-colors hover:bg-[var(--color-green,#00FF41)]/[0.04]"
+        style={{
+          borderColor: "rgba(0,255,65,0.28)",
+          background:
+            "linear-gradient(180deg, rgba(0,255,65,0.05), rgba(255,255,255,0.012))",
+        }}
+      >
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <span
+            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-green,#00FF41)]/40 bg-[var(--color-green,#00FF41)]/[0.08] px-2.5 py-1 text-[10px] font-mono font-bold uppercase tracking-[0.12em] text-[var(--color-green,#00FF41)]"
+            title="Backed by a real Alpaca account. Private — only you can see this."
+          >
+            <span
+              aria-hidden
+              className="h-1.5 w-1.5 rounded-full bg-[var(--color-green,#00FF41)] animate-pulse"
+              style={{ boxShadow: "0 0 8px rgba(0,255,65,0.6)" }}
+            />
+            Private · live · real money
+          </span>
+          <span className="text-[11px] font-mono text-text-muted">
+            View account →
+          </span>
+        </div>
+        <div className="mt-3 flex items-baseline gap-3 flex-wrap">
+          <span className="font-semibold text-text truncate">{p.name}</span>
+          <span className="text-lg font-semibold text-text">
+            {p.value == null
+              ? "—"
+              : `$${p.value.toLocaleString("en-US", { maximumFractionDigits: 0 })}`}
+          </span>
+          <span className="text-sm font-mono" style={{ color }}>
+            {p.pnlPct == null
+              ? ""
+              : `${p.pnlPct >= 0 ? "▲" : "▼"} ${Math.abs(p.pnlPct).toFixed(2)}%`}
+          </span>
+          <span className="text-[11px] text-text-muted">
+            {p.numPositions} position{p.numPositions === 1 ? "" : "s"}
+          </span>
+        </div>
+        <p className="mt-2 text-xs text-text-muted leading-relaxed max-w-[60ch]">
+          Mirrors your arena book&apos;s positions onto a real Alpaca account,
+          sized to its actual value. Trades automatically with the swarm —
+          nothing to manage here.
+        </p>
+      </Link>
+    </section>
   );
 }
 
