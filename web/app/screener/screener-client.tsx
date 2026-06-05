@@ -57,6 +57,22 @@ function fmt(v: number | null, opts?: { pct?: boolean; mult?: boolean; dp?: numb
 }
 const PAGE_SIZE = 250;
 
+// Hover explanations for the (jargon-y) ranking controls.
+const WEIGHT_HELP: Record<"quality" | "value" | "momentum", string> = {
+  quality:
+    "Quality — how strong the business is: 0.60×Rule of 40 + 0.25×free-cash-flow margin + 0.15×gross margin, scored as percentiles within the filtered set. Raise it to favour profitable, efficient compounders.",
+  value:
+    "Value — how cheap it is on sales versus the stock's own 12-month median P/S (not an absolute P/S). Raise it to favour names trading below their usual valuation.",
+  momentum:
+    "Momentum — trailing 52-week price return, collared so falling knives and blow-off tops don't dominate. Raise it to favour recent leaders.",
+};
+const RANKING_HELP =
+  "Each name's Score is a percentile blend of Quality, Value and Momentum, weighted by these sliders, relative to the names matching your filters — so it's this screen's own ranking, not a fixed house score.";
+const AI_HELP =
+  "Multiply each Score by the AI bull/bear verdict: dual-positive ×1.30, story-but-red-flags ×0.70, avoid ×0.40, sound-or-unrated ×1.00. Uncheck to ignore the AI overlay.";
+const TOPN_HELP =
+  "The top N ranked names become your buyer's candidate pool — the cut line in the table. Only these feed the swarm.";
+
 function topWeight(w: { quality: number; value: number; momentum: number }): string {
   const e = Object.entries(w) as [string, number][];
   e.sort((a, b) => b[1] - a[1]);
@@ -341,15 +357,25 @@ export default function ScreenerClient({
         <details
           className={`ml-auto min-w-[280px] ${card}`}
         >
-          <summary className="list-none cursor-pointer font-mono text-[11px] text-[var(--color-cyan)] px-3 py-2 marker:hidden [&::-webkit-details-marker]:hidden">
+          <summary
+            title="Adjust how the Score is computed — the balance of Quality, Value and Momentum, the AI multiplier, and how many top names feed your buyer."
+            className="list-none cursor-pointer font-mono text-[11px] text-[var(--color-cyan)] px-3 py-2 marker:hidden [&::-webkit-details-marker]:hidden"
+          >
             ⚙ Tune ranking ▸
           </summary>
           <div className="px-3 pb-3">
-            <div className="flex items-center justify-between mt-1.5">
-              <span className="text-[10px] font-mono uppercase tracking-[0.12em] text-text-muted">
-                This screen&apos;s own ranking
+            <div className="flex items-center justify-between mt-1.5 gap-2">
+              <span
+                title={RANKING_HELP}
+                className="text-[10px] font-mono uppercase tracking-[0.12em] text-text-muted cursor-help underline decoration-dotted decoration-white/25 underline-offset-2"
+              >
+                This screen&apos;s own ranking{" "}
+                <span aria-hidden className="text-text-muted/50 no-underline">ⓘ</span>
               </span>
-              <label className="font-mono text-[10.5px] text-[var(--color-cyan)] inline-flex items-center gap-1.5">
+              <label
+                title={AI_HELP}
+                className="font-mono text-[10.5px] text-[var(--color-cyan)] inline-flex items-center gap-1.5 cursor-help shrink-0"
+              >
                 <input
                   type="checkbox"
                   checked={config.aiMultiplier}
@@ -362,7 +388,12 @@ export default function ScreenerClient({
             {(["quality", "value", "momentum"] as const).map((k) => (
               <div key={k} className="mt-2.5">
                 <div className="flex justify-between font-mono text-[11px] text-text-muted capitalize">
-                  <span>{k}</span>
+                  <span
+                    title={WEIGHT_HELP[k]}
+                    className="cursor-help underline decoration-dotted decoration-white/25 underline-offset-2"
+                  >
+                    {k} <span aria-hidden className="text-text-muted/50 no-underline">ⓘ</span>
+                  </span>
                   <span className="text-text">{config.weights[k]}</span>
                 </div>
                 <input
@@ -373,12 +404,18 @@ export default function ScreenerClient({
                   onChange={(e) => patch({ weights: { ...config.weights, [k]: Number(e.target.value) } })}
                   className="w-full accent-[var(--color-cyan)]"
                   aria-label={`${k} weight, ${config.weights[k]} of 100`}
+                  title={WEIGHT_HELP[k]}
                 />
               </div>
             ))}
             <div className="mt-3">
               <div className="flex justify-between font-mono text-[11px] text-text-muted">
-                <span>Top N → buyer</span>
+                <span
+                  title={TOPN_HELP}
+                  className="cursor-help underline decoration-dotted decoration-white/25 underline-offset-2"
+                >
+                  Top N → buyer <span aria-hidden className="text-text-muted/50 no-underline">ⓘ</span>
+                </span>
                 <span className="text-[var(--color-cyan)]">{config.topN}</span>
               </div>
               <input
@@ -389,6 +426,7 @@ export default function ScreenerClient({
                 onChange={(e) => patch({ topN: Math.max(1, Math.min(200, Number(e.target.value))) })}
                 className="w-full accent-[var(--color-cyan)]"
                 aria-label={`Top N candidates, ${config.topN}`}
+                title={TOPN_HELP}
               />
             </div>
           </div>
