@@ -237,6 +237,9 @@ export default function ScreenerClient({
   const usedFields = useMemo(() => new Set(config.filters.map((f) => f.field)), [config.filters]);
   const cols = useMemo(() => [...BASE_COLS, ...EXTRA_COLS.filter((c) => extraCols.has(c.key))], [extraCols]);
   const metricColCount = 1 + cols.length; // Score + metric cols
+  // "Run as a portfolio" carries the current screen config into the portfolio
+  // home, where it becomes the portfolio's selection recipe (screen_config).
+  const runHref = `/account?from=screen&config=${encodeConfig(config)}`;
 
   const card = "rounded-xl border border-white/10 bg-white/[0.02]";
 
@@ -443,11 +446,51 @@ export default function ScreenerClient({
         />
       )}
 
+      {/* How this works — Screen → top N → Portfolio (one bridge, not a pipeline) */}
+      <div className="mt-4 mb-4">
+        <div className="text-[10px] font-mono uppercase tracking-[0.12em] text-text-muted mb-2">
+          How this works
+        </div>
+        <div className="flex items-stretch gap-0 flex-wrap">
+          <div className="flex-1 min-w-[200px] rounded-xl border border-[var(--color-cyan)]/45 bg-[var(--color-cyan)]/[0.06] p-3.5">
+            <div className="font-mono text-[12px] text-[var(--color-cyan)]">
+              ● THIS SCREEN{" "}
+              <span className="text-[9px] text-text-muted tracking-[0.05em]">YOU ARE HERE</span>
+            </div>
+            <div className="text-[11px] text-text-muted mt-1.5 leading-relaxed">
+              Ranks every US equity by your config. Re-ranks live.
+            </div>
+          </div>
+          <div className="flex-[0_0_130px] min-w-[120px] flex flex-col items-center justify-center px-1">
+            <div className="font-mono text-[10px] text-green">top {config.topN}</div>
+            <div
+              className="w-full h-px my-1.5 relative"
+              style={{ background: "linear-gradient(90deg,rgba(38,224,240,.5),rgba(55,219,128,.5))" }}
+            >
+              <span className="absolute -right-0.5 -top-[5px] text-green text-[11px]">▶</span>
+            </div>
+            <div className="font-mono text-[9px] text-text-muted">candidates</div>
+          </div>
+          <Link
+            href={runHref}
+            className="flex-1 min-w-[200px] rounded-xl border border-green/45 bg-green/[0.06] p-3.5 hover:bg-green/[0.1] transition-colors"
+          >
+            <div className="font-mono text-[12px] text-green">PORTFOLIO →</div>
+            <div className="text-[11px] text-text-muted mt-1.5 leading-relaxed">
+              Your <span className="text-text">swarm</span> drafts &amp; trades them — marked to
+              market, daily.
+            </div>
+            <div className="font-mono text-[10px] text-green mt-2">
+              Run this screen as a portfolio →
+            </div>
+          </Link>
+        </div>
+      </div>
+
       {/* Count + actions */}
       <div className="font-mono text-[10.5px] text-text-muted flex justify-between flex-wrap gap-1.5 mb-2">
         <span>
-          {data.match_count} of {data.total_universe} · top {Math.min(config.topN, data.match_count)} feed your
-          buyer · re-ranks live{loading ? " · …" : ""}
+          {data.match_count} of {data.total_universe} · re-ranks live{loading ? " · …" : ""}
         </span>
         <span className="flex gap-3 items-center" aria-live="polite">
           <button type="button" onClick={onShare} className="text-[var(--color-cyan)] hover:underline">
@@ -525,6 +568,8 @@ export default function ScreenerClient({
                 cut={i === data.cut_index && data.cut_index < data.rows.length}
                 dim={i >= data.cut_index}
                 spanCols={metricColCount + 3}
+                topN={config.topN}
+                runHref={runHref}
               />
             ))}
             {data.rows.length === 0 && (
@@ -708,19 +753,30 @@ function RowView({
   cut,
   dim,
   spanCols,
+  topN,
+  runHref,
 }: {
   r: Row;
   cols: Col[];
   cut: boolean;
   dim: boolean;
   spanCols: number;
+  topN: number;
+  runHref: string;
 }) {
   return (
     <>
       {cut && (
-        <tr aria-hidden>
-          <td colSpan={spanCols} className="p-0">
-            <div className="h-px bg-[var(--color-cyan)]/40" />
+        <tr>
+          <td colSpan={spanCols} className="p-0 border-t border-green/45">
+            <div className="flex justify-between items-center gap-2 flex-wrap bg-green/[0.07] px-2.5 py-1.5">
+              <span className="font-mono text-[10px] text-green tracking-[0.05em]">
+                ▲ TOP {topN} — what flows to a portfolio
+              </span>
+              <Link href={runHref} className="font-mono text-[10px] text-green hover:underline">
+                Run as a portfolio →
+              </Link>
+            </div>
           </td>
         </tr>
       )}
