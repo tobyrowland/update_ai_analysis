@@ -311,7 +311,7 @@ export default function ScreenerClient({
           <summary className="list-none cursor-pointer font-mono text-[10.5px] text-text-muted border border-dashed border-white/20 rounded-md px-2.5 py-1.5 hover:text-text marker:hidden [&::-webkit-details-marker]:hidden">
             + add filter
           </summary>
-          <div className={`absolute z-20 mt-1.5 w-52 ${card} p-1.5`}>
+          <div className="absolute z-30 mt-1.5 w-52 rounded-xl border border-white/10 bg-[#0b1214] shadow-2xl p-1.5">
             {NAMED_FILTERS.filter((nf) => !usedFields.has(nf.field)).map((nf) => (
               <button
                 key={nf.field}
@@ -451,7 +451,8 @@ export default function ScreenerClient({
                   cols ▾
                 </button>
                 {colsOpen && (
-                  <div className={`absolute right-0 z-20 mt-1 w-40 ${card} p-1 text-left`}>
+                  <div className="absolute right-0 z-30 mt-1 w-40 rounded-xl border border-white/10 bg-[#0b1214] shadow-2xl p-1 text-left">
+
                     {EXTRA_COLS.map((c) => (
                       <label
                         key={c.key}
