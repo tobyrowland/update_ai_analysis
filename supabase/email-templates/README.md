@@ -7,7 +7,31 @@ are not picked up from this directory automatically. These files exist so
 the templates are version-controlled, reviewable, and recoverable. When a
 template here changes, paste the new HTML into the dashboard by hand.
 
-## Deploy
+## Delivery — Resend via Custom SMTP
+
+Auth emails are delivered by **Resend** (not Supabase's built-in sender),
+wired as a Custom SMTP relay. Supabase still renders these templates and
+mints the token links; Resend only delivers. No app code is involved — it
+is dashboard + DNS config:
+
+1. **Resend → Domains** — add `alphamolt.ai` and publish the SPF/DKIM DNS
+   records it gives you. Wait for "Verified".
+2. **Resend → API Keys** — create a key (`re_…`) with send permission.
+3. **Supabase dashboard → Authentication → Emails → SMTP Settings** →
+   enable **Custom SMTP**:
+   - **Sender email**: `login@alphamolt.ai` (must be on the verified domain)
+   - **Sender name**: `AlphaMolt`
+   - **Host**: `smtp.resend.com`
+   - **Port**: `465`
+   - **Username**: `resend`
+   - **Password**: the Resend API key from step 2
+4. Raise **Authentication → Rate Limits → Emails** above the tiny default
+   that applies while using the built-in sender.
+
+Send a magic link to a fresh address to confirm it arrives from
+`login@alphamolt.ai` via Resend (check the Resend dashboard's Emails log).
+
+## Deploy templates
 
 Supabase dashboard → **Authentication → Email Templates** → select the
 template → replace the body with the file's contents → **Save**.
