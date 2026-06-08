@@ -588,6 +588,10 @@ class SupabaseDB:
                     "role": m.get("role"),
                     "remit": m.get("remit"),
                     "config": m.get("config"),
+                    # Per-instance Run/Stop switch (migration 045). A stopped
+                    # team agent stays on the roster but is skipped by the
+                    # heartbeat. Default True for legacy rows / new members.
+                    "enabled": m.get("enabled", True),
                     # Per-membership heartbeat clock (migration 029) — each
                     # member rebalances on its own cadence in every
                     # portfolio it joins.

@@ -20,13 +20,6 @@ export type ActionResult = { ok: true } | { ok: false; error: string };
 const MAX_NAME = 80;
 const MAX_MANDATE = 2000;
 
-// The team rostered onto a brand-new portfolio (onboarding brief §3 — agents
-// pre-rostered, not required). A buyer picks names from the universe; a
-// reviewer sells on a broken thesis. Both are house agents (available_for_hire
-// by default); a missing one just leaves that seat open for the owner to fill.
-const DEFAULT_BUYER_HANDLE = "buyer-gemini";
-const DEFAULT_REVIEWER_HANDLE = "portfolio-reviewer";
-
 interface OwnedPortfolio {
   id: string;
   slug: string;
@@ -154,46 +147,12 @@ export async function createPortfolio(input: {
       .eq("id", created.id);
     if (cfgErr) console.error("createPortfolio: set universe failed:", cfgErr);
 
-    await rosterDefaultTeam(created.id);
+    // No default roster: the team builder (brief v2) starts empty so the owner
+    // drags their first agent in. Each save deploys that agent live.
   }
 
   revalidate(slug);
   return { ok: true };
-}
-
-/**
- * Pre-roster a buyer + reviewer onto a new portfolio so the swarm can act on
- * the next heartbeat without the owner hand-picking agents first (brief §3).
- * Best-effort: a house agent that's missing / not for hire simply leaves its
- * seat empty rather than failing the whole onboarding.
- */
-async function rosterDefaultTeam(portfolioId: string): Promise<void> {
-  const seats: { handle: string; role: "buyer" | "reviewer" }[] = [
-    { handle: DEFAULT_BUYER_HANDLE, role: "buyer" },
-    { handle: DEFAULT_REVIEWER_HANDLE, role: "reviewer" },
-  ];
-  const rows: Record<string, unknown>[] = [];
-  for (const seat of seats) {
-    const agent = await resolveAgent(seat.handle);
-    if (agent && agent.available_for_hire) {
-      rows.push({
-        portfolio_id: portfolioId,
-        agent_id: agent.id,
-        role: seat.role,
-      });
-    } else {
-      console.warn(
-        `rosterDefaultTeam: house agent '${seat.handle}' unavailable; ` +
-          `leaving the ${seat.role} seat open.`,
-      );
-    }
-  }
-  if (rows.length === 0) return;
-  const supabase = getSupabase();
-  const { error } = await supabase
-    .from("portfolio_agents")
-    .upsert(rows, { onConflict: "portfolio_id,agent_id" });
-  if (error) console.error("rosterDefaultTeam upsert failed:", error);
 }
 
 export async function updatePortfolioDetails(input: {
@@ -522,6 +481,140 @@ export async function setDraftConfig(input: {
   if (error) {
     console.error("setDraftConfig failed:", error);
     return { ok: false, error: "Could not update draft settings. Try again." };
+  }
+  revalidate(portfolio.slug);
+  return { ok: true };
+}
+
+// ---- Team builder (migration 045) ----------------------------------------
+//
+// The new portfolio page is a team builder: drag a library agent in, tune its
+// 1-2 params, and Save — which deploys it (inserts the portfolio_agents row).
+// There is no batch deploy. `enabled` is the per-agent Run/Stop switch; edits
+// to params after save are live (a plain update, no re-deploy).
+
+/** A library action maps to the heartbeat role the coordination engine reads. */
+const ROLE_FOR_ACTION: Record<string, "buyer" | "reviewer" | "manager"> = {
+  buy: "buyer",
+  sell: "reviewer",
+  manage: "manager",
+};
+
+interface ResolvedLibraryAgent {
+  id: string;
+  available_for_hire: boolean;
+  action: string | null;
+}
+
+async function resolveLibraryAgent(
+  handle: string,
+): Promise<ResolvedLibraryAgent | null> {
+  const supabase = getSupabase();
+  const { data } = await supabase
+    .from("agents")
+    .select("id, available_for_hire, action")
+    .eq("handle", handle.trim().toLowerCase())
+    .maybeSingle();
+  return (data as ResolvedLibraryAgent | null) ?? null;
+}
+
+/**
+ * Save (deploy) a library agent onto the team. Saving is deploying — the row
+ * is inserted live and the agent begins trading on the next heartbeat. Re-save
+ * updates the config in place (upsert). `params` are the tuned control values,
+ * stored flat in `config` so the heartbeat merges them into the strategy's
+ * params exactly like `agents.config`.
+ */
+export async function saveTeamAgent(input: {
+  portfolioId: string;
+  handle: string;
+  params: Record<string, number | string>;
+}): Promise<ActionResult> {
+  const { user } = await requireUser();
+  const portfolio = await resolveOwnedPortfolio(input.portfolioId, user.id);
+  if (!portfolio) return { ok: false, error: NOT_FOUND_ERROR };
+
+  const agent = await resolveLibraryAgent(input.handle);
+  if (!agent) return { ok: false, error: "That agent no longer exists." };
+  if (!agent.action) {
+    return { ok: false, error: "That agent isn't a team-builder agent." };
+  }
+  if (!agent.available_for_hire) {
+    return {
+      ok: false,
+      error: "That agent hasn't opted in to being added to portfolios.",
+    };
+  }
+
+  const supabase = getSupabase();
+  const { error } = await supabase.from("portfolio_agents").upsert(
+    {
+      portfolio_id: input.portfolioId,
+      agent_id: agent.id,
+      role: ROLE_FOR_ACTION[agent.action] ?? null,
+      config: input.params ?? {},
+      enabled: true,
+    },
+    { onConflict: "portfolio_id,agent_id" },
+  );
+  if (error) {
+    console.error("saveTeamAgent failed:", error);
+    return { ok: false, error: "Could not save the agent. Try again." };
+  }
+
+  revalidate(portfolio.slug);
+  return { ok: true };
+}
+
+/** Live edit of a saved agent's params (no re-deploy — brief §4). */
+export async function updateTeamAgentParams(input: {
+  portfolioId: string;
+  handle: string;
+  params: Record<string, number | string>;
+}): Promise<ActionResult> {
+  const { user } = await requireUser();
+  const portfolio = await resolveOwnedPortfolio(input.portfolioId, user.id);
+  if (!portfolio) return { ok: false, error: NOT_FOUND_ERROR };
+
+  const agent = await resolveAgent(input.handle);
+  if (!agent) return { ok: false, error: "That agent no longer exists." };
+
+  const supabase = getSupabase();
+  const { error } = await supabase
+    .from("portfolio_agents")
+    .update({ config: input.params ?? {} })
+    .eq("portfolio_id", input.portfolioId)
+    .eq("agent_id", agent.id);
+  if (error) {
+    console.error("updateTeamAgentParams failed:", error);
+    return { ok: false, error: "Could not save changes. Try again." };
+  }
+  revalidate(portfolio.slug);
+  return { ok: true };
+}
+
+/** Run/Stop a single team agent (it stays on the roster either way). */
+export async function setTeamAgentEnabled(input: {
+  portfolioId: string;
+  handle: string;
+  enabled: boolean;
+}): Promise<ActionResult> {
+  const { user } = await requireUser();
+  const portfolio = await resolveOwnedPortfolio(input.portfolioId, user.id);
+  if (!portfolio) return { ok: false, error: NOT_FOUND_ERROR };
+
+  const agent = await resolveAgent(input.handle);
+  if (!agent) return { ok: false, error: "That agent no longer exists." };
+
+  const supabase = getSupabase();
+  const { error } = await supabase
+    .from("portfolio_agents")
+    .update({ enabled: input.enabled })
+    .eq("portfolio_id", input.portfolioId)
+    .eq("agent_id", agent.id);
+  if (error) {
+    console.error("setTeamAgentEnabled failed:", error);
+    return { ok: false, error: "Could not update the agent. Try again." };
   }
   revalidate(portfolio.slug);
   return { ok: true };
