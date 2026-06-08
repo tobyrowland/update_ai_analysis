@@ -18,7 +18,9 @@ import {
   type ParamSpec,
   type TeamAgent,
   defaultParams,
+  effectiveMandate,
   fillSentence,
+  hasCustomMandate,
   readiness,
   TRIGGER_LABELS,
 } from "@/lib/agents/types";
@@ -68,6 +70,30 @@ interface PendingItem {
   key: string;
   agent: LibraryAgent;
   params: Record<string, number | string>;
+  /** The editable brief, pre-filled from the agent's default mandate. */
+  mandate: string;
+}
+
+/** Action-aware label for an agent's brief field (brief = its mandate). */
+function briefLabel(action: AgentAction): string {
+  if (action === "buy") return "What to buy";
+  if (action === "sell") return "When to sell";
+  return "Brief";
+}
+
+/**
+ * The value to persist for a brief: null when it's empty or unchanged from the
+ * agent's default (so an untouched brief keeps tracking the evolving default),
+ * otherwise the trimmed text.
+ */
+function mandateOverride(
+  agent: Pick<LibraryAgent, "defaultMandate">,
+  text: string,
+): string | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  if (trimmed === (agent.defaultMandate ?? "").trim()) return null;
+  return trimmed;
 }
 
 // ----- Root ----------------------------------------------------------------
@@ -119,6 +145,7 @@ export default function TeamBuilder({
         key: `${agent.handle}-${seq.current}`,
         agent,
         params: defaultParams(agent.paramSchema),
+        mandate: agent.defaultMandate ?? "",
       },
     ]);
   }
@@ -128,6 +155,10 @@ export default function TeamBuilder({
     params: Record<string, number | string>,
   ) {
     setPending((p) => p.map((x) => (x.key === key ? { ...x, params } : x)));
+  }
+
+  function setPendingMandate(key: string, mandate: string) {
+    setPending((p) => p.map((x) => (x.key === key ? { ...x, mandate } : x)));
   }
 
   function discard(key: string) {
@@ -143,6 +174,8 @@ export default function TeamBuilder({
         portfolioId,
         handle: item.agent.handle,
         params: item.params,
+        // null when untouched from the default, so it keeps tracking it.
+        mandate: mandateOverride(item.agent, item.mandate),
       });
       if (!res.ok) {
         setError(res.error ?? "Could not save the agent.");
@@ -184,6 +217,7 @@ export default function TeamBuilder({
           if (agent) addAgent(agent);
         }}
         onPendingParams={setPendingParams}
+        onPendingMandate={setPendingMandate}
         onSavePending={savePending}
         onDiscard={discard}
         onToggleEnabled={(handle, enabled) =>
@@ -192,8 +226,10 @@ export default function TeamBuilder({
         onRemove={(handle) =>
           run(() => removeAgentFromPortfolio({ portfolioId, handle }))
         }
-        onSaveEdit={(handle, params) =>
-          run(() => updateTeamAgentParams({ portfolioId, handle, params }))
+        onSaveEdit={(handle, params, mandate) =>
+          run(() =>
+            updateTeamAgentParams({ portfolioId, handle, params, mandate }),
+          )
         }
         complete={read.buy && read.sell && read.manage}
       />
@@ -251,6 +287,7 @@ function TeamHopper({
   complete,
   onDropAgent,
   onPendingParams,
+  onPendingMandate,
   onSavePending,
   onDiscard,
   onToggleEnabled,
@@ -264,11 +301,16 @@ function TeamHopper({
   complete: boolean;
   onDropAgent: (handle: string) => void;
   onPendingParams: (key: string, params: Record<string, number | string>) => void;
+  onPendingMandate: (key: string, mandate: string) => void;
   onSavePending: (item: PendingItem) => void;
   onDiscard: (key: string) => void;
   onToggleEnabled: (handle: string, enabled: boolean) => void;
   onRemove: (handle: string) => void;
-  onSaveEdit: (handle: string, params: Record<string, number | string>) => void;
+  onSaveEdit: (
+    handle: string,
+    params: Record<string, number | string>,
+    mandate: string | null,
+  ) => void;
 }) {
   const [dragOver, setDragOver] = useState(false);
 
@@ -340,6 +382,7 @@ function TeamHopper({
                 item={item}
                 busy={busy}
                 onParams={(params) => onPendingParams(item.key, params)}
+                onMandate={(mandate) => onPendingMandate(item.key, mandate)}
                 onSave={() => onSavePending(item)}
                 onDiscard={() => onDiscard(item.key)}
               />
@@ -364,11 +407,18 @@ function TeamCard({
   busy: boolean;
   onToggleEnabled: (handle: string, enabled: boolean) => void;
   onRemove: (handle: string) => void;
-  onSaveEdit: (handle: string, params: Record<string, number | string>) => void;
+  onSaveEdit: (
+    handle: string,
+    params: Record<string, number | string>,
+    mandate: string | null,
+  ) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(agent.params);
+  const [draftMandate, setDraftMandate] = useState(effectiveMandate(agent));
   const meta = ACTION_META[agent.action];
+  const hasBrief = agent.defaultMandate !== null;
+  const configurable = agent.paramSchema.length > 0 || hasBrief;
 
   return (
     <li className="px-4 py-4">
@@ -390,6 +440,14 @@ function TeamCard({
             <span className="text-[11px] font-mono text-text-muted">
               {agent.enabled ? "running" : "stopped"}
             </span>
+            {hasCustomMandate(agent) && (
+              <span
+                className="text-[10px] font-mono text-[var(--color-cyan)]"
+                title="Running a custom brief you set"
+              >
+                ✎ custom brief
+              </span>
+            )}
           </div>
           {agent.poweredBy && (
             <p className="text-[11px] font-mono text-text-muted mt-0.5">
@@ -417,12 +475,23 @@ function TeamCard({
               <p className="text-sm text-text-dim mt-3 italic">
                 {fillSentence(agent, draft)}
               </p>
+              {hasBrief && (
+                <BriefField
+                  action={agent.action}
+                  value={draftMandate}
+                  onChange={setDraftMandate}
+                />
+              )}
               <div className="mt-3 flex gap-2">
                 <button
                   type="button"
                   disabled={busy}
                   onClick={() => {
-                    onSaveEdit(agent.handle, draft);
+                    onSaveEdit(
+                      agent.handle,
+                      draft,
+                      mandateOverride(agent, draftMandate),
+                    );
                     setEditing(false);
                   }}
                   className="rounded-lg bg-[var(--color-green)]/15 border border-[var(--color-green)]/40 px-3 py-1.5 text-xs font-mono text-[var(--color-green)] hover:bg-[var(--color-green)]/25 transition-colors disabled:opacity-50"
@@ -433,6 +502,7 @@ function TeamCard({
                   type="button"
                   onClick={() => {
                     setDraft(agent.params);
+                    setDraftMandate(effectiveMandate(agent));
                     setEditing(false);
                   }}
                   className="rounded-lg border border-white/10 px-3 py-1.5 text-xs font-mono text-text-muted hover:text-text transition-colors"
@@ -456,11 +526,12 @@ function TeamCard({
             >
               {agent.enabled ? "Stop" : "Run"}
             </button>
-            {agent.paramSchema.length > 0 && (
+            {configurable && (
               <button
                 type="button"
                 onClick={() => {
                   setDraft(agent.params);
+                  setDraftMandate(effectiveMandate(agent));
                   setEditing(true);
                 }}
                 title="Configure"
@@ -493,12 +564,14 @@ function PendingCard({
   item,
   busy,
   onParams,
+  onMandate,
   onSave,
   onDiscard,
 }: {
   item: PendingItem;
   busy: boolean;
   onParams: (params: Record<string, number | string>) => void;
+  onMandate: (mandate: string) => void;
   onSave: () => void;
   onDiscard: () => void;
 }) {
@@ -533,6 +606,16 @@ function PendingCard({
       <p className="text-sm text-text-dim mt-3 italic leading-relaxed">
         {fillSentence(agent, params)}
       </p>
+
+      {/* Per-agent brief, pre-filled with the agent's default (migration 046).
+          Only thinking agents (default mandate set) get one. */}
+      {agent.defaultMandate !== null && (
+        <BriefField
+          action={agent.action}
+          value={item.mandate}
+          onChange={onMandate}
+        />
+      )}
       {agent.action === "sell" && agent.triggers.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {agent.triggers.map((t) => (
@@ -628,6 +711,37 @@ function ParamControls({
           )}
         </div>
       ))}
+    </div>
+  );
+}
+
+// ----- Brief (per-agent mandate) -------------------------------------------
+
+function BriefField({
+  action,
+  value,
+  onChange,
+}: {
+  action: AgentAction;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="mt-3">
+      <label className="text-xs font-mono text-text-muted block mb-1">
+        {briefLabel(action)}{" "}
+        <span className="text-text-muted/70">— this agent&apos;s brief</span>
+      </label>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        rows={3}
+        className="w-full rounded-lg border border-white/15 bg-black/30 px-3 py-2 text-sm text-text-dim leading-relaxed focus:border-[var(--color-cyan)] outline-none resize-y"
+      />
+      <p className="text-[11px] font-mono text-text-muted mt-1">
+        Pre-filled with the agent&apos;s default. Tune it, or leave it to track
+        the default.
+      </p>
     </div>
   );
 }
