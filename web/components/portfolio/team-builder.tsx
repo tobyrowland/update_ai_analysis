@@ -1,19 +1,21 @@
 "use client";
 
 /**
- * Team builder (portfolio & agents brief v2, migration 045).
+ * Team builder (portfolio & agents brief v2; "Your Team" unit brief).
  *
  * The portfolio owner's home base: drag agents from a library into one team
- * hopper; saving an agent *deploys* it (no batch deploy). A slim readiness
- * strip reports whether the team can buy, sell and manage. Edits after save
- * are live. This component owns the whole "build + manage the team" surface;
- * holdings & trades render below it on the page.
+ * hopper; saving an agent *deploys* it (no batch deploy). The team itself is a
+ * single unit — coverage in the header, agents in the body, the gap verdict in
+ * the footer. Agents are *scheduled runners*, not always-on processes: each
+ * card shows when it next runs and offers a manual "Run now". Edits after save
+ * are live. Holdings & trades render below this component on the page.
  */
 
-import { useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   type AgentAction,
+  type Coverage,
   type LibraryAgent,
   type ParamSpec,
   type TeamAgent,
@@ -21,15 +23,15 @@ import {
   effectiveMandate,
   fillSentence,
   hasCustomMandate,
-  readiness,
+  teamCoverage,
   TRIGGER_LABELS,
 } from "@/lib/agents/types";
 import {
   saveTeamAgent,
   updateTeamAgentParams,
-  setTeamAgentEnabled,
   removeAgentFromPortfolio,
 } from "@/lib/portfolios-mutations";
+import { runAgent } from "@/lib/run-agent-mutations";
 
 // ----- Action vocabulary ---------------------------------------------------
 
@@ -65,6 +67,10 @@ const TABS: { key: "all" | AgentAction; label: string }[] = [
 ];
 
 const DRAG_MIME = "application/x-alphamolt-agent";
+
+// Mirrors the run-now server cooldown (run-agent-mutations.ts) — the button
+// stays locked while the dispatched workflow is likely still running.
+const RUN_COOLDOWN_MS = 300_000;
 
 interface PendingItem {
   key: string;
@@ -114,11 +120,8 @@ export default function TeamBuilder({
   const [addOpen, setAddOpen] = useState(team.length === 0);
   const seq = useRef(0);
 
-  const read = useMemo(() => readiness(team), [team]);
-  const onTeam = useMemo(
-    () => new Set(team.map((a) => a.handle)),
-    [team],
-  );
+  const coverage = useMemo(() => teamCoverage(team), [team]);
+  const onTeam = useMemo(() => new Set(team.map((a) => a.handle)), [team]);
   const pendingHandles = useMemo(
     () => new Set(pending.map((p) => p.agent.handle)),
     [pending],
@@ -134,7 +137,7 @@ export default function TeamBuilder({
   }
 
   // Drag/click a library agent in → an unsaved card, config open. Unsaved does
-  // nothing (not on the team, not counted by readiness) until saved.
+  // nothing (not on the team, not counted by coverage) until saved.
   function addAgent(agent: LibraryAgent) {
     if (onTeam.has(agent.handle) || pendingHandles.has(agent.handle)) return;
     setError(null);
@@ -205,13 +208,14 @@ export default function TeamBuilder({
         </div>
       )}
 
-      {/* YOUR TEAM — saved (live) agents + any unsaved drag-ins. Single drop
-          target for the library. */}
-      <TeamHopper
+      {/* YOUR TEAM — one unit: coverage in the header, agents in the body, the
+          gap verdict in the footer. Also the single drop target. */}
+      <YourTeamUnit
         team={team}
         pending={pending}
         isEmpty={isEmpty}
         busy={isBusy}
+        coverage={coverage}
         onDropAgent={(handle) => {
           const agent = library.find((a) => a.handle === handle);
           if (agent) addAgent(agent);
@@ -220,9 +224,6 @@ export default function TeamBuilder({
         onPendingMandate={setPendingMandate}
         onSavePending={savePending}
         onDiscard={discard}
-        onToggleEnabled={(handle, enabled) =>
-          run(() => setTeamAgentEnabled({ portfolioId, handle, enabled }))
-        }
         onRemove={(handle) =>
           run(() => removeAgentFromPortfolio({ portfolioId, handle }))
         }
@@ -231,7 +232,6 @@ export default function TeamBuilder({
             updateTeamAgentParams({ portfolioId, handle, params, mandate }),
           )
         }
-        complete={read.buy && read.sell && read.manage}
       />
 
       {error && (
@@ -239,9 +239,6 @@ export default function TeamBuilder({
           {error}
         </p>
       )}
-
-      {/* READINESS — reports absence, never the roster. */}
-      <ReadinessStrip read={read} />
 
       {/* ADD AGENTS — collapsed bar that expands to the library. With an empty
           team the library is always shown (there's no roster to collapse, and
@@ -281,20 +278,19 @@ export default function TeamBuilder({
   );
 }
 
-// ----- Team hopper (drop target) -------------------------------------------
+// ----- The "Your Team" unit (coverage header + body + verdict footer) ------
 
-function TeamHopper({
+function YourTeamUnit({
   team,
   pending,
   isEmpty,
   busy,
-  complete,
+  coverage,
   onDropAgent,
   onPendingParams,
   onPendingMandate,
   onSavePending,
   onDiscard,
-  onToggleEnabled,
   onRemove,
   onSaveEdit,
 }: {
@@ -302,13 +298,12 @@ function TeamHopper({
   pending: PendingItem[];
   isEmpty: boolean;
   busy: boolean;
-  complete: boolean;
+  coverage: Coverage;
   onDropAgent: (handle: string) => void;
   onPendingParams: (key: string, params: Record<string, number | string>) => void;
   onPendingMandate: (key: string, mandate: string) => void;
   onSavePending: (item: PendingItem) => void;
   onDiscard: (key: string) => void;
-  onToggleEnabled: (handle: string, enabled: boolean) => void;
   onRemove: (handle: string) => void;
   onSaveEdit: (
     handle: string,
@@ -317,19 +312,14 @@ function TeamHopper({
   ) => void;
 }) {
   const [dragOver, setDragOver] = useState(false);
+  // Footer verdict appears only once there's at least one saved agent.
+  const showFooter = team.length > 0;
 
   return (
     <section>
-      <div className="flex items-baseline justify-between mb-3">
-        <h2 className="text-[11px] font-mono font-bold uppercase tracking-[0.14em] text-[var(--color-green)]">
-          Your team
-        </h2>
-        {complete && (
-          <span className="text-[11px] font-mono text-[var(--color-green)]">
-            ✓ Every job covered
-          </span>
-        )}
-      </div>
+      <h2 className="text-[11px] font-mono font-bold uppercase tracking-[0.14em] text-[var(--color-green)] mb-3">
+        Your team
+      </h2>
 
       <div
         onDragOver={(e) => {
@@ -345,57 +335,189 @@ function TeamHopper({
           const handle = e.dataTransfer.getData(DRAG_MIME);
           if (handle) onDropAgent(handle);
         }}
-        className={`rounded-2xl border transition-colors ${
+        className={`rounded-2xl border overflow-hidden transition-colors ${
           dragOver
-            ? "border-[var(--color-green)]/60 bg-[var(--color-green)]/[0.05]"
-            : isEmpty
-              ? "border-dashed border-white/15 bg-white/[0.015]"
-              : "border-white/10 bg-white/[0.02]"
+            ? "border-[var(--color-green)]/60"
+            : "border-white/10"
         }`}
       >
-        {isEmpty ? (
-          <div className="px-6 py-12 text-center">
-            <p className="text-2xl mb-2" aria-hidden>
-              ⌑
-            </p>
-            <p className="text-base font-bold text-text">
-              Drag your first agent here
-            </p>
-            <p className="text-sm text-text-muted mt-1">
-              Buyers, sellers and managers all drop into this one place.
-            </p>
-            <p className="text-sm text-[var(--color-green)] mt-3 font-mono">
-              New here? Start with a buyer to open positions.
-            </p>
-          </div>
-        ) : (
-          <ul className="divide-y divide-white/[0.06]">
-            {team.map((a) => (
-              <TeamCard
-                key={a.handle}
-                agent={a}
-                busy={busy}
-                onToggleEnabled={onToggleEnabled}
-                onRemove={onRemove}
-                onSaveEdit={onSaveEdit}
-              />
-            ))}
-            {pending.map((item) => (
-              <PendingCard
-                key={item.key}
-                item={item}
-                busy={busy}
-                onParams={(params) => onPendingParams(item.key, params)}
-                onMandate={(mandate) => onPendingMandate(item.key, mandate)}
-                onSave={() => onSavePending(item)}
-                onDiscard={() => onDiscard(item.key)}
-              />
-            ))}
-          </ul>
-        )}
+        {/* HEADER — coverage chips, pinned to the top. */}
+        <div className="flex items-center justify-between gap-3 px-4 py-3 bg-white/[0.025] border-b border-white/[0.06]">
+          <span className="text-[11px] font-mono font-bold uppercase tracking-[0.14em] text-text-muted">
+            Coverage
+          </span>
+          <CoverageHeader coverage={coverage} />
+        </div>
+
+        {/* BODY */}
+        <div
+          className={dragOver ? "bg-[var(--color-green)]/[0.05]" : ""}
+        >
+          {isEmpty ? (
+            <div className="m-4 rounded-xl border border-dashed border-white/15 bg-white/[0.015] px-6 py-12 text-center">
+              <p className="text-2xl mb-2" aria-hidden>
+                ⌑
+              </p>
+              <p className="text-base font-bold text-text">
+                Drag your first agent here
+              </p>
+              <p className="text-sm text-text-muted mt-1">
+                Buyers, sellers and managers all drop into this one place.
+              </p>
+              <p className="text-sm text-[var(--color-green)] mt-3 font-mono">
+                New here? Start with a buyer to open positions.
+              </p>
+            </div>
+          ) : (
+            <>
+              <ul className="divide-y divide-white/[0.06]">
+                {team.map((a) => (
+                  <TeamCard
+                    key={a.handle}
+                    agent={a}
+                    busy={busy}
+                    onRemove={onRemove}
+                    onSaveEdit={onSaveEdit}
+                  />
+                ))}
+                {pending.map((item) => (
+                  <PendingCard
+                    key={item.key}
+                    item={item}
+                    busy={busy}
+                    onParams={(params) => onPendingParams(item.key, params)}
+                    onMandate={(mandate) => onPendingMandate(item.key, mandate)}
+                    onSave={() => onSavePending(item)}
+                    onDiscard={() => onDiscard(item.key)}
+                  />
+                ))}
+              </ul>
+              {/* Persistent shaded drop slot, so the affordance never vanishes. */}
+              <div className="m-4 rounded-xl border border-dashed border-white/15 bg-white/[0.015] px-4 py-4 text-center text-sm font-mono text-text-muted">
+                <span aria-hidden>⌑ </span>Drag more agents here
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* FOOTER — one-line verdict, only when there's an agent. */}
+        {showFooter && <VerdictFooter coverage={coverage} />}
       </div>
     </section>
   );
+}
+
+// ----- Coverage header chips -----------------------------------------------
+
+function CoverageHeader({ coverage }: { coverage: Coverage }) {
+  return (
+    <div className="flex items-center gap-3 sm:gap-4">
+      <CoverageChip label="Buy" covered={coverage.buy} action="buy" />
+      <CoverageChip label="Sell" covered={coverage.sell} action="sell" />
+      <CoverageChip label="Manage" covered={coverage.manage} action="manage" />
+    </div>
+  );
+}
+
+function CoverageChip({
+  label,
+  covered,
+  action,
+}: {
+  label: string;
+  covered: boolean;
+  action: AgentAction;
+}) {
+  const meta = ACTION_META[action];
+  return (
+    <span className="inline-flex items-center gap-1.5" title={covered ? `${label} covered` : `No ${label.toLowerCase()} agent yet`}>
+      <span
+        aria-hidden
+        className="grid place-items-center h-3.5 w-3.5 rounded-[3px] text-[9px] font-bold"
+        style={{
+          background: covered ? meta.color : "transparent",
+          border: `1px solid ${covered ? meta.color : "var(--color-text-muted)"}`,
+          color: "var(--color-bg)",
+        }}
+      >
+        {covered ? "✓" : ""}
+      </span>
+      <span
+        className="text-sm font-mono"
+        style={{ color: covered ? "var(--color-text)" : "var(--color-text-muted)" }}
+      >
+        {label}
+      </span>
+    </span>
+  );
+}
+
+// ----- Verdict footer ------------------------------------------------------
+
+function VerdictFooter({ coverage }: { coverage: Coverage }) {
+  if (coverage.complete) {
+    return (
+      <div className="px-4 py-3 border-t border-white/[0.06] text-[12px] font-mono text-[var(--color-green)]">
+        ✓ Every job covered — ready.
+      </div>
+    );
+  }
+  return (
+    <div className="px-4 py-3 border-t border-white/[0.06] text-[12px] font-mono">
+      <span className="text-[var(--color-orange)]">
+        Add: {coverage.gaps.join(", ")}.
+      </span>{" "}
+      {coverage.consequence && (
+        <span className="text-text-muted">{coverage.consequence}</span>
+      )}
+    </div>
+  );
+}
+
+// ----- Schedule formatting -------------------------------------------------
+
+function relShort(ms: number): string {
+  const m = Math.round(ms / 60_000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h`;
+  const d = Math.round(h / 24);
+  return `${d}d`;
+}
+
+/** "today 16:00" / "tomorrow 09:00" / "Jun 12 14:30" relative to `now`. */
+function clockLabel(ts: number, now: number): string {
+  const d = new Date(ts);
+  const time = d.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const a = new Date(now);
+  a.setHours(0, 0, 0, 0);
+  const b = new Date(ts);
+  b.setHours(0, 0, 0, 0);
+  const days = Math.round((b.getTime() - a.getTime()) / 86_400_000);
+  if (days === 0) return `today ${time}`;
+  if (days === 1) return `tomorrow ${time}`;
+  if (days === -1) return `yesterday ${time}`;
+  return `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })} ${time}`;
+}
+
+/**
+ * The resting schedule line for an agent. Agents fire on their own cadence
+ * (`heartbeat_interval_hours`) at the daily heartbeat; this shows the next due
+ * time derived from the last run, or "next cycle" before the first run.
+ */
+function scheduleText(agent: TeamAgent, now: number): string {
+  const intervalH = agent.heartbeatIntervalHours ?? 168;
+  const last = agent.lastRunAt ? new Date(agent.lastRunAt).getTime() : null;
+  if (last == null || Number.isNaN(last)) return "Next run · next cycle";
+  const next = last + intervalH * 3_600_000;
+  const ago = relShort(now - last);
+  if (next <= now) return `Last run ${ago} ago · due next cycle`;
+  return `Last run ${ago} ago · next run ${clockLabel(next, now)} (in ${relShort(next - now)})`;
 }
 
 // ----- Saved (live) team card ----------------------------------------------
@@ -403,13 +525,11 @@ function TeamHopper({
 function TeamCard({
   agent,
   busy,
-  onToggleEnabled,
   onRemove,
   onSaveEdit,
 }: {
   agent: TeamAgent;
   busy: boolean;
-  onToggleEnabled: (handle: string, enabled: boolean) => void;
   onRemove: (handle: string) => void;
   onSaveEdit: (
     handle: string,
@@ -420,30 +540,50 @@ function TeamCard({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(agent.params);
   const [draftMandate, setDraftMandate] = useState(effectiveMandate(agent));
+  const [now, setNow] = useState(() => Date.now());
+  const [cooldownEndsAt, setCooldownEndsAt] = useState<number | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [isDispatching, startRun] = useTransition();
   const meta = ACTION_META[agent.action];
   const hasBrief = agent.defaultMandate !== null;
   const configurable = agent.paramSchema.length > 0 || hasBrief;
 
+  // One ticking clock per card drives the live relative times + cooldown.
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const cooling = cooldownEndsAt ? Math.max(0, cooldownEndsAt - now) : 0;
+  // A run is "live" while the dispatch is in flight or within the cooldown
+  // window (the dispatched workflow is likely still executing).
+  const running = isDispatching || cooling > 0;
+
+  function runNow() {
+    setRunError(null);
+    startRun(async () => {
+      const res = await runAgent({ agentHandle: agent.handle });
+      if (!res.ok) {
+        setRunError(res.error ?? "Couldn't start the run.");
+        return;
+      }
+      setCooldownEndsAt(Date.now() + RUN_COOLDOWN_MS);
+    });
+  }
+
   return (
     <li className="px-4 py-4">
       <div className="flex items-start gap-3">
-        {/* Running / idle dot */}
+        {/* Action dot — static identity colour; pulses only during a run. */}
         <span
           aria-hidden
-          className={`mt-1.5 h-2 w-2 rounded-full shrink-0 ${
-            agent.enabled ? "animate-pulse" : ""
-          }`}
-          style={{
-            background: agent.enabled ? meta.color : "var(--color-text-muted)",
-          }}
+          className={`mt-1.5 h-2 w-2 rounded-full shrink-0 ${running ? "animate-pulse" : ""}`}
+          style={{ background: meta.color }}
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2 flex-wrap">
             <span className="font-bold text-text">{agent.displayName}</span>
             <ActionPill action={agent.action} />
-            <span className="text-[11px] font-mono text-text-muted">
-              {agent.enabled ? "running" : "stopped"}
-            </span>
             {hasCustomMandate(agent) && (
               <span
                 className="text-[10px] font-mono text-[var(--color-cyan)]"
@@ -518,17 +658,18 @@ function TeamCard({
           )}
         </div>
 
-        {/* Per-agent controls: Run/Stop · gear · remove (brief §5). */}
+        {/* Controls: Run now · gear · remove. No Run/Stop — agents are
+            scheduled runners, not always-on processes. */}
         {!editing && (
           <div className="flex items-center gap-1.5 shrink-0">
             <button
               type="button"
-              disabled={busy}
-              onClick={() => onToggleEnabled(agent.handle, !agent.enabled)}
-              title={agent.enabled ? "Stop this agent" : "Run this agent"}
-              className="rounded-lg border border-white/10 px-2.5 py-1 text-xs font-mono text-text-dim hover:text-text hover:bg-white/[0.04] transition-colors disabled:opacity-50"
+              disabled={running}
+              onClick={runNow}
+              title="Run this agent immediately"
+              className="rounded-lg border border-[var(--color-cyan)]/40 px-2.5 py-1 text-xs font-mono text-[var(--color-cyan)] hover:bg-[var(--color-cyan)]/10 transition-colors disabled:opacity-50"
             >
-              {agent.enabled ? "Stop" : "Run"}
+              ⟳ {running ? "Running…" : "Run now"}
             </button>
             {configurable && (
               <button
@@ -558,6 +699,27 @@ function TeamCard({
           </div>
         )}
       </div>
+
+      {/* Schedule line — the agent's resting state, or "Running now…". */}
+      {!editing && (
+        <div className="mt-3 pl-5 flex items-center gap-2">
+          {running && (
+            <span
+              aria-hidden
+              className="h-1.5 w-1.5 rounded-full animate-pulse"
+              style={{ background: meta.color }}
+            />
+          )}
+          <span className="text-[11px] font-mono text-text-muted">
+            {running ? "Running now…" : scheduleText(agent, now)}
+          </span>
+        </div>
+      )}
+      {runError && (
+        <p className="mt-2 pl-5 text-[11px] font-mono text-[var(--color-red)]">
+          {runError}
+        </p>
+      )}
     </li>
   );
 }
@@ -750,75 +912,6 @@ function BriefField({
   );
 }
 
-// ----- Readiness strip -----------------------------------------------------
-
-function ReadinessStrip({
-  read,
-}: {
-  read: ReturnType<typeof readiness>;
-}) {
-  return (
-    <section className="rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3">
-      <p className="text-[11px] font-mono font-bold uppercase tracking-[0.14em] text-text-muted mb-2">
-        Readiness
-      </p>
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <Coverage label="Buy" covered={read.buy} action="buy" />
-        <Coverage label="Sell" covered={read.sell} action="sell">
-          {read.triggers.length > 0 && (
-            <span className="text-[11px] font-mono text-text-muted">
-              ({read.triggers.map((t) => TRIGGER_LABELS[t] ?? t).join(" · ")})
-            </span>
-          )}
-        </Coverage>
-        <Coverage label="Manage" covered={read.manage} action="manage" />
-      </div>
-      <p
-        className={`mt-2 text-[11px] font-mono ${
-          read.buy && read.sell && read.manage
-            ? "text-[var(--color-green)]"
-            : "text-[var(--color-orange)]"
-        }`}
-      >
-        {read.verdict}
-      </p>
-    </section>
-  );
-}
-
-function Coverage({
-  label,
-  covered,
-  action,
-  children,
-}: {
-  label: string;
-  covered: boolean;
-  action: AgentAction;
-  children?: React.ReactNode;
-}) {
-  const meta = ACTION_META[action];
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <span
-        aria-hidden
-        className="h-2.5 w-2.5 rounded-sm"
-        style={{
-          background: covered ? meta.color : "transparent",
-          border: `1px solid ${covered ? meta.color : "var(--color-text-muted)"}`,
-        }}
-      />
-      <span
-        className="text-sm font-mono"
-        style={{ color: covered ? "var(--color-text)" : "var(--color-text-muted)" }}
-      >
-        {label}
-      </span>
-      {children}
-    </span>
-  );
-}
-
 // ----- Library shelf -------------------------------------------------------
 
 function Library({
@@ -926,7 +1019,6 @@ function LibraryCard({
   added: boolean;
   onAdd: () => void;
 }) {
-  const meta = ACTION_META[agent.action];
   return (
     <div
       draggable={!added}

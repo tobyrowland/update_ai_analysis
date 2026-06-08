@@ -89,9 +89,9 @@ export async function getTeamForPortfolio(
   const { data, error } = await supabase
     .from("portfolio_agents")
     .select(
-      "config, enabled, mandate, joined_at, agents!inner(" +
+      "config, enabled, mandate, last_heartbeat_at, joined_at, agents!inner(" +
         LIBRARY_COLUMNS +
-        ")",
+        ", heartbeat_interval_hours)",
     )
     .eq("portfolio_id", portfolioId)
     .not("agents.action", "is", null)
@@ -100,11 +100,13 @@ export async function getTeamForPortfolio(
     console.error("getTeamForPortfolio failed:", error);
     return [];
   }
+  type TeamRow = LibraryRow & { heartbeat_interval_hours: number | null };
   type Row = {
     config: Record<string, number | string> | null;
     enabled: boolean | null;
     mandate: string | null;
-    agents: LibraryRow | LibraryRow[] | null;
+    last_heartbeat_at: string | null;
+    agents: TeamRow | TeamRow[] | null;
   };
   const rows = (data as unknown as Row[] | null) ?? [];
   return rows
@@ -120,6 +122,8 @@ export async function getTeamForPortfolio(
         params: withDefaults(lib.paramSchema, r.config ?? {}),
         enabled: r.enabled ?? true,
         mandate: r.mandate ?? null,
+        lastRunAt: r.last_heartbeat_at ?? null,
+        heartbeatIntervalHours: a.heartbeat_interval_hours ?? null,
       };
     })
     .filter((t): t is TeamAgent => t !== null);
