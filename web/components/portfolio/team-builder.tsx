@@ -1,0 +1,893 @@
+"use client";
+
+/**
+ * Team builder (portfolio & agents brief v2, migration 045).
+ *
+ * The portfolio owner's home base: drag agents from a library into one team
+ * hopper; saving an agent *deploys* it (no batch deploy). A slim readiness
+ * strip reports whether the team can buy, sell and manage. Edits after save
+ * are live. This component owns the whole "build + manage the team" surface;
+ * holdings & trades render below it on the page.
+ */
+
+import { useMemo, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import {
+  type AgentAction,
+  type LibraryAgent,
+  type ParamSpec,
+  type TeamAgent,
+  defaultParams,
+  fillSentence,
+  readiness,
+  TRIGGER_LABELS,
+} from "@/lib/agents/types";
+import {
+  saveTeamAgent,
+  updateTeamAgentParams,
+  setTeamAgentEnabled,
+  removeAgentFromPortfolio,
+} from "@/lib/portfolios-mutations";
+
+// ----- Action vocabulary ---------------------------------------------------
+
+const ACTION_META: Record<
+  AgentAction,
+  { label: string; color: string; bg: string; border: string }
+> = {
+  buy: {
+    label: "BUY",
+    color: "var(--color-green)",
+    bg: "rgba(0,255,65,0.08)",
+    border: "rgba(0,255,65,0.35)",
+  },
+  sell: {
+    label: "SELL",
+    color: "var(--color-red)",
+    bg: "rgba(255,51,51,0.08)",
+    border: "rgba(255,51,51,0.35)",
+  },
+  manage: {
+    label: "MANAGE",
+    color: "var(--color-orange)",
+    bg: "rgba(255,153,0,0.08)",
+    border: "rgba(255,153,0,0.35)",
+  },
+};
+
+const TABS: { key: "all" | AgentAction; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "buy", label: "Buy" },
+  { key: "sell", label: "Sell" },
+  { key: "manage", label: "Manage" },
+];
+
+const DRAG_MIME = "application/x-alphamolt-agent";
+
+interface PendingItem {
+  key: string;
+  agent: LibraryAgent;
+  params: Record<string, number | string>;
+}
+
+// ----- Root ----------------------------------------------------------------
+
+export default function TeamBuilder({
+  portfolioId,
+  team,
+  library,
+}: {
+  portfolioId: string;
+  team: TeamAgent[];
+  library: LibraryAgent[];
+}) {
+  const router = useRouter();
+  const [isBusy, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<PendingItem[]>([]);
+  const [addOpen, setAddOpen] = useState(team.length === 0);
+  const seq = useRef(0);
+
+  const read = useMemo(() => readiness(team), [team]);
+  const onTeam = useMemo(
+    () => new Set(team.map((a) => a.handle)),
+    [team],
+  );
+  const pendingHandles = useMemo(
+    () => new Set(pending.map((p) => p.agent.handle)),
+    [pending],
+  );
+
+  function run(action: () => Promise<{ ok: boolean; error?: string }>) {
+    setError(null);
+    startTransition(async () => {
+      const res = await action();
+      if (!res.ok) setError(res.error ?? "Something went wrong.");
+      else router.refresh();
+    });
+  }
+
+  // Drag/click a library agent in → an unsaved card, config open. Unsaved does
+  // nothing (not on the team, not counted by readiness) until saved.
+  function addAgent(agent: LibraryAgent) {
+    if (onTeam.has(agent.handle) || pendingHandles.has(agent.handle)) return;
+    setError(null);
+    seq.current += 1;
+    setPending((p) => [
+      ...p,
+      {
+        key: `${agent.handle}-${seq.current}`,
+        agent,
+        params: defaultParams(agent.paramSchema),
+      },
+    ]);
+  }
+
+  function setPendingParams(
+    key: string,
+    params: Record<string, number | string>,
+  ) {
+    setPending((p) => p.map((x) => (x.key === key ? { ...x, params } : x)));
+  }
+
+  function discard(key: string) {
+    setPending((p) => p.filter((x) => x.key !== key));
+  }
+
+  // Save = deploy. On success the row exists server-side; drop the pending card
+  // and refresh so it returns as a settled, live team card.
+  function savePending(item: PendingItem) {
+    setError(null);
+    startTransition(async () => {
+      const res = await saveTeamAgent({
+        portfolioId,
+        handle: item.agent.handle,
+        params: item.params,
+      });
+      if (!res.ok) {
+        setError(res.error ?? "Could not save the agent.");
+        return;
+      }
+      setPending((p) => p.filter((x) => x.key !== item.key));
+      router.refresh();
+    });
+  }
+
+  const isEmpty = team.length === 0 && pending.length === 0;
+
+  return (
+    <div className="space-y-8">
+      {/* Empty / first-run welcome (brief §7). Honest: no team, no numbers. */}
+      {isEmpty && (
+        <div className="rounded-2xl border border-[var(--color-green)]/30 bg-[var(--color-green)]/[0.04] p-5">
+          <p className="text-sm font-bold text-[var(--color-green)] mb-1.5">
+            Welcome to your portfolio
+          </p>
+          <p className="text-sm text-text-dim leading-relaxed max-w-prose">
+            This is your home base. Build a team of AI agents below, deploy them
+            to trade your portfolio on paper, and they&apos;ll compete on the
+            public leaderboard by alpha vs SPY. Once they&apos;re live,
+            you&apos;ll watch their trades and standing right here.
+          </p>
+        </div>
+      )}
+
+      {/* YOUR TEAM — saved (live) agents + any unsaved drag-ins. Single drop
+          target for the library. */}
+      <TeamHopper
+        team={team}
+        pending={pending}
+        isEmpty={isEmpty}
+        busy={isBusy}
+        onDropAgent={(handle) => {
+          const agent = library.find((a) => a.handle === handle);
+          if (agent) addAgent(agent);
+        }}
+        onPendingParams={setPendingParams}
+        onSavePending={savePending}
+        onDiscard={discard}
+        onToggleEnabled={(handle, enabled) =>
+          run(() => setTeamAgentEnabled({ portfolioId, handle, enabled }))
+        }
+        onRemove={(handle) =>
+          run(() => removeAgentFromPortfolio({ portfolioId, handle }))
+        }
+        onSaveEdit={(handle, params) =>
+          run(() => updateTeamAgentParams({ portfolioId, handle, params }))
+        }
+        complete={read.buy && read.sell && read.manage}
+      />
+
+      {error && (
+        <p className="text-sm text-[var(--color-red)] font-mono" role="alert">
+          {error}
+        </p>
+      )}
+
+      {/* READINESS — reports absence, never the roster. */}
+      <ReadinessStrip read={read} />
+
+      {/* ADD AGENTS — collapsed bar that expands to the library. Open by
+          default while the team is empty. */}
+      <div>
+        {team.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setAddOpen((o) => !o)}
+            className="w-full flex items-center justify-between rounded-2xl border border-dashed border-white/15 bg-white/[0.02] px-4 py-3 text-left hover:bg-white/[0.04] transition-colors"
+          >
+            <span className="font-mono text-sm text-text-dim">
+              <span className="text-[var(--color-green)]">+</span> Add or change
+              agents
+            </span>
+            <span className="font-mono text-xs text-text-muted">
+              {addOpen ? "Close" : "Open"}
+            </span>
+          </button>
+        )}
+        {addOpen && (
+          <div className={team.length > 0 ? "mt-5" : ""}>
+            <Library
+              library={library}
+              onTeam={onTeam}
+              pendingHandles={pendingHandles}
+              onAdd={addAgent}
+              firstRun={team.length === 0}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ----- Team hopper (drop target) -------------------------------------------
+
+function TeamHopper({
+  team,
+  pending,
+  isEmpty,
+  busy,
+  complete,
+  onDropAgent,
+  onPendingParams,
+  onSavePending,
+  onDiscard,
+  onToggleEnabled,
+  onRemove,
+  onSaveEdit,
+}: {
+  team: TeamAgent[];
+  pending: PendingItem[];
+  isEmpty: boolean;
+  busy: boolean;
+  complete: boolean;
+  onDropAgent: (handle: string) => void;
+  onPendingParams: (key: string, params: Record<string, number | string>) => void;
+  onSavePending: (item: PendingItem) => void;
+  onDiscard: (key: string) => void;
+  onToggleEnabled: (handle: string, enabled: boolean) => void;
+  onRemove: (handle: string) => void;
+  onSaveEdit: (handle: string, params: Record<string, number | string>) => void;
+}) {
+  const [dragOver, setDragOver] = useState(false);
+
+  return (
+    <section>
+      <div className="flex items-baseline justify-between mb-3">
+        <h2 className="text-[11px] font-mono font-bold uppercase tracking-[0.14em] text-[var(--color-green)]">
+          Your team
+        </h2>
+        {complete && (
+          <span className="text-[11px] font-mono text-[var(--color-green)]">
+            ✓ Every job covered
+          </span>
+        )}
+      </div>
+
+      <div
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes(DRAG_MIME)) {
+            e.preventDefault();
+            setDragOver(true);
+          }
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          const handle = e.dataTransfer.getData(DRAG_MIME);
+          if (handle) onDropAgent(handle);
+        }}
+        className={`rounded-2xl border transition-colors ${
+          dragOver
+            ? "border-[var(--color-green)]/60 bg-[var(--color-green)]/[0.05]"
+            : isEmpty
+              ? "border-dashed border-white/15 bg-white/[0.015]"
+              : "border-white/10 bg-white/[0.02]"
+        }`}
+      >
+        {isEmpty ? (
+          <div className="px-6 py-12 text-center">
+            <p className="text-2xl mb-2" aria-hidden>
+              ⌑
+            </p>
+            <p className="text-base font-bold text-text">
+              Drag your first agent here
+            </p>
+            <p className="text-sm text-text-muted mt-1">
+              Buyers, sellers and managers all drop into this one place.
+            </p>
+            <p className="text-sm text-[var(--color-green)] mt-3 font-mono">
+              New here? Start with a buyer to open positions.
+            </p>
+          </div>
+        ) : (
+          <ul className="divide-y divide-white/[0.06]">
+            {team.map((a) => (
+              <TeamCard
+                key={a.handle}
+                agent={a}
+                busy={busy}
+                onToggleEnabled={onToggleEnabled}
+                onRemove={onRemove}
+                onSaveEdit={onSaveEdit}
+              />
+            ))}
+            {pending.map((item) => (
+              <PendingCard
+                key={item.key}
+                item={item}
+                busy={busy}
+                onParams={(params) => onPendingParams(item.key, params)}
+                onSave={() => onSavePending(item)}
+                onDiscard={() => onDiscard(item.key)}
+              />
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
+  );
+}
+
+// ----- Saved (live) team card ----------------------------------------------
+
+function TeamCard({
+  agent,
+  busy,
+  onToggleEnabled,
+  onRemove,
+  onSaveEdit,
+}: {
+  agent: TeamAgent;
+  busy: boolean;
+  onToggleEnabled: (handle: string, enabled: boolean) => void;
+  onRemove: (handle: string) => void;
+  onSaveEdit: (handle: string, params: Record<string, number | string>) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(agent.params);
+  const meta = ACTION_META[agent.action];
+
+  return (
+    <li className="px-4 py-4">
+      <div className="flex items-start gap-3">
+        {/* Running / idle dot */}
+        <span
+          aria-hidden
+          className={`mt-1.5 h-2 w-2 rounded-full shrink-0 ${
+            agent.enabled ? "animate-pulse" : ""
+          }`}
+          style={{
+            background: agent.enabled ? meta.color : "var(--color-text-muted)",
+          }}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2 flex-wrap">
+            <span className="font-bold text-text">{agent.displayName}</span>
+            <ActionPill action={agent.action} />
+            <span className="text-[11px] font-mono text-text-muted">
+              {agent.enabled ? "running" : "stopped"}
+            </span>
+          </div>
+          {agent.poweredBy && (
+            <p className="text-[11px] font-mono text-text-muted mt-0.5">
+              powered by {agent.poweredBy}
+            </p>
+          )}
+          <p className="text-sm text-text-dim mt-1.5 leading-relaxed">
+            {fillSentence(agent, agent.params)}
+          </p>
+          {agent.action === "sell" && agent.triggers.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {agent.triggers.map((t) => (
+                <TriggerChip key={t} trigger={t} />
+              ))}
+            </div>
+          )}
+
+          {editing && (
+            <div className="mt-3 rounded-xl border border-white/10 bg-black/20 p-3">
+              <ParamControls
+                schema={agent.paramSchema}
+                values={draft}
+                onChange={setDraft}
+              />
+              <p className="text-sm text-text-dim mt-3 italic">
+                {fillSentence(agent, draft)}
+              </p>
+              <div className="mt-3 flex gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    onSaveEdit(agent.handle, draft);
+                    setEditing(false);
+                  }}
+                  className="rounded-lg bg-[var(--color-green)]/15 border border-[var(--color-green)]/40 px-3 py-1.5 text-xs font-mono text-[var(--color-green)] hover:bg-[var(--color-green)]/25 transition-colors disabled:opacity-50"
+                >
+                  Save changes
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDraft(agent.params);
+                    setEditing(false);
+                  }}
+                  className="rounded-lg border border-white/10 px-3 py-1.5 text-xs font-mono text-text-muted hover:text-text transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Per-agent controls: Run/Stop · gear · remove (brief §5). */}
+        {!editing && (
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => onToggleEnabled(agent.handle, !agent.enabled)}
+              title={agent.enabled ? "Stop this agent" : "Run this agent"}
+              className="rounded-lg border border-white/10 px-2.5 py-1 text-xs font-mono text-text-dim hover:text-text hover:bg-white/[0.04] transition-colors disabled:opacity-50"
+            >
+              {agent.enabled ? "Stop" : "Run"}
+            </button>
+            {agent.paramSchema.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setDraft(agent.params);
+                  setEditing(true);
+                }}
+                title="Configure"
+                aria-label="Configure"
+                className="rounded-lg border border-white/10 px-2.5 py-1 text-xs font-mono text-text-dim hover:text-text hover:bg-white/[0.04] transition-colors"
+              >
+                ⚙
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => onRemove(agent.handle)}
+              title="Remove from team"
+              aria-label="Remove from team"
+              className="rounded-lg border border-white/10 px-2.5 py-1 text-xs font-mono text-text-muted hover:text-[var(--color-red)] hover:border-[var(--color-red)]/40 transition-colors disabled:opacity-50"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+      </div>
+    </li>
+  );
+}
+
+// ----- Unsaved drag-in card ------------------------------------------------
+
+function PendingCard({
+  item,
+  busy,
+  onParams,
+  onSave,
+  onDiscard,
+}: {
+  item: PendingItem;
+  busy: boolean;
+  onParams: (params: Record<string, number | string>) => void;
+  onSave: () => void;
+  onDiscard: () => void;
+}) {
+  const { agent, params } = item;
+  return (
+    <li
+      className="px-4 py-4 border-l-2"
+      style={{ borderLeftColor: "var(--color-orange)", background: "rgba(255,153,0,0.03)" }}
+    >
+      <div className="flex items-baseline gap-2 flex-wrap">
+        <span className="font-bold text-text">{agent.displayName}</span>
+        <ActionPill action={agent.action} />
+        <span className="text-[10px] font-mono uppercase tracking-[0.12em] text-[var(--color-orange)] border border-[var(--color-orange)]/40 rounded px-1.5 py-0.5">
+          Unsaved
+        </span>
+      </div>
+      {agent.poweredBy && (
+        <p className="text-[11px] font-mono text-text-muted mt-0.5">
+          powered by {agent.poweredBy}
+        </p>
+      )}
+
+      <div className="mt-3">
+        <ParamControls
+          schema={agent.paramSchema}
+          values={params}
+          onChange={onParams}
+        />
+      </div>
+
+      {/* Live plain-language sentence — rewrites as the user tunes. */}
+      <p className="text-sm text-text-dim mt-3 italic leading-relaxed">
+        {fillSentence(agent, params)}
+      </p>
+      {agent.action === "sell" && agent.triggers.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {agent.triggers.map((t) => (
+            <TriggerChip key={t} trigger={t} />
+          ))}
+        </div>
+      )}
+
+      <div className="mt-3 flex gap-2">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onSave}
+          className="rounded-lg bg-[var(--color-green)]/15 border border-[var(--color-green)]/45 px-4 py-1.5 text-xs font-mono font-bold text-[var(--color-green)] hover:bg-[var(--color-green)]/25 transition-colors disabled:opacity-50"
+        >
+          {busy ? "Saving…" : "Save → live"}
+        </button>
+        <button
+          type="button"
+          onClick={onDiscard}
+          className="rounded-lg border border-white/10 px-3 py-1.5 text-xs font-mono text-text-muted hover:text-text transition-colors"
+        >
+          Discard
+        </button>
+      </div>
+    </li>
+  );
+}
+
+// ----- Param controls ------------------------------------------------------
+
+function ParamControls({
+  schema,
+  values,
+  onChange,
+}: {
+  schema: ParamSpec[];
+  values: Record<string, number | string>;
+  onChange: (params: Record<string, number | string>) => void;
+}) {
+  if (schema.length === 0) {
+    return (
+      <p className="text-xs text-text-muted font-mono">
+        No settings — works out of the box.
+      </p>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      {schema.map((spec) => (
+        <div key={spec.key} className="flex flex-wrap items-center gap-3">
+          <label className="text-xs font-mono text-text-muted w-40 shrink-0">
+            {spec.label}
+          </label>
+          {spec.type === "select" ? (
+            <select
+              value={String(values[spec.key] ?? spec.default)}
+              onChange={(e) => {
+                const opt = spec.options?.find(
+                  (o) => String(o.value) === e.target.value,
+                );
+                onChange({
+                  ...values,
+                  [spec.key]: opt ? opt.value : e.target.value,
+                });
+              }}
+              className="rounded-lg border border-white/15 bg-black/30 px-2.5 py-1 text-sm font-mono text-text focus:border-[var(--color-cyan)] outline-none"
+            >
+              {(spec.options ?? []).map((o) => (
+                <option key={String(o.value)} value={String(o.value)}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <div className="flex items-center gap-2 flex-1 min-w-[180px]">
+              <input
+                type="range"
+                min={spec.min}
+                max={spec.max}
+                step={spec.step ?? 1}
+                value={Number(values[spec.key] ?? spec.default)}
+                onChange={(e) =>
+                  onChange({ ...values, [spec.key]: Number(e.target.value) })
+                }
+                className="flex-1 accent-[var(--color-green)]"
+              />
+              <span className="font-mono text-sm text-text tabular-nums w-16 text-right">
+                {values[spec.key] ?? spec.default}
+                {spec.unit ?? ""}
+              </span>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ----- Readiness strip -----------------------------------------------------
+
+function ReadinessStrip({
+  read,
+}: {
+  read: ReturnType<typeof readiness>;
+}) {
+  return (
+    <section className="rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3">
+      <p className="text-[11px] font-mono font-bold uppercase tracking-[0.14em] text-text-muted mb-2">
+        Readiness
+      </p>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <Coverage label="Buy" covered={read.buy} action="buy" />
+        <Coverage label="Sell" covered={read.sell} action="sell">
+          {read.triggers.length > 0 && (
+            <span className="text-[11px] font-mono text-text-muted">
+              ({read.triggers.map((t) => TRIGGER_LABELS[t] ?? t).join(" · ")})
+            </span>
+          )}
+        </Coverage>
+        <Coverage label="Manage" covered={read.manage} action="manage" />
+      </div>
+      <p
+        className={`mt-2 text-[11px] font-mono ${
+          read.buy && read.sell && read.manage
+            ? "text-[var(--color-green)]"
+            : "text-[var(--color-orange)]"
+        }`}
+      >
+        {read.verdict}
+      </p>
+    </section>
+  );
+}
+
+function Coverage({
+  label,
+  covered,
+  action,
+  children,
+}: {
+  label: string;
+  covered: boolean;
+  action: AgentAction;
+  children?: React.ReactNode;
+}) {
+  const meta = ACTION_META[action];
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span
+        aria-hidden
+        className="h-2.5 w-2.5 rounded-sm"
+        style={{
+          background: covered ? meta.color : "transparent",
+          border: `1px solid ${covered ? meta.color : "var(--color-text-muted)"}`,
+        }}
+      />
+      <span
+        className="text-sm font-mono"
+        style={{ color: covered ? "var(--color-text)" : "var(--color-text-muted)" }}
+      >
+        {label}
+      </span>
+      {children}
+    </span>
+  );
+}
+
+// ----- Library shelf -------------------------------------------------------
+
+function Library({
+  library,
+  onTeam,
+  pendingHandles,
+  onAdd,
+  firstRun,
+}: {
+  library: LibraryAgent[];
+  onTeam: Set<string>;
+  pendingHandles: Set<string>;
+  onAdd: (agent: LibraryAgent) => void;
+  firstRun: boolean;
+}) {
+  const [tab, setTab] = useState<"all" | AgentAction>(firstRun ? "buy" : "all");
+  const [query, setQuery] = useState("");
+
+  const counts = useMemo(() => {
+    const c = { all: library.length, buy: 0, sell: 0, manage: 0 };
+    for (const a of library) c[a.action] += 1;
+    return c;
+  }, [library]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return library.filter((a) => {
+      if (tab !== "all" && a.action !== tab) return false;
+      if (!q) return true;
+      return (
+        a.displayName.toLowerCase().includes(q) ||
+        (a.poweredBy ?? "").toLowerCase().includes(q) ||
+        (a.description ?? "").toLowerCase().includes(q)
+      );
+    });
+  }, [library, tab, query]);
+
+  return (
+    <div>
+      {firstRun && (
+        <h2 className="text-2xl font-bold tracking-[-0.02em] text-text mb-1">
+          Build your team
+        </h2>
+      )}
+      <div className="flex items-baseline justify-between mb-3">
+        <p className="text-[11px] font-mono font-bold uppercase tracking-[0.14em] text-[var(--color-green)]">
+          Agent library · {library.length}
+        </p>
+      </div>
+
+      <input
+        type="search"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="search agents…"
+        className="w-full rounded-xl border border-white/15 bg-white/[0.04] px-4 py-3 text-sm font-mono text-text placeholder:text-text-muted focus:border-[var(--color-cyan)] outline-none mb-3"
+      />
+
+      <div className="flex flex-wrap gap-2 mb-4">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => setTab(t.key)}
+            className={`rounded-full border px-3 py-1 text-xs font-mono transition-colors ${
+              tab === t.key
+                ? "border-[var(--color-green)]/50 bg-[var(--color-green)]/10 text-[var(--color-green)]"
+                : "border-white/15 text-text-muted hover:text-text"
+            }`}
+          >
+            {t.label}{" "}
+            <span className="text-text-muted">{counts[t.key]}</span>
+          </button>
+        ))}
+      </div>
+
+      {filtered.length === 0 ? (
+        <p className="text-sm text-text-muted font-mono py-6 text-center">
+          No matching agents.
+        </p>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {filtered.map((a) => (
+            <LibraryCard
+              key={a.handle}
+              agent={a}
+              added={onTeam.has(a.handle) || pendingHandles.has(a.handle)}
+              onAdd={() => onAdd(a)}
+            />
+          ))}
+          {/* Build-your-own promo — pinned, every tab (brief §9). */}
+          <PromoCard />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LibraryCard({
+  agent,
+  added,
+  onAdd,
+}: {
+  agent: LibraryAgent;
+  added: boolean;
+  onAdd: () => void;
+}) {
+  const meta = ACTION_META[agent.action];
+  return (
+    <div
+      draggable={!added}
+      onDragStart={(e) => {
+        e.dataTransfer.setData(DRAG_MIME, agent.handle);
+        e.dataTransfer.effectAllowed = "copy";
+      }}
+      onClick={() => !added && onAdd()}
+      role="button"
+      tabIndex={added ? -1 : 0}
+      onKeyDown={(e) => {
+        if (!added && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          onAdd();
+        }
+      }}
+      className={`rounded-2xl border p-4 transition-colors ${
+        added
+          ? "border-white/[0.06] bg-white/[0.01] opacity-60 cursor-default"
+          : "border-white/10 bg-white/[0.02] hover:bg-white/[0.04] cursor-grab active:cursor-grabbing"
+      }`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <ActionPill action={agent.action} />
+        <span className="text-text-muted text-xs font-mono" aria-hidden>
+          {added ? "✓ on team" : "⠿"}
+        </span>
+      </div>
+      <p className="font-bold text-text mt-2">{agent.displayName}</p>
+      {agent.poweredBy && (
+        <p className="text-[11px] font-mono text-text-muted mt-0.5">
+          powered by {agent.poweredBy}
+        </p>
+      )}
+      {agent.description && (
+        <p className="text-xs text-text-muted mt-2 leading-relaxed line-clamp-2">
+          {agent.description}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function PromoCard() {
+  return (
+    <a
+      href="/docs#build-an-agent"
+      className="rounded-2xl border border-[var(--color-cyan)]/30 bg-[var(--color-cyan)]/[0.04] p-4 hover:bg-[var(--color-cyan)]/[0.08] transition-colors block"
+    >
+      <span className="inline-block text-[10px] font-mono uppercase tracking-[0.12em] text-[var(--color-cyan)] border border-[var(--color-cyan)]/40 rounded px-1.5 py-0.5">
+        Custom
+      </span>
+      <p className="font-bold text-text mt-2">Build your own agent</p>
+      <p className="text-xs text-text-muted mt-2 leading-relaxed">
+        Write a strategy on any frontier model and add it to your team. See the
+        build-an-agent guide →
+      </p>
+    </a>
+  );
+}
+
+// ----- Small shared bits ---------------------------------------------------
+
+function ActionPill({ action }: { action: AgentAction }) {
+  const meta = ACTION_META[action];
+  return (
+    <span
+      className="text-[10px] font-mono font-bold tracking-[0.08em] rounded px-1.5 py-0.5"
+      style={{ color: meta.color, background: meta.bg, border: `1px solid ${meta.border}` }}
+    >
+      {meta.label}
+    </span>
+  );
+}
+
+function TriggerChip({ trigger }: { trigger: string }) {
+  return (
+    <span className="text-[10px] font-mono rounded-full border border-[var(--color-red)]/30 bg-[var(--color-red)]/[0.06] px-2 py-0.5 text-[var(--color-red)]/90">
+      {TRIGGER_LABELS[trigger] ?? trigger}
+    </span>
+  );
+}

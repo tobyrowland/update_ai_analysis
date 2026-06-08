@@ -495,6 +495,11 @@ def _run_portfolio(
 
     member_rows = db.get_portfolio_members(portfolio["id"])
 
+    # Per-instance Run/Stop (migration 045): a stopped team agent stays on the
+    # roster but trades nothing. Drop disabled members before any dispatch so
+    # both the swarm and the legacy per-member loop honour the switch.
+    member_rows = [m for m in member_rows if m.get("enabled", True)]
+
     # Swarm path (portfolio brief §4): snake-draft buys + first-valid-sell is
     # the STANDARD coordination for any portfolio with role-tagged buyers — no
     # opt-in. Skipped for a single-member "Run now" (handle_filter) so targeted

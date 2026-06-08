@@ -181,6 +181,44 @@ no longer read.
 Pure coordination core (snake-draft + first-valid-sell), decisions injected so
 it's deterministic + unit-tested (`test_swarm.py`). No DB, no LLM.
 
+## Team builder — the portfolio page as home base (migration 045)
+
+The owner's portfolio page (`/portfolios/<slug>`) is a **team builder**, not a
+mandate editor (this supersedes the mandate/roster swarm-config UI). The owner
+drags **agents** out of a library into one team hopper; **saving an agent
+deploys it** (inserts the `portfolio_agents` row — there is no batch deploy and
+no mandate to write, the strategy lives inside the agents picked). A slim
+**readiness** strip reports whether the team can buy / sell / manage. Holdings &
+trades render below. The page is rebuilt in `web/app/portfolios/[slug]/page.tsx`
+with `web/components/portfolio/team-builder.tsx` (the client builder) and
+`web/lib/agents/{types,library}.ts` (client-safe types/helpers + server reads).
+
+**Agent identity is function-first** (brief §2): the NAME is the strategy, the
+LLM is a secondary `powered_by` line. Two axes, kept separate (brief §3):
+
+- **Action** (the only grouping, `agents.action` ∈ `buy|sell|manage`):
+  mechanically true, never inferred. buy adds exposure, sell reduces it, manage
+  does neither cleanly (rebalancers / sizers).
+- **Triggers** (`agents.triggers TEXT[]`, sells only): declared intent tags from
+  a small fixed vocabulary (`caps-losses`, `banks-gains`), additive,
+  author-declared — the readiness strip reasons over them, the system never
+  detects them.
+
+Each library agent ships a **`sentence_template`** (plain-language description
+with `{param}` placeholders) and a **`param_schema`** (1–2 typed, bounded
+controls with defaults). A saved team agent is a configured copy: its tuned
+params live flat in `portfolio_agents.config` (merged into the strategy's
+`params` by the heartbeat, exactly like `agents.config`), and
+`portfolio_agents.enabled` is its per-instance **Run/Stop** switch (a stopped
+agent stays on the roster but the heartbeat skips it). Action maps to the
+heartbeat role (`buy→buyer`, `sell→reviewer`, `manage→manager`); buy/sell run
+through the existing swarm engine, manage is inert until a manage engine is
+defined. The **library is the set of hireable agents with `action` set** — the
+seeded roster (migration 045) is illustrative; the real roster is curated
+separately by inserting agent rows. Mutations (`saveTeamAgent`,
+`updateTeamAgentParams`, `setTeamAgentEnabled`) live in
+`web/lib/portfolios-mutations.ts`.
+
 ## Scripts
 
 ### universe_sync.py (02:00 UTC Sundays — weekly)

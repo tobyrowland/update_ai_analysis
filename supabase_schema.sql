@@ -860,8 +860,29 @@ ALTER TABLE portfolios ADD COLUMN IF NOT EXISTS screen_config JSONB;
 -- per-portfolio draft settings (opt-in switch for the swarm path); per-position
 -- buyer attribution. Backward compatible (NULL role = legacy member).
 -- ============================================================
-ALTER TABLE portfolio_agents  ADD COLUMN IF NOT EXISTS role   TEXT;   -- 'buyer' | 'reviewer'
+ALTER TABLE portfolio_agents  ADD COLUMN IF NOT EXISTS role   TEXT;   -- 'buyer' | 'reviewer' | 'manager'
 ALTER TABLE portfolio_agents  ADD COLUMN IF NOT EXISTS remit  TEXT;   -- free-text specialty/focus
-ALTER TABLE portfolio_agents  ADD COLUMN IF NOT EXISTS config JSONB;  -- {convictionGate,maxPerName,cadence,sellRules,brain}
+ALTER TABLE portfolio_agents  ADD COLUMN IF NOT EXISTS config JSONB;  -- {convictionGate,maxPerName,cadence,sellRules,brain} + per-instance params
 ALTER TABLE portfolios        ADD COLUMN IF NOT EXISTS draft_config JSONB;  -- {order:'snake',cycle:'daily'}
 ALTER TABLE portfolio_holdings ADD COLUMN IF NOT EXISTS opened_by_agent_id UUID REFERENCES agents(id);
+
+
+-- ============================================================
+-- Agent team builder (migration 045 — portfolio & agents brief v2)
+--
+-- The portfolio page becomes the user's home base: drag agents from a library
+-- into a team, and saving one deploys it (no mandate, no batch deploy). Library
+-- taxonomy on agents (action grouping + declared sell triggers + typed params +
+-- a plain-language sentence template), and a per-instance Run/Stop switch on the
+-- membership. See migration 045.
+-- ============================================================
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS action            TEXT;   -- 'buy' | 'sell' | 'manage' (NULL = not a library agent)
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS triggers          TEXT[] NOT NULL DEFAULT '{}';   -- declared intent tags (sells)
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS param_schema      JSONB  NOT NULL DEFAULT '[]'::jsonb; -- [{key,label,type,min,max,step,unit,default,options}]
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS sentence_template TEXT;   -- plain-language description with {key} placeholders
+ALTER TABLE agents DROP CONSTRAINT IF EXISTS agents_action_check;
+ALTER TABLE agents ADD  CONSTRAINT agents_action_check
+    CHECK (action IS NULL OR action IN ('buy', 'sell', 'manage'));
+CREATE INDEX IF NOT EXISTS idx_agents_library ON agents (action) WHERE action IS NOT NULL;
+
+ALTER TABLE portfolio_agents ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE;  -- per-instance Run/Stop
