@@ -19,7 +19,7 @@ import {
 export * from "@/lib/agents/types";
 
 const LIBRARY_COLUMNS =
-  "handle, display_name, description, powered_by, action, triggers, param_schema, sentence_template";
+  "handle, display_name, description, powered_by, action, triggers, param_schema, sentence_template, default_mandate";
 
 function coerceParamSchema(raw: unknown): ParamSpec[] {
   if (!Array.isArray(raw)) return [];
@@ -38,6 +38,7 @@ type LibraryRow = {
   triggers: string[] | null;
   param_schema: unknown;
   sentence_template: string | null;
+  default_mandate: string | null;
 };
 
 function rowToLibraryAgent(r: LibraryRow): LibraryAgent {
@@ -50,6 +51,7 @@ function rowToLibraryAgent(r: LibraryRow): LibraryAgent {
     triggers: r.triggers ?? [],
     paramSchema: coerceParamSchema(r.param_schema),
     sentenceTemplate: r.sentence_template,
+    defaultMandate: r.default_mandate ?? null,
   };
 }
 
@@ -86,7 +88,11 @@ export async function getTeamForPortfolio(
   const supabase = getSupabase();
   const { data, error } = await supabase
     .from("portfolio_agents")
-    .select("config, enabled, joined_at, agents!inner(" + LIBRARY_COLUMNS + ")")
+    .select(
+      "config, enabled, mandate, joined_at, agents!inner(" +
+        LIBRARY_COLUMNS +
+        ")",
+    )
     .eq("portfolio_id", portfolioId)
     .not("agents.action", "is", null)
     .order("joined_at", { ascending: true });
@@ -97,6 +103,7 @@ export async function getTeamForPortfolio(
   type Row = {
     config: Record<string, number | string> | null;
     enabled: boolean | null;
+    mandate: string | null;
     agents: LibraryRow | LibraryRow[] | null;
   };
   const rows = (data as unknown as Row[] | null) ?? [];
@@ -112,6 +119,7 @@ export async function getTeamForPortfolio(
         ...lib,
         params: withDefaults(lib.paramSchema, r.config ?? {}),
         enabled: r.enabled ?? true,
+        mandate: r.mandate ?? null,
       };
     })
     .filter((t): t is TeamAgent => t !== null);

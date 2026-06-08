@@ -40,12 +40,32 @@ export interface LibraryAgent {
   triggers: string[];
   paramSchema: ParamSpec[];
   sentenceTemplate: string | null;
+  /**
+   * The agent's baked-in brief (migration 046). Non-null only for "thinking"
+   * agents (LLM buyer / reviewer) — the team builder shows a brief field iff
+   * this is set; mechanical/manage agents leave it null.
+   */
+  defaultMandate: string | null;
 }
 
 /** A configured copy of a library agent saved onto a portfolio. */
 export interface TeamAgent extends LibraryAgent {
   params: Record<string, number | string>;
   enabled: boolean;
+  /** Per-instance brief override; null = track the agent default. */
+  mandate: string | null;
+}
+
+/** Whether the owner has pinned a custom brief on this saved agent. */
+export function hasCustomMandate(agent: TeamAgent): boolean {
+  return (agent.mandate ?? "").trim().length > 0;
+}
+
+/** The brief actually in force for an agent: instance override ?? default. */
+export function effectiveMandate(
+  agent: Pick<LibraryAgent, "defaultMandate"> & { mandate?: string | null },
+): string {
+  return (agent.mandate ?? null)?.trim() || agent.defaultMandate || "";
 }
 
 /** Merge stored params over schema defaults, dropping unknown keys. */
