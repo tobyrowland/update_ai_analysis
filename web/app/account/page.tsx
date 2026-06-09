@@ -107,7 +107,10 @@ function Dashboard({
     <div className="space-y-8">
       {/* Header + standing line */}
       <header>
-        <h1 className="text-[26px] sm:text-[30px] font-bold tracking-[-0.02em] text-text">
+        <p className="text-[11px] font-mono uppercase tracking-[0.14em] text-text-muted">
+          Dashboard
+        </p>
+        <h1 className="mt-1 text-[26px] sm:text-[30px] font-bold tracking-[-0.02em] text-text">
           Hi {displayName}
         </h1>
         <p className="mt-1 text-sm text-text-muted">
