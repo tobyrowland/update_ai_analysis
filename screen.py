@@ -219,10 +219,30 @@ def _spy_ret_52w(db) -> float | None:
     return (lv / av - 1) * 100
 
 
+def _active_exclusions(db) -> set[str]:
+    """Tickers on the manual 1-year blocklist (migration 048) — dropped from the
+    screen, so the buyer never considers them. Mirrors query.ts. Fail-open: a
+    read error returns no exclusions rather than blocking the whole screen."""
+    from datetime import datetime, timezone
+    try:
+        resp = (
+            db.client.table("screener_exclusions")
+            .select("ticker")
+            .gt("expires_at", datetime.now(timezone.utc).isoformat())
+            .execute()
+        )
+    except Exception:  # noqa: BLE001
+        return set()
+    return {(r.get("ticker") or "").upper() for r in (resp.data or [])}
+
+
 def load_facts(db) -> list[dict]:
     """Load Level 0 facts for the whole Tier 1 universe + the AI overlay."""
     facts = _rpc_all(db, "screen_facts")
     overlay = {r["ticker"]: r for r in _rpc_all(db, "screen_ai_overlay")}
+    excluded = _active_exclusions(db)
+    if excluded:
+        facts = [r for r in facts if (r.get("ticker") or "").upper() not in excluded]
     spy = _spy_ret_52w(db)
     for r in facts:
         v = overlay.get(r["ticker"])

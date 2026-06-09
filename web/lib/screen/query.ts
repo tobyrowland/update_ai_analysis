@@ -144,9 +144,39 @@ export interface ScreenResponse extends ScreenResult {
   sectors: string[];
 }
 
+/**
+ * Tickers on the manual 1-year blocklist (migration 048). Dropped from the
+ * screener results; mirrored in screen.py so the buyer never considers them.
+ * Fetched fresh (not in the facts cache) so an exclusion takes effect on the
+ * next request. Fail-open on error.
+ */
+async function activeExclusions(): Promise<Set<string>> {
+  try {
+    const { data, error } = await getSupabase()
+      .from("screener_exclusions")
+      .select("ticker")
+      .gt("expires_at", new Date().toISOString());
+    if (error) {
+      console.error("activeExclusions failed:", error.message);
+      return new Set();
+    }
+    return new Set(
+      ((data ?? []) as { ticker: string }[]).map((r) => r.ticker.toUpperCase()),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 /** Full contract response for a config: scored rows + counts + as-of. */
 export async function runScreen(config: ScreenConfig): Promise<ScreenResponse> {
-  const facts = await loadFacts();
+  const [allFacts, excluded] = await Promise.all([
+    loadFacts(),
+    activeExclusions(),
+  ]);
+  const facts = excluded.size
+    ? allFacts.filter((f) => !excluded.has(f.ticker.toUpperCase()))
+    : allFacts;
   const result = scoreScreen(facts, config, facts.length);
   const data_asof = facts.reduce<string | null>((acc, f) => {
     if (f.price_asof && (!acc || f.price_asof > acc)) return f.price_asof;

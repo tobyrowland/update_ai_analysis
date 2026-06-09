@@ -8,6 +8,7 @@ import {
   isHousePreset,
 } from "@/lib/screen/config";
 import { runScreen } from "@/lib/screen/query";
+import { listActiveExclusions } from "@/lib/screen/exclusions-query";
 import { getSupabase } from "@/lib/supabase";
 import { screenConfigSchema, type ScreenConfig } from "@/lib/screen/config";
 import ScreenerClient from "@/app/screener/screener-client";
@@ -125,9 +126,10 @@ export default async function ScreenerPage({
 }) {
   const sp = await resolveParams(searchParams);
   const config = (sp.screen ? await savedConfig(sp.screen) : null) ?? configFromParams(sp);
-  const [initial, companyTickers] = await Promise.all([
+  const [initial, companyTickers, exclusions] = await Promise.all([
     runScreen(config),
     getCompanyTickers(),
+    listActiveExclusions(),
   ]);
 
   return (
@@ -185,6 +187,7 @@ export default async function ScreenerPage({
             }}
             sectors={initial.sectors}
             companyTickers={companyTickers}
+            exclusions={exclusions.map((e) => e.ticker)}
             defaultEncoded={encodeConfig(configFromParams({ preset: DEFAULT_PRESET }))}
           />
         </div>

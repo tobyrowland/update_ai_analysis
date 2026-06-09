@@ -5,6 +5,10 @@ import Link from "next/link";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { saveScreen } from "@/lib/screen/saved-mutations";
 import {
+  excludeFromScreener,
+  unexcludeFromScreener,
+} from "@/lib/screen/exclusions-mutations";
+import {
   FILTER_FIELDS,
   FILTER_OPS,
   METRIC_META,
@@ -139,6 +143,7 @@ export default function ScreenerClient({
   initialData,
   sectors = [],
   companyTickers = [],
+  exclusions = [],
 }: {
   initialConfig: ScreenConfig;
   initialData: ScreenData;
@@ -146,6 +151,8 @@ export default function ScreenerClient({
   sectors?: string[];
   /** Tickers that have a /company/<ticker> page (others render unlinked). */
   companyTickers?: string[];
+  /** Tickers on the manual 1-year blocklist (owner-managed). */
+  exclusions?: string[];
   defaultEncoded?: string;
 }) {
   const linkable = useMemo(
@@ -155,6 +162,8 @@ export default function ScreenerClient({
   const [config, setConfig] = useState<ScreenConfig>(initialConfig);
   const [data, setData] = useState<ScreenData>(initialData);
   const [loading, setLoading] = useState(false);
+  const [excluded, setExcluded] = useState<string[]>(exclusions);
+  const [exclBusy, setExclBusy] = useState(false);
   const [showIntro, setShowIntro] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
   const [saveLink, setSaveLink] = useState<string | null>(null);
@@ -290,6 +299,46 @@ export default function ScreenerClient({
     setConfig((c) => ({ ...c, preset: "custom", ...p }));
     setSaveLink(null);
   }, []);
+
+  // Re-fetch the current screen — used after an exclusion changes the universe.
+  const refetch = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/screen?config=${encodeConfig(config)}`, {
+        cache: "no-store",
+      });
+      if (res.ok) setData((await res.json()) as ScreenData);
+    } finally {
+      setLoading(false);
+    }
+  }, [config]);
+
+  const excludedSet = useMemo(
+    () => new Set(excluded.map((t) => t.toUpperCase())),
+    [excluded],
+  );
+
+  async function onExclude(ticker: string) {
+    const t = ticker.toUpperCase();
+    setExclBusy(true);
+    const res = await excludeFromScreener(t);
+    setExclBusy(false);
+    if (res.ok) {
+      setExcluded((prev) => Array.from(new Set([...prev, t])));
+      await refetch();
+    }
+  }
+
+  async function onRestore(ticker: string) {
+    const t = ticker.toUpperCase();
+    setExclBusy(true);
+    const res = await unexcludeFromScreener(t);
+    setExclBusy(false);
+    if (res.ok) {
+      setExcluded((prev) => prev.filter((x) => x.toUpperCase() !== t));
+      await refetch();
+    }
+  }
 
   function selectPreset(id: string) {
     setConfig(presetConfig(id));
@@ -532,6 +581,41 @@ export default function ScreenerClient({
         </div>
       </details>
 
+      {/* Hidden names — the owner's manual 1-year blocklist. Removed names
+          drop from the screener AND the agents' candidate pool until they
+          expire (or are restored here). */}
+      {signedIn && excluded.length > 0 && (
+        <details className={`mb-2 ${card}`}>
+          <summary className="list-none cursor-pointer font-mono text-[11px] text-text-muted px-3 py-2 marker:hidden [&::-webkit-details-marker]:hidden flex items-center justify-between">
+            <span>
+              🚫 Hidden ({excluded.length}) — removed from screener &amp; agents
+              for 1 year
+            </span>
+            <span className="text-text-muted/60">manage ▾</span>
+          </summary>
+          <div className="px-3 pb-3 flex flex-wrap gap-1.5">
+            {[...excludedSet].sort().map((t) => (
+              <span
+                key={t}
+                className="inline-flex items-center gap-1.5 font-mono text-[11px] text-text border border-white/10 bg-white/[0.03] rounded-md px-2 py-1"
+              >
+                {t}
+                <button
+                  type="button"
+                  disabled={exclBusy}
+                  onClick={() => onRestore(t)}
+                  title={`Restore ${t} to the screener now`}
+                  aria-label={`Restore ${t}`}
+                  className="text-[var(--color-cyan)] hover:underline disabled:opacity-40"
+                >
+                  restore
+                </button>
+              </span>
+            ))}
+          </div>
+        </details>
+      )}
+
       {/* Results */}
       <div className={`${card} overflow-hidden`}>
         <table className="w-full border-collapse" aria-label="Screened equities ranked by your composite">
@@ -592,6 +676,9 @@ export default function ScreenerClient({
                 topN={config.topN}
                 runHref={runHref}
                 hasPage={linkable.has(r.ticker.toUpperCase())}
+                canExclude={signedIn}
+                exclBusy={exclBusy}
+                onExclude={onExclude}
               />
             ))}
             {data.rows.length === 0 && (
@@ -960,6 +1047,9 @@ function RowView({
   topN,
   runHref,
   hasPage,
+  canExclude,
+  exclBusy,
+  onExclude,
 }: {
   r: Row;
   cols: Col[];
@@ -969,6 +1059,10 @@ function RowView({
   topN: number;
   runHref: string;
   hasPage: boolean;
+  /** Owner-only: show the ✕ "remove from screener for a year" control. */
+  canExclude: boolean;
+  exclBusy: boolean;
+  onExclude: (ticker: string) => void;
 }) {
   return (
     <>
@@ -1026,7 +1120,20 @@ function RowView({
             </td>
           );
         })}
-        <td className="border-t border-white/10" />
+        <td className="border-t border-white/10 text-right pr-2">
+          {canExclude && (
+            <button
+              type="button"
+              disabled={exclBusy}
+              onClick={() => onExclude(r.ticker)}
+              title={`Remove ${r.ticker} from the screener for 1 year — also blocks the agents from buying it`}
+              aria-label={`Remove ${r.ticker} for a year`}
+              className="font-mono text-[12px] text-text-muted/50 hover:text-[var(--color-red,#FF3333)] disabled:opacity-40"
+            >
+              ✕
+            </button>
+          )}
+        </td>
       </tr>
     </>
   );
