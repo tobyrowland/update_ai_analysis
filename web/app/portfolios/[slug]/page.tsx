@@ -248,7 +248,10 @@ export default async function PortfolioPage({ params }: PageParams) {
               </span>
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-3">
-              {isOwner && (
+              {/* A live portfolio is a private follower of the paper book — it
+                  is always private (never publishable) and has no team of its
+                  own, so it shows neither the public toggle nor team controls. */}
+              {isOwner && mode !== "live" && (
                 <VisibilityToggle
                   portfolioId={portfolio.id}
                   isPublic={portfolio.is_public}
@@ -296,26 +299,32 @@ export default async function PortfolioPage({ params }: PageParams) {
                 value={String(bookCount)}
                 sub="open positions"
               />
-              <SummaryCard
-                label="Team"
-                value={`${team.length} agent${team.length === 1 ? "" : "s"}`}
-                sub={
-                  team.length === 0 ? (
-                    "none yet"
-                  ) : (
-                    <span className="text-[var(--color-green)]">
-                      <TeamScheduleNote />
-                    </span>
-                  )
-                }
-              />
+              {/* The Team card is meaningless for a live follower (it runs no
+                  agents of its own — the paper sibling's swarm drives it). */}
+              {mode !== "live" && (
+                <SummaryCard
+                  label="Team"
+                  value={`${team.length} agent${team.length === 1 ? "" : "s"}`}
+                  sub={
+                    team.length === 0 ? (
+                      "none yet"
+                    ) : (
+                      <span className="text-[var(--color-green)]">
+                        <TeamScheduleNote />
+                      </span>
+                    )
+                  }
+                />
+              )}
             </section>
           )}
 
           {/* TEAM — the build + manage surface (owner) or a read-only roster
-              (visitor). Replaces the old mandate/roster config (brief: this
-              supersedes the earlier model). */}
-          {isOwner ? (
+              (visitor). A live follower has no team of its own: it mirrors the
+              paper portfolio's positions, so it shows an explainer instead. */}
+          {mode === "live" ? (
+            <LiveFollowerNote />
+          ) : isOwner ? (
             <section id="team" className="mb-12 sm:mb-14 scroll-mt-20">
               <TeamBuilder
                 portfolioId={portfolio.id}
@@ -368,17 +377,25 @@ export default async function PortfolioPage({ params }: PageParams) {
 
           {/* Footer */}
           <section className="pt-6 border-t border-white/10">
-            <p className="text-xs text-text-muted font-mono">
-              This page shows your live portfolio — trades are made by your
-              agents, not by hand. Manage your team above, or{" "}
-              <Link
-                href="/docs#build-an-agent"
-                className="text-[var(--color-cyan)] hover:brightness-110 transition-[filter]"
-              >
-                build your own agent
-              </Link>{" "}
-              in the docs.
-            </p>
+            {mode === "live" ? (
+              <p className="text-xs text-text-muted font-mono">
+                This is your private real-money account. It mirrors your paper
+                portfolio&apos;s positions — manage the strategy and team on the
+                paper portfolio, and this account follows automatically.
+              </p>
+            ) : (
+              <p className="text-xs text-text-muted font-mono">
+                This page shows your live portfolio — trades are made by your
+                agents, not by hand. Manage your team above, or{" "}
+                <Link
+                  href="/docs#build-an-agent"
+                  className="text-[var(--color-cyan)] hover:brightness-110 transition-[filter]"
+                >
+                  build your own agent
+                </Link>{" "}
+                in the docs.
+              </p>
+            )}
           </section>
         </div>
       </main>
@@ -468,6 +485,34 @@ function PaperValueCard({
         Cash <span className="text-text">{formatUsd0(cash)}</span>
       </p>
     </div>
+  );
+}
+
+// A live portfolio is a private follower of the owner's paper portfolio: it
+// runs no agents of its own and is never public, so instead of the team
+// builder it shows a short explainer of how it's driven.
+function LiveFollowerNote() {
+  return (
+    <section id="team" className="mb-12 sm:mb-14 scroll-mt-20">
+      <h2 className="text-[11px] font-mono font-bold uppercase tracking-[0.14em] text-[var(--color-green)] mb-3">
+        Real-money follower
+      </h2>
+      <div className="rounded-2xl border border-[var(--color-green)]/30 bg-[var(--color-green)]/[0.04] px-4 py-4">
+        <p className="text-sm text-text-dim leading-relaxed">
+          This account mirrors your{" "}
+          <Link
+            href="/account"
+            className="text-[var(--color-cyan)] hover:brightness-110 transition-[filter]"
+          >
+            paper portfolio
+          </Link>
+          : it holds the same names in the same proportions, sized to its real
+          balance. There&apos;s no separate team to build here — your paper
+          portfolio&apos;s agents do the deciding, and this account follows
+          automatically after each rebalance.
+        </p>
+      </div>
+    </section>
   );
 }
 
