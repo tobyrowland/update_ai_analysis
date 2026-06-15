@@ -444,6 +444,15 @@ Two trade-phase strategies share the buyer slot:
   re-buy thrashing. Reads the portfolio mandate
   (`portfolios.description`) — the single owner-written brief that
   covers both *what* to own and *how* to evaluate adds.
+  **Evaluation data is sourced from Level 0** — the same Tier-1 screen
+  fact rows the screener ranked on (`screen.portfolio_screen_candidate_
+  rows`), enriched with the AI narrative + bull/bear from `companies`
+  where it exists (`_build_equity_data` / `_load_company_narratives`).
+  This replaced the legacy `in_tv_screen` universe snapshot, so **every**
+  Tier-1 screen candidate is evaluable — previously US-listed financials
+  / foreign-domiciled ADRs ranked by the screener were absent from the
+  legacy snapshot and silently dropped (`missing_from_snapshot`), so they
+  could never be bought.
 
 Both buyers also enforce a **90-day re-buy cooldown** via
 `db.get_recently_sold_tickers` — once a ticker has been sold from a
