@@ -138,7 +138,7 @@ function nonEmpty(s: string | null | undefined): string | null {
   return t.length > 0 ? t : null;
 }
 
-// UTC label for the next weekly heartbeat tick, e.g. "Sun 07:00 UTC".
+// UTC label for the next daily heartbeat tick, e.g. "Mon 07:00 UTC".
 function nextRunLabel(now: number): string {
   const d = new Date(nextHeartbeatTick(now));
   const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getUTCDay()];

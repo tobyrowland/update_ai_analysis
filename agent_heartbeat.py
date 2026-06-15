@@ -282,15 +282,28 @@ def _run_one(
     return status
 
 
-# Human portfolios rebalance weekly, matching the default agent cadence.
+# Human portfolios rebalance weekly by default, matching the default agent
+# cadence. Owners can opt a portfolio into a daily cadence via the
+# portfolios.rebalance_cadence toggle (migration 051).
 PORTFOLIO_HEARTBEAT_INTERVAL_HOURS = 168
+PORTFOLIO_CADENCE_HOURS = {"daily": 24, "weekly": 168}
+
+
+def _portfolio_interval_hours(portfolio: dict) -> int:
+    """The min hours between rebalances for this portfolio (migration 051).
+
+    Reads portfolios.rebalance_cadence ('daily' | 'weekly'); anything else
+    (including NULL on a pre-migration row) falls back to the weekly default.
+    """
+    cadence = (portfolio.get("rebalance_cadence") or "weekly").strip().lower()
+    return PORTFOLIO_CADENCE_HOURS.get(cadence, PORTFOLIO_HEARTBEAT_INTERVAL_HOURS)
 
 
 def _portfolio_is_due(portfolio: dict, now: datetime) -> bool:
     last = _parse_ts(portfolio.get("last_heartbeat_at"))
     if last is None:
         return True
-    return now >= last + timedelta(hours=PORTFOLIO_HEARTBEAT_INTERVAL_HOURS)
+    return now >= last + timedelta(hours=_portfolio_interval_hours(portfolio))
 
 
 def _resolve_member_mandate(member_row: dict, portfolio_mandate: str | None) -> str | None:
