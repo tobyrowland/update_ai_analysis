@@ -825,8 +825,14 @@ def rebalance_llm_watchlist_buyer(ctx: RebalanceContext) -> RebalanceResult:
             ctx.db.clear_screener_rejection(ctx.portfolio_id, ticker)
         except PortfolioError as exc:
             result.errors.append(f"buy {ticker} x{item['qty']}: {exc}")
-
-    result.notes["executed_plan"] = plan
+        except Exception as exc:  # noqa: BLE001
+            # A non-PortfolioError (e.g. a Postgres FK/APIError on the insert)
+            # must NOT abort the whole batch — log it, record it, and keep
+            # buying the rest of the ranked plan. Previously this propagated
+            # and crashed the entire heartbeat with zero buys.
+            logger.warning("%s: buy %s x%s failed (skipped): %s",
+                           handle, ticker, item["qty"], exc)
+            result.errors.append(f"buy {ticker} x{item['qty']}: {exc}")
     result.notes["target_pct"] = target_pct
     result.notes["target_usd"] = round(target_usd, 2)
     return result
