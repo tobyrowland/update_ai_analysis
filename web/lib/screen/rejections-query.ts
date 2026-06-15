@@ -4,6 +4,7 @@ import { getPortfolioForUser } from "@/lib/portfolios-query";
 
 export interface ScreenerRejection {
   ticker: string;
+  rejected_at: string;
   expires_at: string;
   reason: string | null;
   conviction: number | null;
@@ -41,7 +42,7 @@ export async function activeRejectionsForViewer(): Promise<{
 
   const { data, error } = await getSupabase()
     .from("screener_rejections")
-    .select("ticker, expires_at, reason, conviction")
+    .select("ticker, rejected_at, expires_at, reason, conviction")
     .eq("portfolio_id", portfolio.id)
     .gt("expires_at", new Date().toISOString())
     .is("restored_at", null)

@@ -57,7 +57,12 @@ interface ScreenData {
   data_asof: string | null;
   /** Viewer's active per-portfolio rejections (migration 051); only the
    *  /api/screen route populates this (SSR is anonymous). */
-  rejected?: string[];
+  rejected?: RejectedName[];
+}
+
+interface RejectedName {
+  ticker: string;
+  rejected_at: string;
 }
 
 function fmt(v: number | null, opts?: { pct?: boolean; mult?: boolean; dp?: number }): string {
@@ -169,8 +174,8 @@ export default function ScreenerClient({
   companyTickers?: string[];
   /** Tickers on the manual 1-year blocklist (owner-managed). */
   exclusions?: string[];
-  /** Tickers this portfolio's buyer evaluated and passed on (migration 051). */
-  rejections?: string[];
+  /** Names this portfolio's buyer evaluated and passed on (migration 051). */
+  rejections?: RejectedName[];
   defaultEncoded?: string;
 }) {
   const linkable = useMemo(
@@ -191,8 +196,9 @@ export default function ScreenerClient({
   const [excluded, setExcluded] = useState<string[]>(exclusions);
   const [exclBusy, setExclBusy] = useState(false);
   const [exclMsg, setExclMsg] = useState<string | null>(null);
-  // Per-portfolio agent rejections (migration 051) — the manage/restore panel.
-  const [rejected, setRejected] = useState<string[]>(rejections);
+  // Per-portfolio agent rejections (migration 051) — folded into the Hidden
+  // panel, each tagged with its rejection date.
+  const [rejected, setRejected] = useState<RejectedName[]>(rejections);
   const [rejBusy, setRejBusy] = useState(false);
   const [rejMsg, setRejMsg] = useState<string | null>(null);
   const [showIntro, setShowIntro] = useState(false);
@@ -400,6 +406,38 @@ export default function ScreenerClient({
     [excluded],
   );
 
+  // One unified "Hidden" list: manual exclusions (reason "manual", global,
+  // 1-year) + this portfolio's agent rejections (reason = the rejection date),
+  // each restorable via the matching action. Agent rejections only count as
+  // "hidden" while the toggle is on (off → they show in the table, so they
+  // aren't hidden). Manual takes precedence if a ticker is both.
+  const hiddenEntries = useMemo(() => {
+    const manual = [...excludedSet].map((t) => ({
+      ticker: t,
+      source: "manual" as const,
+      reason: "manual",
+    }));
+    const manualSet = new Set(manual.map((m) => m.ticker));
+    const agent =
+      config.hideRejected !== false
+        ? rejected
+            .filter((r) => !manualSet.has(r.ticker.toUpperCase()))
+            .map((r) => ({
+              ticker: r.ticker.toUpperCase(),
+              source: "agent" as const,
+              reason: `rejected ${
+                Number.isNaN(Date.parse(r.rejected_at))
+                  ? ""
+                  : new Date(r.rejected_at).toLocaleDateString("en-US", {
+                      month: "short",
+                      day: "numeric",
+                    })
+              }`.trim(),
+            }))
+        : [];
+    return [...manual, ...agent].sort((a, b) => a.ticker.localeCompare(b.ticker));
+  }, [excludedSet, rejected, config.hideRejected]);
+
   // Rows actually shown: drop any optimistically-excluded ticker. In steady
   // state the server already filtered these, so this only hides the just-
   // clicked name in the window before the refetch settles.
@@ -460,19 +498,26 @@ export default function ScreenerClient({
   // 90-day hide so it shows again and the buyer reconsiders it next run.
   async function onRestoreRejection(ticker: string) {
     const t = ticker.toUpperCase();
+    const prior = rejected.find((x) => x.ticker.toUpperCase() === t);
     setRejMsg(null);
-    setRejected((prev) => prev.filter((x) => x.toUpperCase() !== t));
+    setRejected((prev) => prev.filter((x) => x.ticker.toUpperCase() !== t));
     setRejBusy(true);
+    const restore = () =>
+      setRejected((prev) =>
+        prev.some((x) => x.ticker.toUpperCase() === t)
+          ? prev
+          : [...prev, prior ?? { ticker: t, rejected_at: new Date().toISOString() }],
+      );
     try {
       const res = await restoreRejection(t);
       if (res.ok) {
         await refetch();
       } else {
-        setRejected((prev) => Array.from(new Set([...prev, t])));
+        restore();
         setRejMsg(res.error || `Couldn’t restore ${t} — try again.`);
       }
     } catch {
-      setRejected((prev) => Array.from(new Set([...prev, t])));
+      restore();
       setRejMsg(`Couldn’t restore ${t} — are you signed in?`);
     } finally {
       setRejBusy(false);
@@ -785,31 +830,44 @@ export default function ScreenerClient({
         </div>
       </details>
 
-      {/* Hidden names — the owner's manual 1-year blocklist. Removed names
-          drop from the screener AND the agents' candidate pool until they
-          expire (or are restored here). */}
-      {signedIn && excluded.length > 0 && (
+      {/* Hidden names — one list, two sources. Manual exclusions (reason
+          "manual") are the owner's global 1-year blocklist; agent rejections
+          (reason = the rejection date) are names this portfolio's buyer
+          evaluated and passed on, hidden for 90 days while the toggle is on.
+          Restore sends each to its matching action. */}
+      {signedIn && hiddenEntries.length > 0 && (
         <details className={`mb-2 ${card}`}>
           <summary className="list-none cursor-pointer font-mono text-[11px] text-text-muted px-3 py-2 marker:hidden [&::-webkit-details-marker]:hidden flex items-center justify-between">
-            <span>
-              🚫 Hidden ({excluded.length}) — removed from screener &amp; agents
-              for 1 year
-            </span>
+            <span>🚫 Hidden ({hiddenEntries.length}) — removed from the screener</span>
             <span className="text-text-muted/60">manage ▾</span>
           </summary>
           <div className="px-3 pb-3 flex flex-wrap gap-1.5">
-            {[...excludedSet].sort().map((t) => (
+            {hiddenEntries.map((h) => (
               <span
-                key={t}
+                key={h.ticker}
                 className="inline-flex items-center gap-1.5 font-mono text-[11px] text-text border border-white/10 bg-white/[0.03] rounded-md px-2 py-1"
               >
-                {t}
+                {h.ticker}
+                <span
+                  className="text-[10px] text-text-muted/70"
+                  title={
+                    h.source === "manual"
+                      ? "Manually removed (global, 1 year)"
+                      : "Your buyer evaluated and passed on this name (90-day hide)"
+                  }
+                >
+                  {h.reason}
+                </span>
                 <button
                   type="button"
-                  disabled={exclBusy}
-                  onClick={() => onRestore(t)}
-                  title={`Restore ${t} to the screener now`}
-                  aria-label={`Restore ${t}`}
+                  disabled={h.source === "manual" ? exclBusy : rejBusy}
+                  onClick={() =>
+                    h.source === "manual"
+                      ? onRestore(h.ticker)
+                      : onRestoreRejection(h.ticker)
+                  }
+                  title={`Restore ${h.ticker} to the screener now`}
+                  aria-label={`Restore ${h.ticker}`}
                   className="text-[var(--color-cyan)] hover:underline disabled:opacity-40"
                 >
                   restore
@@ -821,7 +879,7 @@ export default function ScreenerClient({
       )}
 
       {/* Surfaced error from a remove/restore (e.g. not signed in, or the
-          screener_exclusions table isn't there yet) — never fail silently. */}
+          table isn't there yet) — never fail silently. */}
       {exclMsg && (
         <div
           role="alert"
@@ -837,44 +895,6 @@ export default function ScreenerClient({
             ✕
           </button>
         </div>
-      )}
-
-      {/* Passed-on names — this portfolio's buyer evaluated them and didn't
-          buy (migration 051). Hidden from the screener (and not re-evaluated
-          by the buyer) for 90 days while "Hide agent-rejected" is on. Restore
-          any of them here to show it again and have the buyer reconsider. */}
-      {signedIn && rejected.length > 0 && (
-        <details className={`mb-2 ${card}`}>
-          <summary className="list-none cursor-pointer font-mono text-[11px] text-text-muted px-3 py-2 marker:hidden [&::-webkit-details-marker]:hidden flex items-center justify-between">
-            <span>
-              🛇 Passed on by your agents ({rejected.length})
-              {config.hideRejected !== false
-                ? " — hidden for 90 days"
-                : " — currently shown (toggle off)"}
-            </span>
-            <span className="text-text-muted/60">manage ▾</span>
-          </summary>
-          <div className="px-3 pb-3 flex flex-wrap gap-1.5">
-            {[...new Set(rejected.map((t) => t.toUpperCase()))].sort().map((t) => (
-              <span
-                key={t}
-                className="inline-flex items-center gap-1.5 font-mono text-[11px] text-text border border-white/10 bg-white/[0.03] rounded-md px-2 py-1"
-              >
-                {t}
-                <button
-                  type="button"
-                  disabled={rejBusy}
-                  onClick={() => onRestoreRejection(t)}
-                  title={`Restore ${t} to the screener now`}
-                  aria-label={`Restore ${t}`}
-                  className="text-[var(--color-cyan)] hover:underline disabled:opacity-40"
-                >
-                  restore
-                </button>
-              </span>
-            ))}
-          </div>
-        </details>
       )}
 
       {rejMsg && (

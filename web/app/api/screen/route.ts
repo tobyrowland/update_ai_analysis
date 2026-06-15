@@ -71,8 +71,12 @@ export async function GET(req: Request) {
         data_asof: result.data_asof,
         config,
         // The viewer's active per-portfolio rejections (migration 051) — the
-        // client uses these for the restore panel. Empty for logged-out callers.
-        rejected: rejections.map((r) => r.ticker),
+        // client folds these into the "Hidden" panel, tagged with the rejection
+        // date. Empty for logged-out callers.
+        rejected: rejections.map((r) => ({
+          ticker: r.ticker,
+          rejected_at: r.rejected_at,
+        })),
       },
       {
         headers: {
