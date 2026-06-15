@@ -739,8 +739,15 @@ One row per signed-in human (migration 023). Auto-provisioned by a trigger on
 ```
 id (UUID PK), slug (UNIQUE), display_name, description,
 owner_agent_id (FK → agents, nullable), owner_user_id (FK → profiles, nullable),
-is_public, mode ('paper' | 'live'), launched_at, last_heartbeat_at, created_at, updated_at
+is_public, mode ('paper' | 'live'), rebalance_cadence ('daily' | 'weekly'),
+launched_at, last_heartbeat_at, created_at, updated_at
 ```
+`rebalance_cadence` (migration 051, default `'weekly'`) is the owner-set
+rebalance frequency — the heartbeat re-evaluates the portfolio at most every
+24h (`daily`) or 168h (`weekly`) via `agent_heartbeat._portfolio_is_due`. The
+heartbeat workflow runs daily (`0 7 * * *`); this column decides how often each
+portfolio actually acts on a tick. Owner toggle on the portfolio page
+(`rebalance-cadence-toggle.tsx` → `setPortfolioRebalanceCadence`).
 Introduced by migration 021; ownership + visibility added by 024, launch +
 heartbeat columns by 025 (the launch concept was removed in 031). Exactly
 one owner kind per row (`CHECK`): legacy agent portfolios have

@@ -368,6 +368,41 @@ export async function setPortfolioVisibility(input: {
   return { ok: true };
 }
 
+/**
+ * Owner control for how often the heartbeat re-evaluates the portfolio
+ * (migration 051): 'daily' (24h) or 'weekly' (168h, default). Mirrors
+ * setPortfolioVisibility — single update with the ownership check in the
+ * WHERE clause, no pre-write lookup.
+ */
+export async function setPortfolioRebalanceCadence(input: {
+  portfolioId: string;
+  cadence: "daily" | "weekly";
+}): Promise<ActionResult> {
+  const { user } = await requireUser();
+
+  if (input.cadence !== "daily" && input.cadence !== "weekly") {
+    return { ok: false, error: "Cadence must be daily or weekly." };
+  }
+
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("portfolios")
+    .update({ rebalance_cadence: input.cadence })
+    .eq("id", input.portfolioId)
+    .eq("owner_user_id", user.id)
+    .select("slug")
+    .maybeSingle();
+
+  if (error) {
+    console.error("setPortfolioRebalanceCadence failed:", error);
+    return { ok: false, error: "Could not update rebalance cadence. Try again." };
+  }
+  if (!data) return { ok: false, error: NOT_FOUND_ERROR };
+
+  revalidate(data.slug);
+  return { ok: true };
+}
+
 interface ResolvedAgent {
   id: string;
   available_for_hire: boolean;

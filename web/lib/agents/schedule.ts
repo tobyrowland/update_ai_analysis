@@ -1,15 +1,16 @@
 /**
  * Heartbeat-schedule helpers — client-safe, no server imports.
  *
- * The rebalance automation runs on a fixed weekly cron: Sunday 07:00 UTC
- * (.github/workflows/agent-heartbeat.yml: "0 7 * * 0"). Each agent acts on that
- * tick once its own cadence (heartbeat_interval_hours) has elapsed, so the next
- * run is deterministic — the next Sunday-07:00-UTC at/after the agent's due
- * time. Keep this the single source of the cron constant; if the workflow
- * schedule changes, change it here.
+ * The rebalance automation runs on a daily cron: 07:00 UTC every day
+ * (.github/workflows/agent-heartbeat.yml: "0 7 * * *"). Each agent / portfolio
+ * acts on that tick once its own cadence has elapsed (an agent's
+ * heartbeat_interval_hours; a portfolio's rebalance_cadence, migration 051), so
+ * the next run is deterministic — the next 07:00-UTC at/after the due time.
+ * Keep this the single source of the cron constant; if the workflow schedule
+ * changes, change it here.
  */
 
-export const HEARTBEAT_UTC_DAY = 0; // Sunday
+export const HEARTBEAT_WEEKLY_UTC_DAY = 0; // Sunday — the weekly-cadence anchor
 export const HEARTBEAT_UTC_HOUR = 7; // 07:00 UTC
 
 /** Coarse relative duration: "just now" / "5m" / "3h" / "5d". */
@@ -43,10 +44,11 @@ export function shortRunLabel(ts: number): string {
   });
 }
 
-/** The smallest Sunday-07:00-UTC instant at or after `after`. */
+/** The smallest 07:00-UTC instant (any day) at or after `after` — the daily
+ *  cron tick the heartbeat fires on. */
 export function nextHeartbeatTick(after: number): number {
   const d = new Date(after);
-  let cand = Date.UTC(
+  const todayTick = Date.UTC(
     d.getUTCFullYear(),
     d.getUTCMonth(),
     d.getUTCDate(),
@@ -55,13 +57,30 @@ export function nextHeartbeatTick(after: number): number {
     0,
     0,
   );
-  for (let i = 0; i < 8; i++) {
-    if (new Date(cand).getUTCDay() === HEARTBEAT_UTC_DAY && cand >= after) {
-      return cand;
-    }
+  return todayTick >= after ? todayTick : todayTick + 86_400_000;
+}
+
+/** The smallest Sunday-07:00-UTC instant at or after `after` — the tick a
+ *  weekly-cadence portfolio next acts on. */
+export function nextWeeklyHeartbeatTick(after: number): number {
+  let cand = nextHeartbeatTick(after);
+  for (let i = 0; i < 7; i++) {
+    if (new Date(cand).getUTCDay() === HEARTBEAT_WEEKLY_UTC_DAY) return cand;
     cand += 86_400_000;
   }
   return cand;
+}
+
+/** Next run tick for a portfolio's rebalance cadence (migration 051): the next
+ *  daily 07:00-UTC tick for 'daily', the next Sunday 07:00-UTC tick for
+ *  'weekly'. A coarse "when does this portfolio next act" hint. */
+export function nextRunForCadence(
+  after: number,
+  cadence: "daily" | "weekly",
+): number {
+  return cadence === "daily"
+    ? nextHeartbeatTick(after)
+    : nextWeeklyHeartbeatTick(after);
 }
 
 /**

@@ -5,6 +5,7 @@ import Nav from "@/components/nav";
 import HoldingsList from "@/components/holdings-list";
 import { TradeTape, type Trade } from "@/components/trade-tape";
 import VisibilityToggle from "@/components/portfolio/visibility-toggle";
+import RebalanceCadenceToggle from "@/components/portfolio/rebalance-cadence-toggle";
 import TeamBuilder from "@/components/portfolio/team-builder";
 import TeamScheduleNote from "@/components/portfolio/team-schedule-note";
 import BetaDisclaimer from "@/components/beta-disclaimer";
@@ -258,6 +259,12 @@ export default async function PortfolioPage({ params }: PageParams) {
                   holdingsCount={holdingsCount}
                 />
               )}
+              {isOwner && mode !== "live" && (
+                <RebalanceCadenceToggle
+                  portfolioId={portfolio.id}
+                  cadence={portfolio.rebalance_cadence}
+                />
+              )}
               {/* Owner-only real-money marker (migration 036). */}
               {isOwner && mode === "live" && (
                 <>
@@ -310,7 +317,7 @@ export default async function PortfolioPage({ params }: PageParams) {
                       "none yet"
                     ) : (
                       <span className="text-[var(--color-green)]">
-                        <TeamScheduleNote />
+                        <TeamScheduleNote cadence={portfolio.rebalance_cadence} />
                       </span>
                     )
                   }
