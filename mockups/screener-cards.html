@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Screener — card-aware (mockup)</title>
+<style>
+  :root{
+    --bg:#0a0c0e; --card:#12161a; --line:rgba(255,255,255,.09);
+    --text:#e8eaed; --dim:#aab2b8; --muted:#6b757c;
+    --cyan:#00f2ff; --green:#00ff7a; --amber:#ffb020; --red:#ff4d4d;
+    --q5:#00ff7a; --q4:#8fe36b; --q3:#ffd24d; --q2:#ff9a3d; --q1:#ff5d5d;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
+  a{color:var(--cyan);text-decoration:none}
+  .wrap{max-width:1080px;margin:0 auto;padding:26px 18px 80px}
+
+  /* header */
+  .hdr{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+  h1{font-size:22px;font-weight:800;letter-spacing:-.02em;margin:0}
+  .sub{color:var(--muted);font-size:11px;letter-spacing:.14em;text-transform:uppercase}
+  .right{margin-left:auto;display:flex;gap:8px}
+  .ghost{border:1px solid var(--line);border-radius:8px;padding:5px 12px;color:var(--dim);
+    font-size:12px;background:transparent;cursor:pointer}
+  .ghost:hover{color:var(--text);border-color:rgba(255,255,255,.2)}
+
+  .brief{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:12px 14px;margin-bottom:10px;display:flex;align-items:center;gap:10px}
+  .brief .label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.12em}
+  .brief .q{flex:1;color:var(--text);font-style:italic}
+  .lenses{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+  .chip{border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:12px;
+    color:var(--dim);cursor:pointer;background:transparent}
+  .chip.on{border-color:rgba(0,242,255,.4);color:var(--cyan);background:rgba(0,242,255,.08)}
+
+  /* controls */
+  .controls{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:14px 16px;margin-bottom:10px;display:flex;gap:26px;align-items:center;flex-wrap:wrap}
+  .ctl{display:flex;align-items:center;gap:10px}
+  .ctl .name{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.1em}
+  .dots{display:inline-flex;gap:3px;cursor:pointer}
+  .dot{width:11px;height:11px;border-radius:50%;border:1px solid rgba(255,255,255,.25)}
+  .dot.f{background:var(--cyan);border-color:var(--cyan)}
+  .tog{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--dim);cursor:pointer}
+  .sw{width:30px;height:17px;border-radius:999px;background:rgba(255,255,255,.12);position:relative;transition:.15s}
+  .sw::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:#fff;transition:.15s}
+  .tog.on .sw{background:var(--green)} .tog.on .sw::after{left:15px}
+  .filters{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .fchip{border:1px solid var(--line);border-radius:7px;padding:3px 9px;font-size:11px;color:var(--dim)}
+  .fchip b{color:var(--text);font-weight:600}
+  .fchip .x{color:var(--muted);margin-left:6px;cursor:pointer}
+  .addf{color:var(--cyan);font-size:12px;cursor:pointer}
+
+  .cov{font-size:12px;color:var(--dim);background:rgba(0,242,255,.05);
+    border:1px solid rgba(0,242,255,.18);border-radius:9px;padding:8px 12px;margin-bottom:14px}
+  .cov b{color:var(--cyan)}
+
+  /* table */
+  table{width:100%;border-collapse:collapse}
+  thead th{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+    font-weight:500;text-align:right;padding:8px 10px;border-bottom:1px solid var(--line)}
+  thead th.l{text-align:left}
+  thead th.s{cursor:pointer} thead th.s:hover{color:var(--text)}
+  tbody tr.row{border-bottom:1px solid rgba(255,255,255,.05);cursor:pointer}
+  tbody tr.row:hover{background:rgba(255,255,255,.025)}
+  td{padding:11px 10px;text-align:right;vertical-align:top}
+  td.l{text-align:left}
+  .rk{color:var(--muted);width:26px}
+  .tk{font-weight:700} .nm{color:var(--dim);font-weight:400;font-size:12px;margin-left:6px}
+  .why{color:var(--dim);font-size:12.5px;max-width:330px;text-align:left;line-height:1.45}
+  .num{font-family:ui-monospace,monospace;font-size:12.5px;color:var(--dim);white-space:nowrap}
+  .score{font-family:ui-monospace,monospace;font-weight:700}
+  .up{color:var(--green)} .down{color:var(--red)}
+  .exp{color:var(--muted);font-size:11px}
+
+  /* quality badge */
+  .qb{display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+  .diamond{font-weight:800}
+  .subdots{display:inline-flex;gap:5px;font-family:ui-monospace,monospace;font-size:11px;color:var(--muted)}
+  .subdots b{font-weight:700}
+  .q5{color:var(--q5)} .q4{color:var(--q4)} .q3{color:var(--q3)} .q2{color:var(--q2)} .q1{color:var(--q1)}
+  .pending{color:var(--muted);font-style:italic}
+
+  /* expanded card */
+  tr.detail td{background:#0e1216;border-bottom:1px solid var(--line);padding:0}
+  .card{padding:16px 18px 18px 46px}
+  .ctitle{font-size:13px;color:var(--dim);margin-bottom:12px}
+  .ctitle b{color:var(--text)}
+  .dim{display:grid;grid-template-columns:130px 1fr;gap:6px 14px;margin-bottom:6px;align-items:start}
+  .dim .dl{font-size:12px}
+  .dim .dr{color:var(--dim);font-size:12.5px}
+  .dim .ev{color:var(--muted);font-size:11.5px;margin-top:1px}
+  .barge{display:inline-block;min-width:30px}
+  .breaks{margin-top:10px;font-family:ui-monospace,monospace;font-size:11.5px;color:var(--dim)}
+  .breaks .lab{color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-size:10px;margin-right:8px}
+  .breaks code{background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:5px;padding:1px 6px;margin-right:6px}
+  .footer{display:flex;align-items:center;gap:16px;margin-top:13px;padding-top:11px;border-top:1px solid var(--line)}
+  .nums{font-family:ui-monospace,monospace;font-size:12px;color:var(--dim)}
+  .nums b{color:var(--text)}
+  .muted{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="hdr">
+    <h1>Screener</h1>
+    <span class="sub">ranked ideas · with reasons</span>
+    <div class="right">
+      <button class="ghost">Save</button>
+      <button class="ghost">Share</button>
+    </div>
+  </div>
+
+  <div class="brief">
+    <span class="label">Brief</span>
+    <span class="q">“Wide-moat compounders with durable growth, not overpriced.”</span>
+    <button class="ghost">Edit ✎</button>
+  </div>
+  <div class="lenses">
+    <span class="chip on">Quality Growth</span>
+    <span class="chip">Deep Value</span>
+    <span class="chip">Momentum</span>
+    <span class="chip">Custom</span>
+  </div>
+
+  <div class="controls">
+    <div class="ctl"><span class="name">Optimise for</span></div>
+    <div class="ctl"><span class="name">Quality</span><span class="dots" title="weight"><i class="dot f"></i><i class="dot f"></i><i class="dot f"></i><i class="dot f"></i><i class="dot"></i></span></div>
+    <div class="ctl"><span class="name">Value</span><span class="dots"><i class="dot f"></i><i class="dot f"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i></span></div>
+    <div class="ctl"><span class="name">Momentum</span><span class="dots"><i class="dot f"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i><i class="dot"></i></span></div>
+    <div class="tog on" id="togAI"><span class="sw"></span> AI overlay</div>
+    <div class="tog on" id="togQ"><span class="sw"></span> Quality cards</div>
+    <div class="filters">
+      <span class="fchip">P/S <b>&lt; 12</b><span class="x">✕</span></span>
+      <span class="fchip">Sector <b>Tech</b><span class="x">✕</span></span>
+      <span class="addf">+ add filter</span>
+    </div>
+    <div class="ctl" style="margin-left:auto"><span class="name">Top</span><span class="mono">40</span></div>
+  </div>
+
+  <div class="cov">ⓘ <b>96</b> of ~3,000 names have a research card so far — uncarded names rank on the quant factors and are filled in weekly. A quality filter never hides un-researched names.</div>
+
+  <table>
+    <thead>
+      <tr>
+        <th class="l">#</th>
+        <th class="l">Company</th>
+        <th class="l s">Quality ▾</th>
+        <th class="s">Score</th>
+        <th class="l">Why it’s here</th>
+        <th>P/S</th>
+        <th>R40</th>
+        <th>vs SPY</th>
+      </tr>
+    </thead>
+    <tbody id="tb"></tbody>
+  </table>
+
+  <p class="muted mono" style="font-size:11px;margin-top:14px">Mockup · sample data · click any row to open its research card</p>
+</div>
+
+<script>
+const ROWS = [
+  { rk:1, tk:"ADSK", nm:"Autodesk", q:5, moat:5, growth:4, earn:5, score:92, up:true,
+    why:"Industry-standard design software — sticky, 91% gross margin, FCF ≫ net income; cheap vs its 12-mo median.",
+    ps:"8.1", r40:"38", spy:"+12%",
+    card:{ researched:"17 Jun",
+      dims:[
+        ["Moat",5,"Industry-standard software; high switching costs & network effects.","dominant AEC/mfg platform; 91% gross margin = pricing power"],
+        ["Growth",4,"Secular cloud + AI tailwinds; some end-market cyclicality.","13% 3-yr revenue CAGR, long runway"],
+        ["Earnings quality",5,"Clean — recurring subscription cash.","FCF margin 36% ≫ net margin 19%"],
+        ["Balance sheet",null,"Not yet assessed — data pending.",""],
+      ],
+      breaks:["gross_margin &lt; 88","fcf_margin &lt; 30","rev_growth &lt; 10","op_margin &lt; 22"],
+      nums:"P/S 8.1 (12-mo med 9.4) · R40 38 · GM 91% · Net 19% · 52w vs SPY +12%",
+      spark:[6,7,7,8,9,9,8,8] } },
+
+  { rk:2, tk:"ALAB", nm:"Astera Labs", q:5, moat:4, growth:5, earn:5, score:90, up:true,
+    why:"High-barrier AI connectivity niche; secular demand, elite growth with real cash generation.",
+    ps:"11.2", r40:"41", spy:"+28%",
+    card:{ researched:"17 Jun",
+      dims:[
+        ["Moat",4,"Technically complex niche; deep customer integration.","high barriers to entry in AI interconnect"],
+        ["Growth",5,"Secular AI-infrastructure demand; multi-year runway.","triple-digit revenue growth off the data-centre build-out"],
+        ["Earnings quality",5,"Profitable with strong cash conversion.","FCF positive, low accruals"],
+        ["Balance sheet",null,"Not yet assessed — data pending.",""],
+      ],
+      breaks:["rev_growth &lt; 30","gross_margin &lt; 60","fcf_margin &lt; 15"],
+      nums:"P/S 11.2 (12-mo med 9.0) · R40 41 · GM 74% · 52w vs SPY +28%",
+      spark:[5,6,8,9,9,10,11,11] } },
+
+  { rk:3, tk:"DLO", nm:"DLocal", q:4, moat:4, growth:5, earn:5, score:84, up:true,
+    why:"Sticky emerging-markets payments rails; switching costs, fast growth, strong margins.",
+    ps:"6.0", r40:"46", spy:"+9%",
+    card:{ researched:"16 Jun",
+      dims:[
+        ["Moat",4,"Integrated platform for complex EM payments.","high switching costs once embedded"],
+        ["Growth",5,"Cross-border EM volume secular tailwind.","45%+ TPV growth"],
+        ["Earnings quality",5,"Cash-generative, asset-light.","FCF tracks earnings"],
+        ["Balance sheet",null,"Not yet assessed — data pending.",""],
+      ],
+      breaks:["rev_growth &lt; 20","net_margin &lt; 10"],
+      nums:"P/S 6.0 (12-mo med 7.2) · R40 46 · Net 22% · 52w vs SPY +9%",
+      spark:[7,7,6,6,7,6,6,6] } },
+
+  { rk:4, tk:"RDDT", nm:"Reddit", q:3, moat:3, growth:5, earn:1, score:71, up:true,
+    why:"Strong growth + unique data asset, but earnings don’t yet convert to cash — a watch, not a slam dunk.",
+    ps:"13.5", r40:"99", spy:"+6%",
+    card:{ researched:"15 Jun",
+      dims:[
+        ["Moat",3,"Unique community data; some network effect, not unassailable.","licensing optionality vs platform risk"],
+        ["Growth",5,"Hyper-growth monetisation ramp.","71% TTM revenue growth"],
+        ["Earnings quality",1,"Earnings don’t convert to cash yet.","heavy SBC; net income flattered vs FCF"],
+        ["Balance sheet",null,"Not yet assessed — data pending.",""],
+      ],
+      breaks:["rev_growth &lt; 30","fcf_margin &lt; 10"],
+      nums:"P/S 13.5 (12-mo med 11.0) · R40 99 · GM 90% · 52w vs SPY +6%",
+      spark:[4,6,9,11,12,13,14,13] } },
+
+  { rk:7, tk:"CALX", nm:"Calix", q:null, score:64, up:true,
+    why:null, ps:"2.9", r40:"28", spy:"+4%",
+    card:null },
+
+  { rk:9, tk:"MAMA", nm:"Mama’s Creations", q:2, moat:1, growth:3, earn:2, score:58, up:false,
+    why:"Decent growth but a commodity food maker — thin moat and lumpy cash conversion.",
+    ps:"1.6", r40:"42", spy:"-3%",
+    card:{ researched:"16 Jun",
+      dims:[
+        ["Moat",1,"Commodity prepared-foods; little differentiation.","competes on price/distribution"],
+        ["Growth",3,"Real but maturing; some cyclicality.","39% TTM rev growth slowing"],
+        ["Earnings quality",2,"Some accrual noise; margins thin.","FCF lumpy vs net income"],
+        ["Balance sheet",null,"Not yet assessed — data pending.",""],
+      ],
+      breaks:["gross_margin &lt; 25","rev_growth &lt; 15"],
+      nums:"P/S 1.6 (12-mo med 1.4) · R40 42 · GM 25% · 52w vs SPY -3%",
+      spark:[2,2,2,2,2,1,1,1] } },
+];
+
+const qClass = q => q>=5?"q5":q>=4?"q4":q>=3?"q3":q>=2?"q2":"q1";
+function spark(v){
+  const w=78,h=18,max=Math.max(...v),min=Math.min(...v),rng=(max-min)||1;
+  const pts=v.map((y,i)=>`${(i/(v.length-1)*w).toFixed(1)},${(h-((y-min)/rng)*h).toFixed(1)}`).join(" ");
+  return `<svg width="${w}" height="${h}" style="vertical-align:middle"><polyline points="${pts}" fill="none" stroke="#7f9aa2" stroke-width="1.5"/></svg>`;
+}
+function badge(r){
+  if(r.q==null) return `<span class="qb pending">◇ researching…</span>`;
+  const c=qClass(r.q);
+  return `<span class="qb"><span class="diamond ${c}">◆${r.q}</span>`+
+    `<span class="subdots">M<b class="${qClass(r.moat)}">${r.moat}</b> G<b class="${qClass(r.growth)}">${r.growth}</b> E<b class="${qClass(r.earn)}">${r.earn}</b></span></span>`;
+}
+function detail(r){
+  if(!r.card) return `<div class="card"><span class="muted">No research card yet — ranked on quant factors only. A card is written when this name reaches the front of the research queue.</span></div>`;
+  const dims=r.card.dims.map(([n,s,rat,ev])=>{
+    const sc = s==null?`<span class="muted">—</span>`:`<b class="${qClass(s)}">${s}</b>`;
+    return `<div class="dim"><div class="dl"><span class="barge">${sc}</span> ${n}</div>`+
+      `<div class="dr">${rat}${ev?`<div class="ev">evidence — ${ev}</div>`:""}</div></div>`;
+  }).join("");
+  const breaks=r.card.breaks.map(b=>`<code>${b}</code>`).join("");
+  return `<div class="card">
+    <div class="ctitle"><b>${r.tk} — ${r.nm}</b> · Quality ${r.q}/5 · researched ${r.card.researched}</div>
+    ${dims}
+    <div class="breaks"><span class="lab">Break if</span>${breaks}</div>
+    <div class="footer">
+      <div>${spark(r.card.spark)}</div>
+      <div class="nums">${r.card.nums.replace(/(\d+%|\d+\.\d+|\d+)/g,'<b>$1</b>')}</div>
+      <a href="#" style="margin-left:auto">View company page →</a>
+    </div>
+  </div>`;
+}
+function render(){
+  const tb=document.getElementById("tb");
+  tb.innerHTML = ROWS.map((r,i)=>`
+    <tr class="row" data-i="${i}">
+      <td class="l rk mono">${r.rk}</td>
+      <td class="l"><span class="tk">${r.tk}</span><span class="nm">${r.nm}</span></td>
+      <td class="l qcell">${badge(r)}</td>
+      <td class="score">${r.score} <span class="${r.up?'up':'down'}">${r.up?'▲':'▼'}</span></td>
+      <td class="why">${r.why? r.why : '<span class="pending">— ranked on quant factors</span>'} <span class="exp">▸</span></td>
+      <td class="num">${r.ps}</td>
+      <td class="num">${r.r40}</td>
+      <td class="num ${r.spy.startsWith('-')?'down':'up'}">${r.spy}</td>
+    </tr>
+    <tr class="detail" id="d${i}" style="display:none"><td colspan="8">${detail(r)}</td></tr>
+  `).join("");
+  tb.querySelectorAll("tr.row").forEach(tr=>tr.onclick=()=>{
+    const d=document.getElementById("d"+tr.dataset.i);
+    d.style.display = d.style.display==="none"?"table-row":"none";
+  });
+}
+render();
+// open ADSK by default to show the card
+document.getElementById("d0").style.display="table-row";
+
+// quality toggle: dim the badges + the quality dial when off
+document.getElementById("togQ").onclick=function(){
+  this.classList.toggle("on");
+  const on=this.classList.contains("on");
+  document.querySelectorAll(".qcell").forEach(c=>c.style.opacity=on?1:.3);
+};
+document.getElementById("togAI").onclick=function(){this.classList.toggle("on");};
+document.querySelectorAll(".chip,.lenses .chip").forEach(c=>c.onclick=()=>{
+  document.querySelectorAll(".lenses .chip").forEach(x=>x.classList.remove("on"));c.classList.add("on");});
+</script>
+</body>
+</html>
