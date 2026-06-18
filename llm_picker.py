@@ -585,7 +585,7 @@ def pick_shortlist_via_llm(
     temperature: float = 0.2,
     mandate_block: str = "",
 ) -> tuple[str, list[dict], list[str], tuple[int | None, int | None], str | None]:
-    """Reusable shortlist call — shared by llm_pick stage 1 and trading_agents.
+    """Reusable shortlist call — used by llm_pick stage 1.
 
     ``user_template`` must accept the keyword args ``snapshot_date``,
     ``universe_json``, ``portfolio_json``, ``shortlist_max`` via str.format.

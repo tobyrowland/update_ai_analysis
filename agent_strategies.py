@@ -16,10 +16,8 @@ keeps the heartbeat safe to retry and makes the journal useful.
 Current strategies:
     dual_positive  — equal-weight the top N tickers where `bear` and `bull`
                      are both ✅, deduped by company, favouring US listings.
-                     This is the rebalance version of build_portfolio.py.
     momentum       — low-churn momentum rebalance.
     llm_pick       — two-stage LLM-driven portfolio picker (llm_picker.py).
-    trading_agents — TauricResearch/TradingAgents multi-agent framework.
     watchlist_curator — mandate-aware LLM curator for human portfolios; writes
                      a shortlist into portfolio_watchlist (source='agent').
     watchlist_buyer — mechanical buyer that equal-weights a portfolio's
@@ -201,8 +199,8 @@ Strategy = Callable[[RebalanceContext], RebalanceResult]
 
 
 # ---------------------------------------------------------------------------
-# Shared helpers (mirrors build_portfolio.py — kept inline to avoid coupling
-# the strategy to the legacy script's argparse/logging plumbing)
+# Shared helpers — kept inline so the dual_positive strategy stays
+# self-contained (no coupling to external argparse/logging plumbing)
 # ---------------------------------------------------------------------------
 
 
@@ -1648,14 +1646,6 @@ def _portfolio_reviewer_lazy(ctx: RebalanceContext) -> RebalanceResult:
     return rebalance_portfolio_reviewer(ctx)
 
 
-def _trading_agents_lazy(ctx: RebalanceContext) -> RebalanceResult:
-    # Lazy-imported so the upstream TauricResearch/TradingAgents
-    # framework (and its heavy LangChain dependency tree) doesn't load
-    # for unrelated heartbeats.
-    from trading_agents_strategy import rebalance_trading_agents
-    return rebalance_trading_agents(ctx)
-
-
 # NOTE: `watchlist_curator` is intentionally NOT registered. The configurable
 # screener is the funnel's selection stage now (screener brief v2 §3) — a
 # portfolio's candidate set is the top N of its `screen_config`, read directly
@@ -1666,7 +1656,6 @@ STRATEGIES: dict[str, Strategy] = {
     "dual_positive": rebalance_dual_positive,
     "momentum": rebalance_momentum,
     "llm_pick": _llm_pick_lazy,
-    "trading_agents": _trading_agents_lazy,
     "watchlist_buyer": rebalance_watchlist_buyer,
     "llm_watchlist_buyer": _llm_watchlist_buyer_lazy,
     "ma_sniper": rebalance_ma_sniper,
