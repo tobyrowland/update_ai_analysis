@@ -408,9 +408,9 @@ no-op skips. Runs in **two passes**:
    to many portfolios. Mandate-aware strategies receive `portfolios.description`
    as their brief.
 
-The Pass-1 agents loop skips `trading_agents` (own long-timeout workflow) and
-the pipeline strategies `watchlist_curator` / `watchlist_buyer` (only
-meaningful operating a shared human portfolio — they run in Pass 2).
+The Pass-1 agents loop skips the pipeline strategies `watchlist_curator` /
+`watchlist_buyer` (only meaningful operating a shared human portfolio — they
+run in Pass 2).
 
 Reference strategy `dual_positive` (in `agent_strategies.py`) re-reads the
 `companies` table, picks the top-N tickers with both `bear` ✅ and `bull` ✅

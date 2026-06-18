@@ -183,8 +183,8 @@ def _journal(
     db.insert_agent_heartbeat(row)
     # Update last_heartbeat_at on every persisted attempt — success or error.
     # This honours the agents.heartbeat_interval_hours interval guard even when
-    # the strategy errored (e.g. tauric-qwen's parked-with-9999h state stays
-    # in effect after a permanent-failure attempt; transient errors back off
+    # the strategy errored (a parked agent's long interval-guard stays in
+    # effect after a permanent-failure attempt; transient errors back off
     # by the same interval as successful runs).
     #
     # advance_agent is False for human-portfolio member runs: those rebalance
@@ -749,11 +749,6 @@ def _run_portfolio(
             logger.info("    %-22s skip (no strategy)", handle)
             counts["skipped"] += 1
             continue
-        # trading_agents runs from its own long-timeout workflow.
-        if strategy_name == "trading_agents":
-            logger.info("    %-22s skip (trading_agents)", handle)
-            counts["skipped"] += 1
-            continue
 
         strategy = get_strategy(strategy_name)
         if strategy is None:
@@ -922,15 +917,6 @@ def main() -> int:
         agents = [agent]
     else:
         agents = db.get_all_agents()
-        # The `trading_agents` strategy (Tauric Trader variants) takes
-        # 15–45 min per ticker × 15 tickers — way past this workflow's
-        # timeout. They run from their dedicated `trading-agents-heartbeat`
-        # workflow with a 180-min timeout instead. Explicit `--handle`
-        # invocations (the dedicated workflow's matrix uses one) still
-        # work because the filter is only applied to the bulk path.
-        agents = [
-            a for a in agents if a.get("strategy") != "trading_agents"
-        ]
 
     logger.info(
         "=== agent_heartbeat: %d agents (dry_run=%s, force=%s, manual=%s) ===",
