@@ -19,6 +19,7 @@ py = {
         "rank": r["rank"],
         "adj_z": round(r["adj_z"], 6),
         "base_z": round(r["base_z"], 6),
+        "firing_breaks": r["firing_breaks"],
     }
     for r in ranked
 }
@@ -31,7 +32,7 @@ for row in ts:
         print(f"MISSING in python: {t}")
         ok = False
         continue
-    for k in ("final_pct", "base_pct", "rank"):
+    for k in ("final_pct", "base_pct", "rank", "firing_breaks"):
         if row[k] != p[k]:
             print(f"DIVERGE {t}.{k}: ts={row[k]} py={p[k]}")
             ok = False

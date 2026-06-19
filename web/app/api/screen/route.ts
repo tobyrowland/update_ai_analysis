@@ -56,6 +56,7 @@ const DISPLAY = [
   "earnings_score",
   "growth_score",
   "break_count",
+  "firing_breaks",
   "has_card",
   "research_card",
   // Peer median P/S (display only, brief §5).

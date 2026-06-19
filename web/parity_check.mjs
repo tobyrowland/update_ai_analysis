@@ -21,5 +21,6 @@ const out = res.rows.map((r) => ({
   rank: r.rank,
   adj_z: Math.round(r.adj_z * 1e6) / 1e6,
   base_z: Math.round(r.base_z * 1e6) / 1e6,
+  firing_breaks: r.firing_breaks,
 }));
 process.stdout.write(JSON.stringify(out));

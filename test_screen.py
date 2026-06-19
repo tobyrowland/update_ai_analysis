@@ -182,6 +182,35 @@ class TestSingleScore(unittest.TestCase):
         self.assertAlmostEqual(out[0]["adj_z"], screen.BUDGET, places=9)
         self.assertTrue(out[0]["capped"])
 
+    def test_firing_breaks_only_counts_currently_true_signals(self):
+        # A card whose break thresholds sit BELOW current metrics (ANET-style) has
+        # 0 firing; one whose threshold is breached now fires.
+        def card(*signals):
+            return {"has_card": True, "moat_score": 4, "earnings_score": 4,
+                    "research_card": {"break_signals": list(signals)}}
+        rows = facts(
+            {"ticker": "CLEAN", "gross_margin": 63.5, "rev_growth_ttm": 30.6, "operating_margin": 42.8,
+             **card({"field": "gross_margin_pct", "op": "<", "value": 60},
+                    {"field": "rev_growth_ttm_pct", "op": "<", "value": 15},
+                    {"field": "operating_margin_pct", "op": "<", "value": 38})},
+            {"ticker": "FIRING", "gross_margin": 40, "rev_growth_ttm": 30,
+             **card({"field": "gross_margin_pct", "op": "<", "value": 60})},
+            {"ticker": "CHANGEPCT", "rev_growth_ttm": 30,
+             **card({"field": "rev_growth_ttm_pct", "op": "change_pct_lt", "value": -5})},
+            {"ticker": "UNMAPPED", "gross_margin": 10,
+             **card({"field": "eps_yoy_pct", "op": "<", "value": 0})},
+        )
+        out = {r["ticker"]: r for r in screen.score_screen(rows, {"weights": {"quality": 100, "value": 0, "momentum": 0}}, UNIT_STATS)}
+        self.assertEqual(out["CLEAN"]["firing_breaks"], 0)        # all thresholds below current
+        self.assertEqual(out["FIRING"]["firing_breaks"], 1)      # 40 < 60 → fires
+        self.assertEqual(out["CHANGEPCT"]["firing_breaks"], 0)   # no snapshot → not firing
+        self.assertEqual(out["UNMAPPED"]["firing_breaks"], 0)    # field not in screen facts
+
+    def test_firing_breaks_zero_when_no_card(self):
+        rows = facts({"ticker": "NOCARD", "gross_margin": 10})
+        out = screen.score_screen(rows, {"weights": {"quality": 100, "value": 0, "momentum": 0}}, UNIT_STATS)
+        self.assertEqual(out[0]["firing_breaks"], 0)
+
     def test_carded_lift_beats_uncarded_same_base(self):
         # A low-base strong-card name lifts above a same-base uncarded name.
         rows = facts(
