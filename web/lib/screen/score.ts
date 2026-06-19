@@ -97,6 +97,7 @@ export interface ScoredRow extends ScreenFacts {
   momentum_z: number;
   base_pct: number; // round(Φ(base_z)·100)
   final_pct: number; // round(Φ(final_z)·100) — the displayed Score
+  firing_breaks: number; // break signals currently firing against the row's facts
 }
 
 export interface LensStat {
@@ -223,6 +224,52 @@ function adjZ(r: ScreenFacts, budget = BUDGET): Adj {
   return { adj_z: adj, moat_z, earn_z, break_z, capped, floored };
 }
 
+// ---- break-signal firing (display) ----------------------------------------
+// A research card's break_signals are forward-looking watch-conditions; the
+// screener flags a name red only when one is CURRENTLY firing against its own
+// facts. Mirrors screen.py firing_break_count + theses._evaluate_signal. Maps the
+// signal vocabulary (_ALLOWED_SIGNAL_FIELDS) onto ScreenFacts columns.
+const SIGNAL_FIELD_MAP: Record<string, keyof ScreenFacts> = {
+  gross_margin_pct: "gross_margin",
+  operating_margin_pct: "operating_margin",
+  net_margin_pct: "net_margin",
+  fcf_margin_pct: "fcf_margin",
+  rev_growth_ttm_pct: "rev_growth_ttm",
+  rule_of_40: "rule_of_40",
+  r40_score: "rule_of_40",
+  ps_now: "ps",
+  perf_52w_vs_spy: "perf_52w_vs_spy",
+  price: "price",
+};
+const STATIC_OPS: Record<string, (c: number, t: number) => boolean> = {
+  ">": (c, t) => c > t,
+  ">=": (c, t) => c >= t,
+  "<": (c, t) => c < t,
+  "<=": (c, t) => c <= t,
+  "==": (c, t) => c === t,
+  "!=": (c, t) => c !== t,
+};
+
+/** True iff this break signal's condition is currently true against the facts.
+ *  Unmapped fields, missing/non-numeric values, and change_pct_* ops (no
+ *  snapshot in the screener) → false (conservative; matches theses). */
+export function signalFires(facts: ScreenFacts, signal: CardBreak): boolean {
+  const col = signal.field ? SIGNAL_FIELD_MAP[signal.field] : undefined;
+  const op = signal.op;
+  if (!col || !op || !(op in STATIC_OPS)) return false;
+  const cur = num((facts as unknown as Record<string, unknown>)[col]);
+  const thr = num(signal.value);
+  if (cur == null || thr == null) return false;
+  return STATIC_OPS[op](cur, thr);
+}
+
+/** How many of the card's break signals are firing right now against the row. */
+export function firingBreakCount(facts: ScreenFacts, card: ResearchCard | null): number {
+  const signals = card?.break_signals;
+  if (!Array.isArray(signals)) return 0;
+  return signals.reduce((n, s) => n + (signalFires(facts, s) ? 1 : 0), 0);
+}
+
 function matchesFilter(row: ScreenFacts, f: Filter): boolean {
   const raw = (row as unknown as Record<string, unknown>)[f.field === "ps" ? "ps" : f.field];
   if (TEXT_FIELDS.has(f.field)) {
@@ -309,6 +356,7 @@ export function scoreScreen(
       momentum_z: zm,
       base_pct: Math.round(Phi(base_z) * 100),
       final_pct: Math.round(Phi(final_z) * 100),
+      firing_breaks: firingBreakCount(r, r.research_card),
     };
   });
 

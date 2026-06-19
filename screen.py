@@ -204,6 +204,63 @@ def _z(x: float | None, st: dict | None) -> float:
     return max(-3.0, min(3.0, (x - st.get("mu", 0.0)) / sigma))
 
 
+# ---- break-signal firing (display) ----------------------------------------
+# A research card's break_signals are forward-looking watch-conditions; the
+# screener flags a name red only when one is CURRENTLY firing against its own
+# facts. Mirrors theses._evaluate_signal (the reviewer's checker) + score.ts.
+# Maps the signal vocabulary (_ALLOWED_SIGNAL_FIELDS) onto screen-fact columns.
+_SIGNAL_FIELD_MAP = {
+    "gross_margin_pct": "gross_margin",
+    "operating_margin_pct": "operating_margin",
+    "net_margin_pct": "net_margin",
+    "fcf_margin_pct": "fcf_margin",
+    "rev_growth_ttm_pct": "rev_growth_ttm",
+    "rule_of_40": "rule_of_40",
+    "r40_score": "rule_of_40",
+    "ps_now": "ps",
+    "perf_52w_vs_spy": "perf_52w_vs_spy",
+    "price": "price",
+}
+_STATIC_OPS = {
+    ">": lambda c, t: c > t,
+    ">=": lambda c, t: c >= t,
+    "<": lambda c, t: c < t,
+    "<=": lambda c, t: c <= t,
+    "==": lambda c, t: c == t,
+    "!=": lambda c, t: c != t,
+}
+
+
+def _signal_fires(row: dict, signal: dict) -> bool:
+    """True iff this break signal's condition is currently true against the row.
+
+    Unmapped fields, missing/non-numeric values, and change_pct_* ops (which need
+    a prior snapshot the screener doesn't have) all return False — conservative,
+    matching theses._evaluate_signal (no false positives)."""
+    if not isinstance(signal, dict):
+        return False
+    col = _SIGNAL_FIELD_MAP.get(signal.get("field"))
+    op = signal.get("op")
+    if col is None or op not in _STATIC_OPS:
+        return False
+    cur = _f(row.get(col))
+    thr = _f(signal.get("value"))
+    if cur is None or thr is None:
+        return False
+    return bool(_STATIC_OPS[op](cur, thr))
+
+
+def firing_break_count(row: dict) -> int:
+    """How many of the row's research-card break signals are firing right now."""
+    card = row.get("research_card")
+    if not isinstance(card, dict):
+        return 0
+    signals = card.get("break_signals")
+    if not isinstance(signals, list):
+        return 0
+    return sum(1 for s in signals if _signal_fires(row, s))
+
+
 def _adj_z(row: dict, budget: float = BUDGET) -> dict:
     """AI trajectory adjustment (brief §2). Only for carded names; otherwise 0.
     Growth durability is deliberately NOT in the formula (already in R40)."""
@@ -276,6 +333,9 @@ def score_screen(facts: list[dict], config: dict,
         row["momentum_z"] = zm
         row["base_pct"] = round(phi(base_z) * 100)
         row["final_pct"] = round(phi(final_z) * 100)
+        # Count of break signals currently firing (display: the red "AI flags"
+        # chip / pip), distinct from break_count (how many are defined).
+        row["firing_breaks"] = firing_break_count(r)
         # `score` stays the canonical sort key (now = final_z, the single score).
         row["score"] = final_z
         scored.append(row)

@@ -199,6 +199,7 @@ export default async function ScreenerPage({
                 earnings_score: r.earnings_score,
                 growth_score: r.growth_score,
                 break_count: r.break_count,
+                firing_breaks: r.firing_breaks,
                 has_card: r.has_card,
                 research_card: r.research_card,
                 industry_ps_median: r.industry_ps_median,

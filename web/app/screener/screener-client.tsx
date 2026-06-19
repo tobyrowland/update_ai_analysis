@@ -26,7 +26,7 @@ import {
   type FilterOp,
   type ScreenConfig,
 } from "@/lib/screen/config";
-import { BUDGET, type ResearchCard } from "@/lib/screen/score";
+import { BUDGET, signalFires, type ResearchCard } from "@/lib/screen/score";
 import type { ScreenHolding } from "@/lib/screen/holdings-query";
 import type { PsPoint } from "@/lib/screen/ps-history-query";
 import ScreenSparkline from "@/components/screen-sparkline";
@@ -68,6 +68,7 @@ interface Row {
   earnings_score: number | null;
   growth_score: number | null;
   break_count: number | null;
+  firing_breaks: number | null;
   has_card: boolean;
   research_card: ResearchCard | null;
   industry_ps_median: number | null;
@@ -423,10 +424,11 @@ export default function ScreenerClient({
         };
         if (cancelled) return;
         const h = json.holdings ?? {};
-        // Mark held names whose card has break signals as "review" (amber).
+        // Mark held names with a CURRENTLY-FIRING break signal as "review" (amber)
+        // — something actually wrong now, not just a defined watch-condition.
         const breakSet = new Set(
           data.rows
-            .filter((r) => (r.break_count ?? 0) > 0)
+            .filter((r) => (r.firing_breaks ?? 0) > 0)
             .map((r) => r.ticker.toUpperCase()),
         );
         for (const k of Object.keys(h)) {
@@ -1373,7 +1375,8 @@ const sgn = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(2)}`;
 /** The signal chip text/tone for a carded row (brief §3). */
 function sigOf(r: Row): [tone: string, label: string] | null {
   if (!r.has_card) return null;
-  if ((r.break_count ?? 0) > 0) return ["flags", "AI flags"];
+  // Flag red only when a break signal is CURRENTLY firing — not merely defined.
+  if ((r.firing_breaks ?? 0) > 0) return ["flags", "AI flags"];
   if (r.base_pct < 60 && r.adj_z > 0) return ["turn", "turnaround"];
   if (r.capped || r.adj_z >= BUDGET * 0.8) return ["backs", "AI backs"];
   if (r.adj_z > 0) return ["lifts", "AI lifts"];
@@ -1433,9 +1436,9 @@ function DurabilityBadge({ r }: { r: Row }) {
         {bar(c.earnings_quality?.score, "scored", `Earnings ${c.earnings_quality?.score ?? "—"}/5 · scored · ${sgn(r.earn_z)}σ`)}
         {bar(null, "gated", "Balance-sheet risk · gated, awaiting cash/debt/shares")}
       </span>
-      {(r.break_count ?? 0) > 0 && (
+      {(r.firing_breaks ?? 0) > 0 && (
         <span
-          title={`${r.break_count} break signal${(r.break_count ?? 0) > 1 ? "s" : ""}`}
+          title={`${r.firing_breaks} break signal${(r.firing_breaks ?? 0) > 1 ? "s" : ""} firing now`}
           className="text-[10px] text-[var(--color-red,#FF3333)]"
         >
           ⚑
@@ -1837,19 +1840,31 @@ function RowView({
                   <DimCard label="Balance-sheet risk" gated />
                   <div className="mt-4 border-t border-white/10 pt-3">
                     <div className="font-mono text-[10.5px] uppercase tracking-[0.1em] text-[#e0a23c] mb-2">
-                      Break signals
+                      Break signals{" "}
+                      <span className="text-text-muted/70 normal-case tracking-normal">
+                        — watch-conditions; red = firing now
+                      </span>
                     </div>
                     {(r.research_card.break_signals?.length ?? 0) > 0 ? (
                       <ul className="space-y-1.5">
-                        {r.research_card.break_signals!.map((b, i) => (
-                          <li key={i} className="text-[12.5px] text-text-dim flex gap-2">
-                            <span className="text-[#e0a23c]">⚑</span>
-                            {b.description ?? `${b.field ?? ""} ${b.op ?? ""} ${b.value ?? ""}`.trim()}
-                          </li>
-                        ))}
+                        {r.research_card.break_signals!.map((b, i) => {
+                          const firing = signalFires(r, b);
+                          return (
+                            <li
+                              key={i}
+                              className={`text-[12.5px] flex gap-2 ${firing ? "text-[var(--color-red,#FF3333)]" : "text-text-muted"}`}
+                            >
+                              <span className={firing ? "text-[var(--color-red,#FF3333)]" : "text-text-muted/50"}>⚑</span>
+                              <span>
+                                {b.description ?? `${b.field ?? ""} ${b.op ?? ""} ${b.value ?? ""}`.trim()}
+                                {!firing && <span className="text-text-muted/60"> · watch</span>}
+                              </span>
+                            </li>
+                          );
+                        })}
                       </ul>
                     ) : (
-                      <p className="text-[12px] text-text-muted">None tripped.</p>
+                      <p className="text-[12px] text-text-muted">None defined.</p>
                     )}
                   </div>
                 </>
