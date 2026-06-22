@@ -373,11 +373,11 @@ BEGIN
     END IF;
 
     SELECT
-        COALESCE(SUM(h.quantity * COALESCE(c.price, h.avg_cost_usd)), 0)::NUMERIC(14,2),
+        COALESCE(SUM(h.quantity * COALESCE(s.price, h.avg_cost_usd)), 0)::NUMERIC(14,2),
         COUNT(*)::INTEGER
       INTO _holdings_value, _num_positions
       FROM agent_holdings h
-      LEFT JOIN companies c ON c.ticker = h.ticker
+      LEFT JOIN securities s ON s.ticker = h.ticker
      WHERE h.agent_id = _agent_id;
 
     _total_value := _cash + _holdings_value;
