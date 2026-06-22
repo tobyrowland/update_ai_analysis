@@ -512,6 +512,35 @@ class SupabaseDB:
         resp = q.execute()
         return resp.data or []
 
+    def get_all_valuation_latest(self) -> dict[str, dict]:
+        """Return the latest valuation row per ticker, keyed by ticker.
+
+        The Level 0 replacement for `get_all_price_sales()` — used by
+        price_sales_updater.py to read each ticker's prior P/S state (history /
+        ATH / as-of date) for incremental updates. Paginates the whole table and
+        keeps the newest `date` per ticker.
+        """
+        latest: dict[str, dict] = {}
+        page = 0
+        page_size = 1000
+        while True:
+            resp = (
+                self.client.table("valuation")
+                .select("ticker, date, ps, ps_ath, history_json")
+                .order("date", desc=True)
+                .range(page * page_size, (page + 1) * page_size - 1)
+                .execute()
+            )
+            batch = resp.data or []
+            for row in batch:
+                t = row.get("ticker")
+                if t and t not in latest:  # rows arrive newest-first
+                    latest[t] = row
+            if len(batch) < page_size:
+                break
+            page += 1
+        return latest
+
     def get_valuation_tickers(self) -> set[str]:
         """Return the set of tickers that have at least one valuation row."""
         tickers: set[str] = set()

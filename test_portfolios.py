@@ -187,39 +187,35 @@ class DbPortfolioHelpersTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# PortfolioManager.get_price — Level 0 primary, legacy companies fallback
+# PortfolioManager.get_price — Level 0 is the sole source (companies retired)
 # ---------------------------------------------------------------------------
 
 
 class GetPriceFallbackTests(unittest.TestCase):
-    """Pricing now reads Level 0 first (migration 058), so every Tier-1 name is
-    priceable for trading + MTM; `companies.price` is only a transitional
-    fallback until that table is retired."""
+    """Pricing reads Level 0 only (companies retired): securities.price →
+    prices_daily → last_close, all via get_level0_close()."""
 
-    def _pm(self, company, level0, security=None):
+    def _pm(self, level0, security=None):
         pm = portfolio_module.PortfolioManager.__new__(
             portfolio_module.PortfolioManager
         )
         pm.db = SimpleNamespace(
-            get_company=lambda t: company,
             get_level0_close=lambda t: level0,
             get_security=lambda t: security,
         )
         return pm
 
-    def test_level0_price_wins(self):
-        # Level 0 is primary now — it beats a (stale) legacy companies.price.
-        self.assertEqual(self._pm({"price": 42.0}, 99.0).get_price("AAA"), 99.0)
+    def test_level0_price_used(self):
+        self.assertEqual(self._pm(180.5).get_price("TSM"), 180.5)
 
-    def test_level0_prices_names_absent_from_companies(self):
-        self.assertEqual(self._pm(None, 180.5).get_price("TSM"), 180.5)
-
-    def test_companies_fallback_when_level0_empty(self):
-        self.assertEqual(self._pm({"price": 42.0}, None).get_price("AAA"), 42.0)
+    def test_raises_when_known_but_unpriced(self):
+        # Ticker exists in securities but Level 0 has no usable price.
+        with self.assertRaises(portfolio_module.PortfolioError):
+            self._pm(None, security={"ticker": "AAA"}).get_price("AAA")
 
     def test_unknown_ticker_raises(self):
         with self.assertRaises(portfolio_module.PortfolioError):
-            self._pm(None, None, security=None).get_price("ZZZ")
+            self._pm(None, security=None).get_price("ZZZ")
 
 
 # PortfolioManager._ensure_portfolio_for_agent — creates the 1:1 shim
@@ -292,8 +288,10 @@ class PortfolioTradingTests(unittest.TestCase):
         return pm
 
     def _can_price(self, db, ticker: str, price: float) -> None:
+        # Pricing reads Level 0 now: get_price -> get_level0_close ->
+        # get_security(ticker), which returns securities.price.
         db.client.canned_selects[
-            ("companies", frozenset({("ticker", ticker)}))
+            ("securities", frozenset({("ticker", ticker)}))
         ] = [{"ticker": ticker, "price": price}]
 
     def test_require_portfolio_account_raises_when_missing(self):
