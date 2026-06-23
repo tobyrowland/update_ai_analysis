@@ -20,7 +20,7 @@ Selection: the `top_n` stalest Tier-1 names by the OLDER of bull_at/bear_at
 names. Writes ONLY `ai_analysis`. One engine failing never drops the other's
 results.
 
-Schedule: daily ~04:00 UTC.
+Schedule: daily ~05:00 UTC (after the Level 0 data block settles).
 """
 
 from __future__ import annotations

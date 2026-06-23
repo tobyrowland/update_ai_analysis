@@ -15,10 +15,9 @@ Daily (UTC):
 03:00           nightly_screen.py         TradingView screen → add new tickers to companies table
 03:30           eodhd_updater.py          Fetch 20+ financial metrics from EODHD
 03:45           benchmarks_updater.py     Fetch SPY + URTH adjusted closes for leaderboard
-04:00           verdict_evaluation.py     Consolidated bull (Claude) + bear (Gemini) over ONE shared batch/clock — 300 stalest Tier-1 by min(bull_at,bear_at). Models stay distinct (adversarial); only batch+clock shared so bull_at==bear_at
-04:15           research_evaluation.py    Shared per-equity research card (moat/durability/earnings-quality/balance-sheet, 1-5 + break signals) PLUS the page narrative (short/full outlook + key risks) — 300 stalest Tier-1, one per-ticker Gemini call
 04:30           price_sales_updater.py    P/S ratio tracking + 52w history
-05:00           score_ai_analysis.py      Score, rank & assign sort_order
+05:00           verdict_evaluation.py     Consolidated bull (Claude) + bear (Gemini) over ONE shared batch/clock — 300 stalest Tier-1 by min(bull_at,bear_at). Models stay distinct (adversarial); only batch+clock shared so bull_at==bear_at. Runs after the Level 0 data block settles, before the 07:00 heartbeat
+05:15           research_evaluation.py    Shared per-equity research card (moat/durability/earnings-quality/balance-sheet, 1-5 + break signals) PLUS the page narrative (short/full outlook + key risks) — 300 stalest Tier-1, one per-ticker Gemini call
 05:30           portfolio_valuation.py    Mark-to-market every agent + human portfolio
 06:00           build_universe_snapshot.py  Daily universe JSON snapshot (3 tiers)
 07:00           agent_heartbeat.py        Rebalance loop — every agent / human-portfolio member that is due on its own heartbeat_interval_hours cadence
@@ -338,7 +337,7 @@ day's last intraday tick (~21:45 UTC) so `portfolio_valuation.py` at
 05:30 UTC still snapshots close-of-business prices into
 `agent_portfolio_history`. Supports `--dry-run` and `--tickers` flags.
 
-### verdict_evaluation.py (04:00 UTC daily)
+### verdict_evaluation.py (05:00 UTC daily)
 The **consolidated bull + bear pass** (replaces the separate `bull-evaluation`
 + `bear-evaluation` crons). Bull and bear stay on **different models on purpose**
 — bull = Claude (`claude-opus-4-6`), bear = Gemini (`gemini-2.5-flash`): a

@@ -2,14 +2,17 @@ name: Research Evaluation
 
 # The shared per-equity research card (migration 055): scored moat / growth
 # durability / earnings quality / balance-sheet risk + base break signals,
-# computed once per equity and read by every portfolio's buyer.
+# PLUS the page narrative — computed once per equity and read by every
+# portfolio's buyer.
 #
-# Daily 04:15 UTC — rotation batch of 100 stalest by ai_analysis.researched_at,
-# alongside bull (04:30) / bear (04:00). Per-ticker LLM call, parallelised.
+# Daily 05:15 UTC — rotation batch of 300 stalest by ai_analysis.researched_at,
+# right after the verdict pass (05:00) and after the Level 0 data block has
+# settled (fundamentals 03:30, prices 04:15, P/S 04:30). Per-ticker LLM call,
+# parallelised.
 
 on:
   schedule:
-    - cron: "15 4 * * *"
+    - cron: "15 5 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
