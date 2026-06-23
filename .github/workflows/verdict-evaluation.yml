@@ -6,11 +6,13 @@ name: Verdict Evaluation
 # batch and write both verdicts with the SAME clock, so bull_at/bear_at never
 # drift. Replaces the separate bull-evaluation + bear-evaluation crons.
 #
-# Daily 04:00 UTC — 300 stalest Tier-1 by min(bull_at, bear_at).
+# Daily 05:00 UTC — 300 stalest Tier-1 by min(bull_at, bear_at). Runs after the
+# Level 0 data block has settled (fundamentals 03:30, prices 04:15, P/S 04:30)
+# and well before the 07:00 buyer heartbeat reads ai_analysis.
 
 on:
   schedule:
-    - cron: "0 4 * * *"
+    - cron: "0 5 * * *"
   workflow_dispatch:
     inputs:
       dry_run:

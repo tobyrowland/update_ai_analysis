@@ -25,7 +25,7 @@ Rotation: the `top_n` stalest Tier-1 names by `ai_analysis.researched_at`
 Writes ONLY `ai_analysis` (the card is a Level 0 concept). Per-ticker LLM call
 (structured JSON), parallelised — robust to one bad response.
 
-Schedule: daily ~04:15 UTC, alongside the verdict (bull+bear) pass.
+Schedule: daily ~05:15 UTC, just after the verdict (bull+bear) pass.
 """
 
 from __future__ import annotations
