@@ -8,7 +8,7 @@ import {
   excludeFromScreener,
   unexcludeFromScreener,
 } from "@/lib/screen/exclusions-mutations";
-import { restoreRejection } from "@/lib/screen/rejections-mutations";
+import { restoreRejection, restoreAllRejections } from "@/lib/screen/rejections-mutations";
 import {
   FILTER_FIELDS,
   FILTER_OPS,
@@ -26,7 +26,14 @@ import {
   type FilterOp,
   type ScreenConfig,
 } from "@/lib/screen/config";
-import { BUDGET, isFinancialSector, signalFires, type ResearchCard } from "@/lib/screen/score";
+import {
+  BUDGET,
+  isFinancialSector,
+  scoreScreen,
+  signalFires,
+  type ResearchCard,
+  type ScreenFacts,
+} from "@/lib/screen/score";
 import type { ScreenHolding } from "@/lib/screen/holdings-query";
 import type { PsPoint } from "@/lib/screen/ps-history-query";
 import ScreenSparkline from "@/components/screen-sparkline";
@@ -74,7 +81,9 @@ interface Row {
   break_count: number | null;
   firing_breaks: number | null;
   has_card: boolean;
-  research_card: ResearchCard | null;
+  // Compiled one-line thesis (best stored rationale). The full research_card
+  // text is lazy-loaded on row-expand via /api/screen/card, not shipped in bulk.
+  thesis_line: string | null;
   industry_ps_median: number | null;
   sector_ps_median: number | null;
   peer_ps_median: number | null;
@@ -84,7 +93,6 @@ interface ScreenData {
   rows: Row[];
   match_count: number;
   total_universe: number;
-  cut_index: number;
   data_asof: string | null;
   /** Viewer's active per-portfolio rejections (migration 051); only the
    *  /api/screen route populates this (SSR is anonymous). */
@@ -150,8 +158,6 @@ const RANKING_HELP =
   "Each name's Score is a single number: a cross-sectional z-score blend of Quality, Value and Momentum (the 'base'), adjusted by the AI's read of durability, shown as a universe percentile. A research tool, not a recommendation.";
 const AI_HELP =
   "AI authority is the maximum the research card can move a name, in standard deviations: a strong, unbroken card lifts up to +0.7σ; a weak moat or break signals cut it (floored at −1.5σ). Fixed server-side so the ranking stays canonical — growth durability is never scored (already in R40).";
-const TOPN_HELP =
-  "The top N ranked names become your buyer's candidate pool — the cut line in the table. Only these feed the swarm.";
 
 // How many visits the "how this works" intro auto-shows before it stays hidden.
 const INTRO_MAX_VIEWS = 3;
@@ -227,17 +233,48 @@ export default function ScreenerClient({
   // Lazy P/S sparkline series, per ticker, fetched on first row-expand (the
   // series isn't in the matview — brief §5). "loading" while in flight.
   const [psHistory, setPsHistory] = useState<Record<string, PsPoint[] | "loading">>({});
+  // Full research_card text (rationale/evidence + break-signal list) — lazy-
+  // loaded on first expand, since it's NOT in the bulk payload (only the
+  // compiled `thesis_line` is). "loading" while in flight.
+  const [cards, setCards] = useState<Record<string, ResearchCard | null | "loading">>({});
   const firstRender = useRef(true);
   const configHydrated = useRef(false);
   const customHydrated = useRef(false);
+  // Latest loaded rows (the scoreable facts) + the last-applied config — so the
+  // debounced re-rank can recompute locally when only weights/sort changed
+  // (the candidate set is unchanged) instead of refetching the whole universe.
+  const rowsRef = useRef(data.rows);
+  useEffect(() => {
+    rowsRef.current = data.rows;
+  }, [data.rows]);
+  const prevConfigRef = useRef(config);
 
   // Render only the first chunk; "Load more" reveals more from memory. Reset to
   // the first page whenever the ranking changes.
   useEffect(() => setVisible(PAGE_SIZE), [data]);
 
-  // Fetch a ticker's 12-mo P/S series once, on first expand. Cached in state so
-  // re-opening a row is instant; never blocks the cached page.
+  // Fetch a ticker's 12-mo P/S series + (if carded) its full research_card once,
+  // on first expand. Cached in state so re-opening a row is instant; never
+  // blocks the cached page. Both endpoints are CDN-cacheable.
   const psRequested = useRef<Set<string>>(new Set());
+  const cardRequested = useRef<Set<string>>(new Set());
+  const loadCard = useCallback((ticker: string) => {
+    const t = ticker.toUpperCase();
+    if (cardRequested.current.has(t)) return; // already loading/loaded
+    cardRequested.current.add(t);
+    setCards((prev) => ({ ...prev, [t]: "loading" }));
+    (async () => {
+      try {
+        const res = await fetch(`/api/screen/card?ticker=${encodeURIComponent(t)}`, {
+          cache: "force-cache",
+        });
+        const json = res.ok ? ((await res.json()) as { research_card?: ResearchCard | null }) : null;
+        setCards((prev) => ({ ...prev, [t]: json?.research_card ?? null }));
+      } catch {
+        setCards((prev) => ({ ...prev, [t]: null }));
+      }
+    })();
+  }, []);
   const loadPsHistory = useCallback((ticker: string) => {
     const t = ticker.toUpperCase();
     if (psRequested.current.has(t)) return; // already loading/loaded
@@ -347,24 +384,53 @@ export default function ScreenerClient({
   }
 
   // Live re-rank on config change (debounced) + URL sync. Skips initial mount.
+  // A weight/sort change doesn't change the candidate SET, so we recompute the
+  // ranking locally over the rows already in memory (scoreScreen — the exact
+  // function the server runs, so byte-identical) with NO network. Only a
+  // filter / sector / hideRejected change (which changes the set) refetches.
   useEffect(() => {
     if (firstRender.current) {
       firstRender.current = false;
       return;
     }
     const handle = setTimeout(async () => {
-      setLoading(true);
       const encoded = encodeConfig(config);
-      try {
-        const res = await fetch(`/api/screen?config=${encoded}`, { cache: "no-store" });
-        if (res.ok) {
-          const json = (await res.json()) as ScreenData;
-          setData(json);
-          if (json.rejected) setRejected(json.rejected);
+      const prev = prevConfigRef.current;
+      prevConfigRef.current = config;
+      const sameSet =
+        JSON.stringify(prev.filters) === JSON.stringify(config.filters) &&
+        prev.hideRejected === config.hideRejected;
+
+      if (sameSet && rowsRef.current.length) {
+        // Local re-rank — instant, zero bytes. firing_breaks/thesis_line are
+        // weight-independent (and the card text isn't in memory), so carry them
+        // over from the existing rows by ticker.
+        const facts = rowsRef.current as unknown as ScreenFacts[];
+        const result = scoreScreen(facts, config, facts.length);
+        const byTicker = new Map(rowsRef.current.map((r) => [r.ticker, r]));
+        const rows = result.rows.map((sr) => {
+          const prevRow = byTicker.get(sr.ticker);
+          return {
+            ...(sr as unknown as Row),
+            thesis_line: prevRow?.thesis_line ?? null,
+            firing_breaks: prevRow?.firing_breaks ?? sr.firing_breaks,
+          } as Row;
+        });
+        setData((d) => ({ ...d, rows }));
+      } else {
+        setLoading(true);
+        try {
+          const res = await fetch(`/api/screen?config=${encoded}`, { cache: "no-store" });
+          if (res.ok) {
+            const json = (await res.json()) as ScreenData;
+            setData(json);
+            if (json.rejected) setRejected(json.rejected);
+          }
+        } finally {
+          setLoading(false);
         }
-      } finally {
-        setLoading(false);
       }
+
       const isClean = encoded === encodeConfig(presetConfig(config.preset ?? ""));
       const url =
         isClean && config.preset && config.preset !== "custom"
@@ -574,6 +640,29 @@ export default function ScreenerClient({
     } catch {
       restore();
       setRejMsg(`Couldn’t restore ${t} — are you signed in?`);
+    } finally {
+      setRejBusy(false);
+    }
+  }
+
+  // Restore ALL auto-hidden names at once (migration 051). Clears only the
+  // buyer's 90-day rejections; manual exclusions are left in place.
+  async function onRestoreAllRejections() {
+    const prior = rejected;
+    setRejMsg(null);
+    setRejected([]);
+    setRejBusy(true);
+    try {
+      const res = await restoreAllRejections();
+      if (res.ok) {
+        await refetch();
+      } else {
+        setRejected(prior);
+        setRejMsg(res.error || "Couldn’t restore them — try again.");
+      }
+    } catch {
+      setRejected(prior);
+      setRejMsg("Couldn’t restore them — are you signed in?");
     } finally {
       setRejBusy(false);
     }
@@ -795,13 +884,13 @@ export default function ScreenerClient({
       {/* Configure scoring — sits right above the table it drives */}
       <details className={`mb-2 ${card}`}>
         <summary
-          title="Configure how the Score is computed — the balance of Quality, Value and Momentum, the AI multiplier, and how many top names flow to a portfolio."
+          title="Configure how the Score is computed — the balance of Quality, Value and Momentum, and the AI multiplier."
           className="list-none cursor-pointer font-mono text-[11px] text-[var(--color-cyan)] px-3 py-2 marker:hidden [&::-webkit-details-marker]:hidden flex items-center justify-between"
         >
           <span>⚙ Configure scoring</span>
           <span className="text-text-muted/60">
             Q {config.weights.quality} · V {config.weights.value} · M {config.weights.momentum}
-            {" · "}AI ±{BUDGET}σ · top {config.topN} ▾
+            {" · "}AI ±{BUDGET}σ ▾
           </span>
         </summary>
         <div className="px-3 pb-3 sm:max-w-[520px]">
@@ -857,27 +946,6 @@ export default function ScreenerClient({
               />
             </div>
           ))}
-          <div className="mt-3">
-            <div className="flex justify-between font-mono text-[11px] text-text-muted">
-              <span
-                title={TOPN_HELP}
-                className="cursor-help underline decoration-dotted decoration-white/25 underline-offset-2"
-              >
-                Top N → portfolio <span aria-hidden className="text-text-muted/50 no-underline">ⓘ</span>
-              </span>
-              <span className="text-[var(--color-cyan)]">{config.topN}</span>
-            </div>
-            <input
-              type="range"
-              min={10}
-              max={100}
-              value={config.topN}
-              onChange={(e) => patch({ topN: Math.max(1, Math.min(200, Number(e.target.value))) })}
-              className="w-full accent-[var(--color-cyan)]"
-              aria-label={`Top N candidates, ${config.topN}`}
-              title={TOPN_HELP}
-            />
-          </div>
         </div>
       </details>
 
@@ -893,6 +961,17 @@ export default function ScreenerClient({
             <span className="text-text-muted/60">manage ▾</span>
           </summary>
           <div className="px-3 pb-3 flex flex-wrap gap-1.5">
+            {hiddenEntries.some((h) => h.source === "agent") && (
+              <button
+                type="button"
+                disabled={rejBusy}
+                onClick={onRestoreAllRejections}
+                title="Restore every name your buyer auto-passed on. Manual removals are left in place."
+                className="basis-full text-left font-mono text-[11px] text-[var(--color-cyan)] hover:underline disabled:opacity-40 mb-0.5"
+              >
+                ↩ restore all auto-hidden ({hiddenEntries.filter((h) => h.source === "agent").length})
+              </button>
+            )}
             {hiddenEntries.map((h) => (
               <span
                 key={h.ticker}
@@ -1049,7 +1128,11 @@ export default function ScreenerClient({
             onExclude={onExclude}
             holding={holdings[r.ticker.toUpperCase()] ?? null}
             psHistory={psHistory[r.ticker.toUpperCase()]}
-            onExpand={loadPsHistory}
+            card={cards[r.ticker.toUpperCase()]}
+            onExpand={(t) => {
+              loadPsHistory(t);
+              if (r.has_card) loadCard(t);
+            }}
           />
         ))}
         {rows.length === 0 && (
@@ -1405,16 +1488,12 @@ const SIG_TONE: Record<string, string> = {
   agrees: "text-text-muted border-white/15",
 };
 
-/** One scored dim's evidence/rationale → a compiled thesis line (brief §3:
- *  compile from stored evidence, never generate at render). */
+/** The compiled thesis line (brief §3: compile from stored evidence, never
+ *  generate at render). The best stored rationale is precomputed server-side
+ *  into `thesis_line` (so the heavy card text stays out of the bulk payload);
+ *  fall back to a quant-only descriptor when there's no card. */
 function compileThesis(r: Row): string {
-  if (r.has_card && r.research_card) {
-    const c = r.research_card;
-    const best = [c.moat, c.earnings_quality]
-      .filter((d): d is NonNullable<typeof d> => !!d && !!d.rationale)
-      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))[0];
-    if (best?.rationale) return best.rationale;
-  }
+  if (r.thesis_line) return r.thesis_line;
   const sec = r.sector ?? "—";
   const ind = r.industry ?? "—";
   return `${sec} · ${ind} — ranked on quant only`;
@@ -1423,10 +1502,11 @@ function compileThesis(r: Row): string {
 /** Four micro-bars: moat (scored), growth (read-only), earnings (scored),
  *  balance-sheet (gated). Plus a break-signal pip + the signal chip. */
 function DurabilityBadge({ r }: { r: Row }) {
-  if (!r.has_card || !r.research_card) {
+  if (!r.has_card) {
     return <span className="font-mono text-[10px] text-text-muted/50">—</span>;
   }
-  const c = r.research_card;
+  // Scalar scores ship as top-level columns (the heavy card text is lazy-loaded
+  // on expand), so the badge renders without the full research_card.
   const bar = (score: number | null | undefined, kind: "scored" | "read" | "gated", tip: string) => {
     const h = score ? Math.max(2, Math.round((score / 5) * 14)) : 3;
     const cls =
@@ -1445,9 +1525,9 @@ function DurabilityBadge({ r }: { r: Row }) {
   return (
     <span className="inline-flex items-center gap-1.5">
       <span className="inline-flex items-end gap-[2px]">
-        {bar(c.moat?.score, "scored", `Moat ${c.moat?.score ?? "—"}/5 · scored · ${sgn(r.moat_z)}σ`)}
-        {bar(c.growth_durability?.score, "read", `Growth ${c.growth_durability?.score ?? "—"}/5 · read-only — already in R40, not scored`)}
-        {bar(c.earnings_quality?.score, "scored", `Earnings ${c.earnings_quality?.score ?? "—"}/5 · scored · ${sgn(r.earn_z)}σ`)}
+        {bar(r.moat_score, "scored", `Moat ${r.moat_score ?? "—"}/5 · scored · ${sgn(r.moat_z)}σ`)}
+        {bar(r.growth_score, "read", `Growth ${r.growth_score ?? "—"}/5 · read-only — already in R40, not scored`)}
+        {bar(r.earnings_score, "scored", `Earnings ${r.earnings_score ?? "—"}/5 · scored · ${sgn(r.earn_z)}σ`)}
         {bar(null, "gated", "Balance-sheet risk · gated, awaiting cash/debt/shares")}
       </span>
       {(r.firing_breaks ?? 0) > 0 && (
@@ -1704,6 +1784,7 @@ function RowView({
   onExclude,
   holding,
   psHistory,
+  card,
   onExpand,
 }: {
   r: Row;
@@ -1716,11 +1797,17 @@ function RowView({
   holding: ScreenHolding | null;
   /** Lazy P/S series for the sparkline ("loading"/undefined before fetch). */
   psHistory: PsPoint[] | "loading" | undefined;
-  /** Called on first expand to kick the P/S history fetch. */
+  /** Lazy full research_card ("loading"/undefined before fetch; null = none). */
+  card: ResearchCard | null | "loading" | undefined;
+  /** Called on first expand to kick the P/S history + research_card fetches. */
   onExpand: (ticker: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const carded = r.has_card;
+  // Lazily-fetched full card (only on expand); thesis line + scalar scores in
+  // the bulk row already cover the collapsed view.
+  const cardData = card && card !== "loading" ? card : null;
+  const cardLoading = card === "loading" || card === undefined;
   const demoted = carded && r.adj_z < 0;
   // Left-edge AI-direction stripe + carded/demoted tint (mockup .row.carded).
   const edgeCls = !carded
@@ -1849,42 +1936,48 @@ function RowView({
         {open && (
           <div className="border-t border-white/10 px-4 pt-1 pb-4 grid gap-6 lg:grid-cols-[1fr_320px]">
             <div>
-              {carded && r.research_card ? (
-                <>
-                  <DimCard label="Moat" dim={r.research_card.moat} />
-                  <DimCard label="Growth durability" dim={r.research_card.growth_durability} readOnly />
-                  <DimCard label="Earnings quality" dim={r.research_card.earnings_quality} />
-                  <DimCard label="Balance-sheet risk" gated />
-                  <div className="mt-4 border-t border-white/10 pt-3">
-                    <div className="font-mono text-[10.5px] uppercase tracking-[0.1em] text-[#e0a23c] mb-2">
-                      Break signals{" "}
-                      <span className="text-text-muted/70 normal-case tracking-normal">
-                        — watch-conditions; red = firing now
-                      </span>
+              {carded ? (
+                cardData ? (
+                  <>
+                    <DimCard label="Moat" dim={cardData.moat} />
+                    <DimCard label="Growth durability" dim={cardData.growth_durability} readOnly />
+                    <DimCard label="Earnings quality" dim={cardData.earnings_quality} />
+                    <DimCard label="Balance-sheet risk" gated />
+                    <div className="mt-4 border-t border-white/10 pt-3">
+                      <div className="font-mono text-[10.5px] uppercase tracking-[0.1em] text-[#e0a23c] mb-2">
+                        Break signals{" "}
+                        <span className="text-text-muted/70 normal-case tracking-normal">
+                          — watch-conditions; red = firing now
+                        </span>
+                      </div>
+                      {(cardData.break_signals?.length ?? 0) > 0 ? (
+                        <ul className="space-y-1.5">
+                          {cardData.break_signals!.map((b, i) => {
+                            const firing = signalFires(r, b);
+                            return (
+                              <li
+                                key={i}
+                                className={`text-[12.5px] flex gap-2 ${firing ? "text-[var(--color-red,#FF3333)]" : "text-text-muted"}`}
+                              >
+                                <span className={firing ? "text-[var(--color-red,#FF3333)]" : "text-text-muted/50"}>⚑</span>
+                                <span>
+                                  {b.description ?? `${b.field ?? ""} ${b.op ?? ""} ${b.value ?? ""}`.trim()}
+                                  {!firing && <span className="text-text-muted/60"> · watch</span>}
+                                </span>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      ) : (
+                        <p className="text-[12px] text-text-muted">None defined.</p>
+                      )}
                     </div>
-                    {(r.research_card.break_signals?.length ?? 0) > 0 ? (
-                      <ul className="space-y-1.5">
-                        {r.research_card.break_signals!.map((b, i) => {
-                          const firing = signalFires(r, b);
-                          return (
-                            <li
-                              key={i}
-                              className={`text-[12.5px] flex gap-2 ${firing ? "text-[var(--color-red,#FF3333)]" : "text-text-muted"}`}
-                            >
-                              <span className={firing ? "text-[var(--color-red,#FF3333)]" : "text-text-muted/50"}>⚑</span>
-                              <span>
-                                {b.description ?? `${b.field ?? ""} ${b.op ?? ""} ${b.value ?? ""}`.trim()}
-                                {!firing && <span className="text-text-muted/60"> · watch</span>}
-                              </span>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    ) : (
-                      <p className="text-[12px] text-text-muted">None defined.</p>
-                    )}
-                  </div>
-                </>
+                  </>
+                ) : (
+                  <p className="text-text-muted text-[12.5px] leading-relaxed max-w-[90%] my-3.5">
+                    {cardLoading ? "Loading research card…" : "Research card unavailable."}
+                  </p>
+                )
               ) : (
                 <p className="text-text-muted text-[12.5px] leading-relaxed max-w-[90%] my-3.5">
                   No research card yet — ranked on quant alone. A full AI durability read
