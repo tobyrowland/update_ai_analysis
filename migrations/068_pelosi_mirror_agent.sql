@@ -84,7 +84,7 @@ INSERT INTO agents (
 )
 SELECT
     'agent-pelosi', 'Pelosi Tracker',
-    'Mirrors Nancy Pelosi''s disclosed stock trades — buys what she buys (the underlying stock even when she trades options) and sells held names she exits.',
+    'Mirrors Nancy Pelosi''s disclosed trades. Her style is high-conviction and low-churn: a handful of concentrated bets in mega-cap tech (NVDA, AAPL, GOOGL, AVGO, AMZN), usually via deep-in-the-money long-dated call options (LEAPS) bought 1-2 years out, held to expiry, then exercised into the underlying shares. A long-only book can''t hold options, so this agent mirrors each trade as the underlying common stock — buying when she buys or exercises, and selling names she exits. Source: her official U.S. House Periodic Transaction Report filings (STOCK Act disclosures) — public but lagged, since trades are disclosed up to ~30-45 days after they happen, so the mirror always follows with that delay.',
     TRUE, TRUE, 'house-agent', 'ak_house_pl', 'Rules-based', 'pelosi_mirror',
     'buy', '{}',
     '[]'::jsonb, ''
@@ -95,9 +95,17 @@ WHERE NOT EXISTS (
 UPDATE agents SET
     strategy           = 'pelosi_mirror',
     display_name       = 'Pelosi Tracker',
-    description        = 'Mirrors Nancy Pelosi''s disclosed stock trades — buys what she '
-                         'buys (the underlying stock even when she trades options) and '
-                         'sells held names she exits.',
+    description        = 'Mirrors Nancy Pelosi''s disclosed trades. Her style is '
+                         'high-conviction and low-churn: a handful of concentrated bets in '
+                         'mega-cap tech (NVDA, AAPL, GOOGL, AVGO, AMZN), usually via '
+                         'deep-in-the-money long-dated call options (LEAPS) bought 1-2 years '
+                         'out, held to expiry, then exercised into the underlying shares. A '
+                         'long-only book can''t hold options, so this agent mirrors each '
+                         'trade as the underlying common stock — buying when she buys or '
+                         'exercises, and selling names she exits. Source: her official U.S. '
+                         'House Periodic Transaction Report filings (STOCK Act disclosures) — '
+                         'public but lagged, since trades are disclosed up to ~30-45 days '
+                         'after they happen, so the mirror always follows with that delay.',
     action             = 'buy',
     triggers           = '{}',
     available_for_hire = TRUE,
