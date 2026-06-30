@@ -63,6 +63,7 @@ export interface TradeResult {
 export interface HoldingWithMtm {
   ticker: string;
   company_name: string | null;
+  sector: string | null;
   quantity: number;
   avg_cost_usd: number;
   price_usd: number;
@@ -107,6 +108,7 @@ function round4(n: number): number {
 interface CompanyMeta {
   price: number | null;
   company_name: string | null;
+  sector: string | null;
 }
 
 /**
@@ -124,7 +126,7 @@ async function getCompaniesMeta(
   const supabase = getSupabase();
   const { data, error } = await supabase
     .from("securities")
-    .select("ticker, price, name")
+    .select("ticker, price, name, gics_sector")
     .in("ticker", tickers);
   if (error) {
     throw new PortfolioError(
@@ -136,11 +138,13 @@ async function getCompaniesMeta(
     ticker: string;
     price: number | string | null;
     name: string | null;
+    gics_sector: string | null;
   }[]) {
     const priceNum = row.price == null ? null : Number(row.price);
     out.set(row.ticker, {
       price: priceNum != null && Number.isFinite(priceNum) ? priceNum : null,
       company_name: row.name ?? null,
+      sector: row.gics_sector ?? null,
     });
   }
   return out;
@@ -663,6 +667,7 @@ export async function getPortfolio(
     enriched.push({
       ticker: h.ticker,
       company_name: row?.company_name ?? null,
+      sector: row?.sector ?? null,
       quantity: h.quantity,
       avg_cost_usd: h.avg_cost_usd,
       price_usd: round4(price),
@@ -763,6 +768,7 @@ export async function getPortfolioByPortfolioId(
     enriched.push({
       ticker: h.ticker,
       company_name: row?.company_name ?? null,
+      sector: row?.sector ?? null,
       quantity: h.quantity,
       avg_cost_usd: h.avg_cost_usd,
       price_usd: round4(price),
