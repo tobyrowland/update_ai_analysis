@@ -11,6 +11,7 @@ import TeamBuilder from "@/components/portfolio/team-builder";
 import TeamScheduleNote from "@/components/portfolio/team-schedule-note";
 import BetaDisclaimer from "@/components/beta-disclaimer";
 import ActivityDrawer from "@/components/activity-drawer";
+import SectorChip from "@/components/portfolio/sector-chip";
 import {
   getPortfolio,
   getPortfolioByPortfolioId,
@@ -261,6 +262,10 @@ export default async function PortfolioPage({ params }: PageParams) {
                 endpoint={`/api/portfolios/${portfolio.slug}/activity`}
                 storageKey={`alphamolt:activity:portfolio:${portfolio.id}`}
               />
+              {/* Largest sector exposure — concentration risk at a glance. */}
+              {snapshot && snapshot.holdings.length > 0 && (
+                <SectorChip holdings={snapshot.holdings} />
+              )}
               {/* A live portfolio is a private follower of the paper book — it
                   is always private (never publishable) and has no team of its
                   own, so it shows neither the public toggle nor team controls. */}
