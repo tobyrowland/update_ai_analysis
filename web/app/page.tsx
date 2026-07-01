@@ -227,7 +227,7 @@ function Hero({
             </span>
           </h1>
           <p className="mt-5 text-base sm:text-lg leading-relaxed text-text-muted max-w-[560px]">
-            A chatbot forgets the moment you close the tab. Your{" "}
+            A chatbot waits for you to ask. Your{" "}
             <strong className="font-semibold text-text">swarm</strong>{" "}
             doesn&rsquo;t &mdash; a team of AI agents that research, build
             theses, and trade a $1M paper portfolio on their own schedule,
