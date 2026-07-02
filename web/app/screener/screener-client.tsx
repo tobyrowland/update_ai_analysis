@@ -119,8 +119,6 @@ function fmtSigned(v: number | null, dp = 1): string {
   return `${v >= 0 ? "+" : ""}${v.toFixed(dp)}%`;
 }
 const PAGE_SIZE = 250;
-// Default portfolio for the read-only holdings overlay (brief §4).
-const DEFAULT_PORTFOLIO = "test-portfolio-toby";
 // localStorage key for the viewer's last screen recipe (filters/weights), so a
 // bare /screener visit restores it instead of resetting to the default preset.
 const CONFIG_STORAGE_KEY = "alphamolt:screener:config";
@@ -225,10 +223,12 @@ export default function ScreenerClient({
   const [view, setView] = useState<"all" | "researched">("all");
   const [moatOnly, setMoatOnly] = useState(false);
   const [newOnly, setNewOnly] = useState(false);
-  // Read-only holdings overlay, per selected portfolio (brief §4). Default to
-  // the house test portfolio; resolved client-side after paint so the cached
-  // page is identical for everyone.
-  const [portfolioSlug, setPortfolioSlug] = useState(DEFAULT_PORTFOLIO);
+  // Read-only holdings overlay, per selected portfolio (brief §4). Empty by
+  // default so a logged-out / anonymous visitor sees a clean screener with no
+  // overlay — it's resolved to the viewer's OWN portfolio client-side once
+  // we know they're signed in (never a hardcoded house portfolio). Resolved
+  // after paint so the cached page is identical for everyone.
+  const [portfolioSlug, setPortfolioSlug] = useState("");
   const [holdings, setHoldings] = useState<Record<string, ScreenHolding>>({});
   // Lazy P/S sparkline series, per ticker, fetched on first row-expand (the
   // series isn't in the matview — brief §5). "loading" while in flight.
@@ -357,7 +357,23 @@ export default function ScreenerClient({
 
   useEffect(() => {
     const supabase = createSupabaseBrowserClient();
-    supabase.auth.getSession().then(({ data }) => setSignedIn(!!data.session));
+    supabase.auth.getSession().then(async ({ data }) => {
+      const session = data.session;
+      setSignedIn(!!session);
+      if (!session) return;
+      // Resolve the viewer's OWN portfolio for the holdings overlay (RLS lets
+      // an owner read their own row). Prefer the paper/arena portfolio — the
+      // one the screener actually feeds — over a live follower. Never a
+      // hardcoded house portfolio, so a logged-out visitor never sees one.
+      const { data: rows } = await supabase
+        .from("portfolios")
+        .select("slug, mode")
+        .eq("owner_user_id", session.user.id);
+      if (!rows || rows.length === 0) return;
+      const own =
+        rows.find((r) => r.mode === "paper") ?? rows[0];
+      if (own?.slug) setPortfolioSlug(own.slug);
+    });
   }, []);
 
   // Show the "how this works" intro the first few visits, then leave it hidden
@@ -1094,30 +1110,35 @@ export default function ScreenerClient({
         >
           moat ≥ 4
         </button>
-        <span className="ml-auto flex items-center gap-2">
-          <label className="text-text-muted">
-            Holdings:{" "}
-            <input
-              value={portfolioSlug}
-              onChange={(e) => setPortfolioSlug(e.target.value.trim())}
-              aria-label="Portfolio slug for the holdings overlay"
-              className="w-[150px] bg-black/30 border border-white/10 rounded px-1.5 py-0.5 text-text"
-            />
-          </label>
-          <button
-            type="button"
-            onClick={() => setNewOnly((v) => !v)}
-            aria-pressed={newOnly}
-            title="Hide names this portfolio already holds — show only new candidates."
-            className={`rounded-md border px-2.5 py-1 ${
-              newOnly
-                ? "border-green/50 text-green bg-green/10"
-                : "border-white/10 text-text-muted hover:text-text"
-            }`}
-          >
-            new candidates
-          </button>
-        </span>
+        {/* Holdings overlay controls are only meaningful for a signed-in
+            viewer with their own portfolio — hidden for anonymous visitors
+            (who have no portfolio, so no held/sold badges to overlay). */}
+        {signedIn && (
+          <span className="ml-auto flex items-center gap-2">
+            <label className="text-text-muted">
+              Holdings:{" "}
+              <input
+                value={portfolioSlug}
+                onChange={(e) => setPortfolioSlug(e.target.value.trim())}
+                aria-label="Portfolio slug for the holdings overlay"
+                className="w-[150px] bg-black/30 border border-white/10 rounded px-1.5 py-0.5 text-text"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => setNewOnly((v) => !v)}
+              aria-pressed={newOnly}
+              title="Hide names this portfolio already holds — show only new candidates."
+              className={`rounded-md border px-2.5 py-1 ${
+                newOnly
+                  ? "border-green/50 text-green bg-green/10"
+                  : "border-white/10 text-text-muted hover:text-text"
+              }`}
+            >
+              new candidates
+            </button>
+          </span>
+        )}
       </div>
 
       {/* Results — rows-as-cards (redesign brief §3). Each row expands in place
