@@ -39,7 +39,6 @@ from moltbook_lib import (
     APPROVE_LABEL,
     FEED_SUBMOLTS,
     GitHubIssuer,
-    MOLTBOOK_ISSUE_LABEL,
     MoltbookClient,
     REJECT_LABEL,
     REPLY_MARKER_END,
@@ -53,6 +52,7 @@ from moltbook_lib import (
     post_and_verify,
     prune_ledger,
 )
+from moltbook_agents import AgentProfile, get_profile, is_sibling
 from social_personality import (
     detect_hostility,
     generate_apology,
@@ -64,11 +64,8 @@ from social_personality import (
     relationship_block,
 )
 
-POSTED_LABEL = "moltbook-posted"
-FAILED_LABEL = "moltbook-failed"
-FEED_COMMENT_LABEL = "moltbook-feed-comment"
-
-OWN_HANDLE = "alphamolt-equities"
+# Per-agent label names + own handle now live on AgentProfile (moltbook_agents)
+# — the legacy values are the default profile's properties.
 
 # Rate limits per heartbeat run
 MAX_UPVOTES_PER_RUN = 10
@@ -188,7 +185,7 @@ def _context_block(ctx: dict) -> list[str]:
     return parts
 
 
-def _render_review_issue(ctx: dict, draft: str) -> tuple[str, str]:
+def _render_review_issue(ctx: dict, draft: str, agent_slug: str) -> tuple[str, str]:
     short_title = (ctx["post_title"] or "")[:60]
     title = f'[moltbook] reply: @{ctx["author_name"]} on "{short_title}"'
     meta = {
@@ -196,6 +193,7 @@ def _render_review_issue(ctx: dict, draft: str) -> tuple[str, str]:
         "post_id": ctx["post_id"],
         "parent_id": ctx["comment_id"],
         "type": "reply_to_comment",
+        "agent": agent_slug,
     }
     body_parts = _context_block(ctx) + [
         "### Drafted reply",
@@ -238,7 +236,7 @@ def _render_audit_issue(
 
 
 def _render_failure_issue(
-    ctx: dict, draft: str, outcome: str
+    ctx: dict, draft: str, outcome: str, agent_slug: str
 ) -> tuple[str, str]:
     short_title = (ctx["post_title"] or "")[:60]
     title = f'[moltbook] FAILED: @{ctx["author_name"]} on "{short_title}"'
@@ -247,6 +245,7 @@ def _render_failure_issue(
         "post_id": ctx["post_id"],
         "parent_id": ctx["comment_id"],
         "type": "reply_to_comment",
+        "agent": agent_slug,
     }
     body_parts = _context_block(ctx) + [
         "### Draft (post failed — retryable)",
@@ -273,6 +272,7 @@ def _process_notifications(
     replied: set[str],
     ledger: dict[str, Any],
     args: argparse.Namespace,
+    profile: AgentProfile,
 ) -> dict[str, int]:
     """Phase 1: reply to notifications on our posts."""
     notifications = client.notifications()
@@ -416,7 +416,7 @@ def _process_notifications(
                         f"apology — {outcome}",
                     )
                     issue = gh.create_issue(
-                        title, body, [MOLTBOOK_ISSUE_LABEL, POSTED_LABEL]
+                        title, body, [profile.issue_label, profile.posted_label]
                     )
                     if issue:
                         gh.close_issue(issue["number"])
@@ -437,7 +437,7 @@ def _process_notifications(
             draft = "(drafting skipped — placeholder)"
         else:
             try:
-                draft = draft_reply(ctx)
+                draft = draft_reply(ctx, system_prompt=profile.system_prompt)
                 log.info(
                     "drafted for @%s (%d chars)", author, len(draft)
                 )
@@ -452,8 +452,8 @@ def _process_notifications(
             continue
 
         if args.require_approval:
-            title, body = _render_review_issue(ctx, draft)
-            issue = gh.create_issue(title, body, [MOLTBOOK_ISSUE_LABEL])
+            title, body = _render_review_issue(ctx, draft, profile.slug)
+            issue = gh.create_issue(title, body, [profile.issue_label])
             if issue:
                 log.info("created review issue #%s", issue.get("number"))
                 _mark_replied(ledger, replied, notif["id"])
@@ -475,7 +475,7 @@ def _process_notifications(
             log.info("posted: %s — %s", comment_id, outcome)
             title, body = _render_audit_issue(ctx, draft, comment_url, outcome)
             issue = gh.create_issue(
-                title, body, [MOLTBOOK_ISSUE_LABEL, POSTED_LABEL]
+                title, body, [profile.issue_label, profile.posted_label]
             )
             if issue:
                 gh.close_issue(issue["number"])
@@ -519,8 +519,8 @@ def _process_notifications(
             posted += 1
         else:
             log.error("post failed for %s: %s", notif["id"][:8], outcome)
-            title, body = _render_failure_issue(ctx, draft, outcome)
-            gh.create_issue(title, body, [MOLTBOOK_ISSUE_LABEL, FAILED_LABEL])
+            title, body = _render_failure_issue(ctx, draft, outcome, profile.slug)
+            gh.create_issue(title, body, [profile.issue_label, profile.failed_label])
             # Mark handled so we don't auto-retry — the failure issue carries a
             # manual retry path (edit draft + add the approve label).
             _mark_replied(ledger, replied, notif["id"])
@@ -538,6 +538,7 @@ def _engage_feed(
     client: MoltbookClient,
     gh: GitHubIssuer | None,
     ledger: dict[str, Any],
+    profile: AgentProfile,
     dry_run: bool = False,
 ) -> dict[str, int]:
     """Browse the feed, follow + upvote finance-relevant agents, comment."""
@@ -586,8 +587,14 @@ def _engage_feed(
         author = (post.get("author") or {}).get("name", "")
         post_title = (post.get("title") or "")[:60]
 
-        if author == OWN_HANDLE:
+        if author == profile.handle:
             continue
+
+        # Sibling policy: our other agents may be COMMENTED on (public,
+        # good-faith disagreement is the point of an adversarial pair) but
+        # never UPVOTED or FOLLOWED — votes/follows between one operator's
+        # accounts are the vote-ring signal; disagreeing comments are content.
+        sibling = is_sibling(author, profile)
 
         # Silence gate: never engage with anyone we've apologized to / muted.
         if is_silenced(ledger, author):
@@ -602,6 +609,7 @@ def _engage_feed(
         # --- Upvote ---
         if (
             post_id
+            and not sibling
             and post_id not in already_upvoted
             and upvoted_this_run < MAX_UPVOTES_PER_RUN
         ):
@@ -617,6 +625,7 @@ def _engage_feed(
         # --- Follow ---
         if (
             author
+            and not sibling
             and author not in already_followed
             and followed_this_run < MAX_FOLLOWS_PER_RUN
         ):
@@ -649,7 +658,10 @@ def _engage_feed(
 
             memory = relationship_block(ledger, author)
             try:
-                draft = draft_feed_comment(post, memory_block=memory)
+                draft = draft_feed_comment(
+                    post, memory_block=memory,
+                    system_prompt=profile.system_prompt,
+                )
             except Exception as exc:
                 log.error("feed comment draft failed: %s", exc)
                 continue
@@ -722,7 +734,7 @@ def _engage_feed(
                         f"**Live:** {comment_url}",
                     ])
                     issue = gh.create_issue(
-                        title, body, [FEED_COMMENT_LABEL, POSTED_LABEL]
+                        title, body, [profile.feed_comment_label, profile.posted_label]
                     )
                     if issue:
                         gh.close_issue(issue["number"])
@@ -1130,6 +1142,7 @@ def _maybe_post_original(
     client: MoltbookClient,
     gh: GitHubIssuer | None,
     ledger: dict[str, Any],
+    profile: AgentProfile,
     dry_run: bool = False,
 ) -> bool:
     """Post an original piece to m/general when the data warrants it.
@@ -1143,6 +1156,10 @@ def _maybe_post_original(
     lives there; the finance submolts share the same global feed with no
     distinct distribution.
     """
+    if not profile.original_posts:
+        log.info("original post: disabled for agent %s", profile.slug)
+        return False
+
     today = _today()
     daily_posts = ledger.get("daily_post_count", {})
     if daily_posts.get(today, 0) >= 1:
@@ -1150,7 +1167,7 @@ def _maybe_post_original(
         return False
 
     hour = datetime.now(timezone.utc).hour
-    if hour not in (12, 14, 16, 18):
+    if hour not in profile.post_hours:
         log.info("original post: not in posting window (hour=%d), skipping", hour)
         return False
 
@@ -1174,7 +1191,10 @@ def _maybe_post_original(
         return False
 
     recent_titles = ledger.get("recent_post_titles", [])
-    result = draft_original_post(topic_data, recent_titles=recent_titles)
+    result = draft_original_post(
+        topic_data, recent_titles=recent_titles,
+        system_prompt=profile.system_prompt,
+    )
     if result is None:
         log.info("original post: LLM returned SKIP")
         return False
@@ -1222,7 +1242,9 @@ def _maybe_post_original(
                 f"**Live:** {post_url}",
             ])
             issue = gh.create_issue(
-                audit_title, audit_body, [POSTED_LABEL, "moltbook-original-post"]
+                audit_title,
+                audit_body,
+                [profile.posted_label, f"moltbook-original-post{profile.label_suffix}"],
             )
             if issue:
                 gh.close_issue(issue["number"])
@@ -1263,15 +1285,30 @@ def main() -> int:
         "--no-original-posts", action="store_true",
         help="Disable original post creation (Phase 3)",
     )
+    parser.add_argument(
+        "--agent", default=None,
+        help="Agent slug from moltbook_agents.AGENTS "
+             "(default: the legacy alphamolt-equities agent)",
+    )
     args = parser.parse_args()
 
+    profile = get_profile(args.agent)
     log.info(
-        "Moltbook heartbeat starting (auto_post=%s engage=%s original=%s)",
+        "Moltbook heartbeat starting (agent=%s auto_post=%s engage=%s original=%s)",
+        profile.slug,
         not args.require_approval,
         not args.no_engage,
         not args.no_original_posts,
     )
-    client = MoltbookClient()
+    import os
+    api_key = os.environ.get(profile.api_key_env)
+    if not api_key:
+        # Hard error rather than MoltbookClient's MOLTBOOK_API_KEY fallback —
+        # falling back would post as the WRONG account.
+        raise SystemExit(
+            f"{profile.api_key_env} not set (required for agent {profile.slug})"
+        )
+    client = MoltbookClient(api_key=api_key)
 
     # Account stats
     home = client.home()
@@ -1295,14 +1332,15 @@ def main() -> int:
 
     if not args.dry_run:
         gh = GitHubIssuer()
-        gh.ensure_label(MOLTBOOK_ISSUE_LABEL, "5319e7", "Moltbook reply")
+        who = profile.display_name
+        gh.ensure_label(profile.issue_label, "5319e7", f"Moltbook reply ({who})")
         gh.ensure_label(APPROVE_LABEL, "0e8a16", "Approve and post this draft")
         gh.ensure_label(REJECT_LABEL, "b60205", "Reject and close this draft")
-        gh.ensure_label(POSTED_LABEL, "1d76db", "Auto-posted to Moltbook")
-        gh.ensure_label(FAILED_LABEL, "b60205", "Posting failed — needs attention")
-        gh.ensure_label(FEED_COMMENT_LABEL, "c5def5", "Feed comment posted")
+        gh.ensure_label(profile.posted_label, "1d76db", f"Auto-posted to Moltbook ({who})")
+        gh.ensure_label(profile.failed_label, "b60205", f"Posting failed ({who})")
+        gh.ensure_label(profile.feed_comment_label, "c5def5", f"Feed comment posted ({who})")
 
-        ledger_number, ledger = gh.get_or_create_ledger()
+        ledger_number, ledger = gh.get_or_create_ledger(profile.ledger_label)
 
         # Notification dedup now lives in the ledger (bounded by prune_ledger),
         # not in an unbounded scan of issue bodies that silently truncates at
@@ -1312,7 +1350,7 @@ def main() -> int:
         replied = set(ledger.get("replied_notifs") or [])
         if "replied_notifs" not in ledger:
             seeded = 0
-            for issue in gh.list_moltbook_issues():
+            for issue in gh.list_moltbook_issues(profile.issue_label):
                 for mid in re.findall(
                     r"moltbook-notif:\s*([^\s>]+)", issue.get("body") or ""
                 ):
@@ -1331,16 +1369,16 @@ def main() -> int:
         )
 
     # Phase 1 — Notification replies
-    notif_stats = _process_notifications(client, gh, replied, ledger, args)
+    notif_stats = _process_notifications(client, gh, replied, ledger, args, profile)
 
     # Phase 2 — Feed engagement
     engage_stats: dict[str, int] = {"followed": 0, "upvoted": 0, "commented": 0}
     if not args.no_engage:
-        engage_stats = _engage_feed(client, gh, ledger, dry_run=args.dry_run)
+        engage_stats = _engage_feed(client, gh, ledger, profile, dry_run=args.dry_run)
 
     # Phase 3 — Original posts
     if not args.no_original_posts and not args.no_draft:
-        _maybe_post_original(client, gh, ledger, dry_run=args.dry_run)
+        _maybe_post_original(client, gh, ledger, profile, dry_run=args.dry_run)
 
     # Save ledger — prune first so it never outgrows the 64KB issue body.
     if gh and ledger_number is not None:

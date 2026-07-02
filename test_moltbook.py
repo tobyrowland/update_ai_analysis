@@ -147,3 +147,83 @@ def test_prune_ledger_caps_titles_and_ages_subjects():
     assert ledger["recent_post_titles"][-1] == "title 29"
     assert "OLD" not in ledger["post_subject_history"]
     assert "NEW" in ledger["post_subject_history"]
+
+
+# ---------------------------------------------------------------------------
+# Multi-agent registry (moltbook_agents)
+# ---------------------------------------------------------------------------
+
+
+def test_default_profile_keeps_legacy_identity():
+    """The default agent must keep the pre-multi-agent labels + ledger so
+    existing GitHub state (ledger issue, issue history) carries over."""
+    from moltbook_agents import DEFAULT_AGENT, get_profile
+
+    p = get_profile(None)
+    assert p.slug == DEFAULT_AGENT == "alphamolt-equities"
+    assert p.handle == "alphamolt-equities"
+    assert p.api_key_env == "MOLTBOOK_API_KEY"
+    assert p.ledger_label == "moltbook-ledger"
+    assert p.issue_label == "moltbook-reply"
+    assert p.posted_label == "moltbook-posted"
+    assert p.failed_label == "moltbook-failed"
+    assert p.feed_comment_label == "moltbook-feed-comment"
+
+
+def test_agents_have_disjoint_ledgers_keys_and_handles():
+    """Sharing a ledger label or API-key env var between agents would corrupt
+    state / post as the wrong account — must be unique across the registry."""
+    from moltbook_agents import AGENTS
+
+    ledgers = [p.ledger_label for p in AGENTS.values()]
+    keys = [p.api_key_env for p in AGENTS.values()]
+    handles = [p.handle for p in AGENTS.values()]
+    assert len(set(ledgers)) == len(ledgers)
+    assert len(set(keys)) == len(keys)
+    assert len(set(handles)) == len(handles)
+
+
+def test_sibling_detection_excludes_self_and_strangers():
+    from moltbook_agents import get_profile, is_sibling
+
+    equities = get_profile("alphamolt-equities")
+    bear = get_profile("alphamolt-bear")
+    # each other's handle -> sibling
+    assert is_sibling(bear.handle, equities)
+    assert is_sibling(equities.handle, bear)
+    # own handle -> not a sibling (self is skipped separately)
+    assert not is_sibling(equities.handle, equities)
+    # unrelated account -> not a sibling
+    assert not is_sibling("some-random-molty", equities)
+
+
+def test_unknown_agent_slug_exits():
+    import pytest
+    from moltbook_agents import get_profile
+
+    with pytest.raises(SystemExit):
+        get_profile("no-such-agent")
+
+
+def test_bear_post_hours_intersect_its_cron():
+    """The bear workflow's cron runs at 2-22/4 UTC (02,06,10,14,18,22); its
+    posting window must intersect those hours or it can never post."""
+    from moltbook_agents import get_profile
+
+    bear = get_profile("alphamolt-bear")
+    cron_hours = set(range(2, 23, 4))
+    assert set(bear.post_hours) & cron_hours, (
+        f"post_hours {bear.post_hours} never coincide with cron hours {sorted(cron_hours)}"
+    )
+
+
+def test_bear_persona_is_distinct_and_disclosed():
+    from moltbook_agents import get_profile
+
+    bear = get_profile("alphamolt-bear")
+    equities = get_profile("alphamolt-equities")
+    assert bear.system_prompt != equities.system_prompt
+    # affiliation disclosure is a hard requirement (anti-astroturf)
+    assert "same operator" in bear.system_prompt
+    # the anti-fabrication section must exist in every persona
+    assert "Anti-fabrication rules" in bear.system_prompt
