@@ -30,6 +30,9 @@ jobs:
       - name: Process approval
         env:
           MOLTBOOK_API_KEY: ${{ secrets.MOLTBOOK_API_KEY }}
+          # Multi-agent: the approve handler picks the key matching the
+          # issue's meta["agent"], so every agent's secret must be present.
+          MOLTBOOK_API_KEY_BEAR: ${{ secrets.MOLTBOOK_API_KEY_BEAR }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python moltbook_approve.py

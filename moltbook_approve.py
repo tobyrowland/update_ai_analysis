@@ -71,11 +71,27 @@ def _handle_approve(gh: GitHubIssuer, number: int, body: str) -> int:
         gh.comment_issue(number, "❌ Metadata missing `post_id`.")
         return 1
 
+    # Multi-agent: the heartbeat stamps meta["agent"] on every review/failure
+    # issue so the approval posts with THAT agent's key. Missing/legacy meta
+    # (issues predating multi-agent) resolves to the default agent.
+    from moltbook_agents import get_profile
+
+    profile = get_profile(meta.get("agent"))
+    api_key = os.environ.get(profile.api_key_env)
+    if not api_key:
+        gh.comment_issue(
+            number,
+            f"❌ Secret `{profile.api_key_env}` not available to the approve "
+            f"workflow — needed to post as {profile.display_name}.",
+        )
+        return 1
+
     log.info(
-        "posting: post=%s parent=%s len=%d", post_id, parent_id, len(draft)
+        "posting as %s: post=%s parent=%s len=%d",
+        profile.slug, post_id, parent_id, len(draft),
     )
 
-    mb = MoltbookClient()
+    mb = MoltbookClient(api_key=api_key)
     success, outcome, comment_id = post_and_verify(
         mb, post_id, draft, parent_id=parent_id
     )

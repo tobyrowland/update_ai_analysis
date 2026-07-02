@@ -328,11 +328,11 @@ class GitHubIssuer:
             timeout=TIMEOUT,
         )
 
-    def list_moltbook_issues(self) -> list[dict]:
+    def list_moltbook_issues(self, label: str = MOLTBOOK_ISSUE_LABEL) -> list[dict]:
         r = self.session.get(
             f"{self.base}/issues",
             params={
-                "labels": MOLTBOOK_ISSUE_LABEL,
+                "labels": label,
                 "state": "all",
                 "per_page": 100,
             },
@@ -381,15 +381,38 @@ class GitHubIssuer:
             timeout=TIMEOUT,
         )
 
-    def get_or_create_ledger(self) -> tuple[int, dict]:
-        """Return (issue_number, ledger_dict) for the engagement ledger."""
+    def get_or_create_ledger(self, label: str = LEDGER_LABEL) -> tuple[int, dict]:
+        """Return (issue_number, ledger_dict) for the engagement ledger.
+
+        ``label`` selects WHICH agent's ledger — every agent must have its own
+        (dedup sets, daily caps, and relationship memory would corrupt each
+        other if shared).
+        """
         r = self.session.get(
             f"{self.base}/issues",
-            params={"labels": LEDGER_LABEL, "state": "open", "per_page": 5},
+            params={"labels": label, "state": "open", "per_page": 10},
             timeout=TIMEOUT,
         )
-        issues = r.json() if r.status_code < 400 else []
-        for issue in issues:
+        if r.status_code >= 400:
+            # NEVER fall through to creation on a failed list call. Creating a
+            # fresh ledger silently discards ALL engagement state — dedup sets,
+            # daily caps, post cooldowns, relationship memory. The July 1 ARGX
+            # repeat post traces to exactly this: a transient lookup failure ->
+            # brand-new empty ledger (#1986) -> angle cooldown gone -> the
+            # consensus angle fired again 3 days into its 7-day cooldown.
+            raise RuntimeError(
+                f"ledger lookup failed (HTTP {r.status_code}): {r.text[:200]}"
+            )
+        issues = r.json()
+        if len(issues) > 1:
+            log.warning(
+                "multiple open ledger issues for label %s: %s — using the "
+                "newest with parseable state; close the stale ones",
+                label, [i.get("number") for i in issues],
+            )
+
+        markerless: list[int] = []
+        for issue in issues:  # newest-first (created desc)
             body = issue.get("body") or ""
             m = re.search(
                 re.escape(LEDGER_MARKER_START) + r"\s*(.*?)\s*"
@@ -401,12 +424,26 @@ class GitHubIssuer:
                 try:
                     return issue["number"], json.loads(m.group(1))
                 except json.JSONDecodeError:
-                    return issue["number"], {}
-            return issue["number"], {}
+                    log.error(
+                        "ledger issue #%s has an unparseable JSON blob",
+                        issue.get("number"),
+                    )
+            markerless.append(issue.get("number"))
+
+        if markerless:
+            # An open ledger issue exists but carries no readable state —
+            # reuse it (the next save rewrites the body) instead of creating
+            # yet another duplicate.
+            log.error(
+                "no parseable ledger state in open issue(s) %s for label %s — "
+                "reusing #%s with EMPTY state (engagement history lost)",
+                markerless, label, markerless[0],
+            )
+            return markerless[0], {}
 
         # No ledger issue exists — create one.
         self.ensure_label(
-            LEDGER_LABEL, "bfd4f2", "Moltbook engagement state"
+            label, "bfd4f2", "Moltbook engagement state"
         )
         empty: dict[str, Any] = {
             "followed": [],
@@ -425,7 +462,7 @@ class GitHubIssuer:
             f"{LEDGER_MARKER_END}\n"
         )
         issue = self.create_issue(
-            "[moltbook] engagement-ledger", body, [LEDGER_LABEL]
+            f"[moltbook] engagement-ledger ({label})", body, [label]
         )
         if issue:
             return issue["number"], empty
@@ -526,7 +563,12 @@ def _count_words(text: str) -> int:
     return len(text.split())
 
 
-def _draft_once(user_block: str, *, max_tokens: int = 400) -> str:
+def _draft_once(
+    user_block: str,
+    *,
+    max_tokens: int = 400,
+    system_prompt: str | None = None,
+) -> str:
     client = _anthropic_client()
     resp = client.messages.create(
         model=DRAFT_MODEL,
@@ -534,7 +576,7 @@ def _draft_once(user_block: str, *, max_tokens: int = 400) -> str:
         system=[
             {
                 "type": "text",
-                "text": ALPHAMOLT_SYSTEM,
+                "text": system_prompt or ALPHAMOLT_SYSTEM,
                 "cache_control": {"type": "ephemeral"},
             }
         ],
@@ -546,7 +588,12 @@ def _draft_once(user_block: str, *, max_tokens: int = 400) -> str:
     return text.strip()
 
 
-def _draft_post_once(user_block: str, *, max_tokens: int = 1200) -> str:
+def _draft_post_once(
+    user_block: str,
+    *,
+    max_tokens: int = 1200,
+    system_prompt: str | None = None,
+) -> str:
     """Draft an original post with Claude Fable 5 (see POST_MODEL).
 
     Uses the same non-beta call shape the repo already relies on for its Opus
@@ -564,7 +611,7 @@ def _draft_post_once(user_block: str, *, max_tokens: int = 1200) -> str:
         system=[
             {
                 "type": "text",
-                "text": ALPHAMOLT_SYSTEM,
+                "text": system_prompt or ALPHAMOLT_SYSTEM,
                 "cache_control": {"type": "ephemeral"},
             }
         ],
@@ -579,7 +626,7 @@ def _draft_post_once(user_block: str, *, max_tokens: int = 1200) -> str:
     return text.strip()
 
 
-def draft_reply(context: dict[str, Any]) -> str:
+def draft_reply(context: dict[str, Any], system_prompt: str | None = None) -> str:
     """Draft a reply with Claude Haiku. System prompt is prompt-cached.
 
     If the first draft exceeds WORD_CAP_HARD words, re-draft once with a
@@ -614,7 +661,7 @@ def draft_reply(context: dict[str, Any]) -> str:
         "no sign-off, no explanation."
     )
 
-    draft = _draft_once(base_user_block)
+    draft = _draft_once(base_user_block, system_prompt=system_prompt)
     words = _count_words(draft)
     if words <= WORD_CAP_HARD:
         return draft
@@ -626,7 +673,7 @@ def draft_reply(context: dict[str, Any]) -> str:
         f"Rewrite it in UNDER {WORD_CAP} words. Lead with the actual answer. "
         "Drop anything that isn't information-dense. One question back, max."
     )
-    return _draft_once(retry_block)
+    return _draft_once(retry_block, system_prompt=system_prompt)
 
 
 def classify_post_themes(post: dict[str, Any]) -> list[int]:
@@ -705,6 +752,7 @@ def _is_skip(text: str) -> bool:
 def draft_feed_comment(
     post: dict[str, Any],
     memory_block: str = "",
+    system_prompt: str | None = None,
 ) -> str:
     """Draft a comment on someone else's post. Returns '' if LLM says SKIP.
 
@@ -736,7 +784,7 @@ def draft_feed_comment(
         "Return ONLY the comment text, or SKIP."
     )
 
-    draft = _draft_once(user_block)
+    draft = _draft_once(user_block, system_prompt=system_prompt)
     if _is_skip(draft):
         return ""
 
@@ -750,7 +798,7 @@ def draft_feed_comment(
         f"Previous draft:\n{draft}\n\n"
         f"Rewrite in UNDER {WORD_CAP} words."
     )
-    retry_draft = _draft_once(retry_block)
+    retry_draft = _draft_once(retry_block, system_prompt=system_prompt)
     if _is_skip(retry_draft):
         return ""
     return retry_draft
@@ -759,6 +807,7 @@ def draft_feed_comment(
 def draft_original_post(
     topic_data: dict[str, Any],
     recent_titles: list[str] | None = None,
+    system_prompt: str | None = None,
 ) -> tuple[str, str] | None:
     """Draft a new post for Moltbook. Returns (title, body) or None.
 
@@ -844,7 +893,7 @@ def draft_original_post(
         "Or: SKIP"
     )
 
-    raw = _draft_post_once(user_block, max_tokens=1200)
+    raw = _draft_post_once(user_block, max_tokens=1200, system_prompt=system_prompt)
     if _is_skip(raw):
         return None
 
